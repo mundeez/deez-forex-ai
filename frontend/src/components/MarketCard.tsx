@@ -4,9 +4,19 @@ import { TrendingUp, TrendingDown } from "lucide-react";
 
 interface MarketCardProps {
   data: any;
+  error?: string | null;
 }
 
-export default function MarketCard({ data }: MarketCardProps) {
+export default function MarketCard({ data, error }: MarketCardProps) {
+  if (error) {
+    return (
+      <div className="bg-forex-card rounded-xl p-6 border border-red-700">
+        <p className="text-red-400 font-medium">Failed to load market data</p>
+        <p className="text-red-300 text-sm mt-1">{error}</p>
+      </div>
+    );
+  }
+
   if (!data) {
     return (
       <div className="bg-forex-card rounded-xl p-6 border border-slate-700">

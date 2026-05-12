@@ -38,8 +38,9 @@ class RiskManager:
             )
         )
         open_count = result.scalar() or 0
-        if open_count >= 1:
-            return False, "Max one open trade per symbol allowed"
+        MAX_OPEN_PER_SYMBOL = 7
+        if open_count >= MAX_OPEN_PER_SYMBOL:
+            return False, f"Max {MAX_OPEN_PER_SYMBOL} open trades per symbol allowed"
 
         return True, "OK"
 

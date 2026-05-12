@@ -6,12 +6,14 @@ import MarketCard from "@/components/MarketCard";
 import AIPanel from "@/components/AIPanel";
 import TradeJournal from "@/components/TradeJournal";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = "";
 
 export default function Home() {
   const [marketData, setMarketData] = useState<any>(null);
+  const [marketError, setMarketError] = useState<string | null>(null);
   const [trades, setTrades] = useState<any[]>([]);
   const [aiDecisions, setAiDecisions] = useState<any[]>([]);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -25,10 +27,17 @@ export default function Home() {
   async function fetchMarket() {
     try {
       const res = await fetch(`${API_URL}/api/v1/market/current`);
+      if (!res.ok) {
+        const err = await res.text();
+        setMarketError(`Backend error (${res.status}): ${err}`);
+        return;
+      }
       const data = await res.json();
       setMarketData(data);
-    } catch (e) {
+      setMarketError(null);
+    } catch (e: any) {
       console.error("market fetch error", e);
+      setMarketError(e.message || "Cannot reach backend. Is it running?");
     }
   }
 
@@ -54,12 +63,19 @@ export default function Home() {
 
   async function triggerAnalysis() {
     setLoading(true);
+    setAiError(null);
     try {
-      await fetch(`${API_URL}/api/v1/ai/analyze`, { method: "POST" });
+      const res = await fetch(`${API_URL}/api/v1/ai/analyze`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.text();
+        setAiError(`Analysis failed (${res.status}): ${err}`);
+        return;
+      }
       await fetchAiDecisions();
       await fetchTrades();
-    } catch (e) {
+    } catch (e: any) {
       console.error("analysis trigger error", e);
+      setAiError(e.message || "Failed to reach AI service.");
     } finally {
       setLoading(false);
     }
@@ -70,11 +86,12 @@ export default function Home() {
       <Header />
       <div className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <MarketCard data={marketData} />
+          <MarketCard data={marketData} error={marketError} />
           <AIPanel
             decisions={aiDecisions}
             onAnalyze={triggerAnalysis}
             loading={loading}
+            error={aiError}
           />
         </div>
         <div className="space-y-6">

@@ -53,3 +53,7 @@ redis_data/
 # Logs
 *.log
 logs/
+
+# Generated / local
+backend/celerybeat-schedule
+frontend/.env.local

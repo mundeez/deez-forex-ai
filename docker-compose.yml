@@ -112,7 +112,7 @@ services:
       dockerfile: Dockerfile
     container_name: deez-forex-frontend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:28000
+      NEXT_PUBLIC_API_URL: http://backend:8000
     ports:
       - "23000:3000"
     volumes:

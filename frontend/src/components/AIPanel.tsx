@@ -6,9 +6,10 @@ interface AIPanelProps {
   decisions: any[];
   onAnalyze: () => void;
   loading: boolean;
+  error?: string | null;
 }
 
-export default function AIPanel({ decisions, onAnalyze, loading }: AIPanelProps) {
+export default function AIPanel({ decisions, onAnalyze, loading, error }: AIPanelProps) {
   const latest = decisions[0];
 
   const getDecisionColor = (decision: string) => {
@@ -33,6 +34,12 @@ export default function AIPanel({ decisions, onAnalyze, loading }: AIPanelProps)
           {loading ? "Analyzing..." : "Run Analysis"}
         </button>
       </div>
+
+      {error && (
+        <div className="mb-4 p-3 bg-red-900/40 border border-red-700 rounded-lg">
+          <p className="text-red-300 text-sm font-medium">{error}</p>
+        </div>
+      )}
 
       {latest ? (
         <div className="space-y-4">

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     META_API_TOKEN: str = ""
     META_API_ACCOUNT_ID: str = ""
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "anthropic/claude-3.5-sonnet"
+    OPENROUTER_MODEL: str = "anthropic/claude-sonnet-4.5"
     NEWS_API_KEY: str = ""
     FRED_API_KEY: str = ""
     MAX_RISK_PER_TRADE_PCT: float = 2.0
