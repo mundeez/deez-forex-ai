@@ -21,6 +21,10 @@ celery_app.conf.update(
             "task": "app.tasks.analysis_tasks.run_full_analysis",
             "schedule": 900.0,
         },
+        "auto-select-pairs": {
+            "task": "app.tasks.analysis_tasks.auto_select_pairs",
+            "schedule": 3600.0,
+        },
         "update-daily-pnl": {
             "task": "app.tasks.execution_tasks.update_daily_pnl",
             "schedule": 3600.0,

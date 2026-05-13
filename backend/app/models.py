@@ -120,3 +120,25 @@ class SettingsTable(Base):
     key = Column(String(100), unique=True, nullable=False)
     value = Column(Text)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AccountSnapshot(Base):
+    __tablename__ = "account_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    equity = Column(Float, nullable=False)
+    realized_pnl = Column(Float, default=0.0)
+    unrealized_pnl = Column(Float, default=0.0)
+    total_trades = Column(Integer, default=0)
+    open_trades = Column(Integer, default=0)
+
+
+class ActivePair(Base):
+    __tablename__ = "active_pairs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False)
+    selection_mode = Column(String(10), default="manual")
+    priority = Column(Integer, default=1)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

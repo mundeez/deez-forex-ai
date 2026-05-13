@@ -1,6 +1,7 @@
 "use client";
 
-import { Activity } from "lucide-react";
+import { Activity, Settings } from "lucide-react";
+import Link from "next/link";
 
 export default function Header() {
   return (
@@ -8,7 +9,9 @@ export default function Header() {
       <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Activity className="w-7 h-7 text-forex-accent" />
-          <h1 className="text-xl font-bold tracking-tight">deez-forex-ai</h1>
+          <Link href="/" className="text-xl font-bold tracking-tight hover:text-forex-accent transition">
+            deez-forex-ai
+          </Link>
         </div>
         <div className="flex items-center gap-4 text-sm text-slate-400">
           <span className="flex items-center gap-1">
@@ -16,6 +19,9 @@ export default function Header() {
             24/7 Live
           </span>
           <span>Paper Mode</span>
+          <Link href="/settings" className="hover:text-white transition">
+            <Settings className="w-5 h-5" />
+          </Link>
         </div>
       </div>
     </header>

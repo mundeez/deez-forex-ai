@@ -1,101 +1,72 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Header from "@/components/Header";
-import MarketCard from "@/components/MarketCard";
-import AIPanel from "@/components/AIPanel";
-import TradeJournal from "@/components/TradeJournal";
-
-const API_URL = "";
+import ChartPanel from "@/components/ChartPanel";
+import MarketInfoBar from "@/components/MarketInfoBar";
+import ProfitMetricsPanel from "@/components/ProfitMetricsPanel";
+import PositionsPanel from "@/components/PositionsPanel";
+import TradeHistoryPanel from "@/components/TradeHistoryPanel";
+import AnalysisPanel from "@/components/AnalysisPanel";
+import AIDecisionPanel from "@/components/AIDecisionPanel";
+import ManualTradePanel from "@/components/ManualTradePanel";
+import PairSelector from "@/components/PairSelector";
+import ManualOverrideToggle from "@/components/ManualOverrideToggle";
 
 export default function Home() {
-  const [marketData, setMarketData] = useState<any>(null);
-  const [marketError, setMarketError] = useState<string | null>(null);
-  const [trades, setTrades] = useState<any[]>([]);
-  const [aiDecisions, setAiDecisions] = useState<any[]>([]);
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [activeSymbol, setActiveSymbol] = useState("EURUSD");
+  const [timeframe, setTimeframe] = useState("1h");
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
-    fetchMarket();
-    fetchTrades();
-    fetchAiDecisions();
-    const interval = setInterval(fetchMarket, 15000);
-    return () => clearInterval(interval);
-  }, []);
-
-  async function fetchMarket() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/market/current`);
-      if (!res.ok) {
-        const err = await res.text();
-        setMarketError(`Backend error (${res.status}): ${err}`);
-        return;
-      }
-      const data = await res.json();
-      setMarketData(data);
-      setMarketError(null);
-    } catch (e: any) {
-      console.error("market fetch error", e);
-      setMarketError(e.message || "Cannot reach backend. Is it running?");
+  const handlePairsChange = (pairs: string[]) => {
+    if (pairs.length > 0 && !pairs.includes(activeSymbol)) {
+      setActiveSymbol(pairs[0]);
     }
-  }
+  };
 
-  async function fetchTrades() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/trades?limit=20`);
-      const data = await res.json();
-      setTrades(data);
-    } catch (e) {
-      console.error("trades fetch error", e);
-    }
-  }
-
-  async function fetchAiDecisions() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/ai/decisions?limit=10`);
-      const data = await res.json();
-      setAiDecisions(data);
-    } catch (e) {
-      console.error("ai decisions fetch error", e);
-    }
-  }
-
-  async function triggerAnalysis() {
-    setLoading(true);
-    setAiError(null);
-    try {
-      const res = await fetch(`${API_URL}/api/v1/ai/analyze`, { method: "POST" });
-      if (!res.ok) {
-        const err = await res.text();
-        setAiError(`Analysis failed (${res.status}): ${err}`);
-        return;
-      }
-      await fetchAiDecisions();
-      await fetchTrades();
-    } catch (e: any) {
-      console.error("analysis trigger error", e);
-      setAiError(e.message || "Failed to reach AI service.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const handleRefresh = () => setRefreshKey((k) => k + 1);
 
   return (
     <main className="min-h-screen bg-forex-dark text-slate-200">
       <Header />
-      <div className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <MarketCard data={marketData} error={marketError} />
-          <AIPanel
-            decisions={aiDecisions}
-            onAnalyze={triggerAnalysis}
-            loading={loading}
-            error={aiError}
-          />
+      <div className="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* LEFT SIDEBAR */}
+        <div className="space-y-4">
+          <ProfitMetricsPanel key={`profit-${refreshKey}`} />
+          <ManualOverrideToggle />
+          <PairSelector onChange={handlePairsChange} />
+          <ManualTradePanel symbol={activeSymbol} onTrade={handleRefresh} />
         </div>
-        <div className="space-y-6">
-          <TradeJournal trades={trades} />
+
+        {/* CENTER */}
+        <div className="lg:col-span-2 space-y-4">
+          <MarketInfoBar symbol={activeSymbol} />
+          <div className="flex gap-2 flex-wrap">
+            {["1m", "5m", "15m", "1h", "4h", "1d"].map((tf) => (
+              <button
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                className={`px-3 py-1 rounded text-xs font-semibold border ${
+                  timeframe === tf
+                    ? "bg-forex-accent text-white border-forex-accent"
+                    : "bg-slate-800 text-slate-300 border-slate-600 hover:bg-slate-700"
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+          <ChartPanel symbol={activeSymbol} timeframe={timeframe} />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <AnalysisPanel symbol={activeSymbol} />
+            <AIDecisionPanel />
+          </div>
+        </div>
+
+        {/* RIGHT SIDEBAR */}
+        <div className="space-y-4">
+          <PositionsPanel onRefresh={handleRefresh} />
+          <TradeHistoryPanel limit={10} />
         </div>
       </div>
     </main>
