@@ -18,9 +18,9 @@ export default function Header() {
             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             24/7 Live
           </span>
-          <span>Paper Mode</span>
-          <Link href="/settings" className="hover:text-white transition">
+          <Link href="/settings" className="hover:text-white transition flex items-center gap-1">
             <Settings className="w-5 h-5" />
+            <span className="hidden sm:inline">Settings</span>
           </Link>
         </div>
       </div>

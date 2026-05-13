@@ -1,15 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity } from "lucide-react";
+import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity, TrendingUpIcon } from "lucide-react";
 import { API_URL } from "@/utils/api";
+
+interface EquityPoint {
+  date: string;
+  equity: number;
+}
 
 export default function ProfitMetricsPanel() {
   const [stats, setStats] = useState<any>(null);
+  const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
 
   useEffect(() => {
     fetchStats();
-    const interval = setInterval(fetchStats, 15000);
+    fetchEquityHistory();
+    const interval = setInterval(() => {
+      fetchStats();
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 
@@ -23,6 +32,24 @@ export default function ProfitMetricsPanel() {
       console.error("stats fetch error", e);
     }
   }
+
+  async function fetchEquityHistory() {
+    try {
+      const res = await fetch(`${API_URL}/api/v1/portfolio/summary`);
+      if (!res.ok) return;
+      const data = await res.json();
+      // In a real app, you'd fetch historical equity from a dedicated endpoint
+      // For now, we'll generate a simple sparkline from available data
+    } catch (e) {
+      console.error("equity history fetch error", e);
+    }
+  }
+
+  // Generate sparkline points from stats if available
+  const sparklinePoints = stats?.equity_history || [];
+  const sparklineMax = sparklinePoints.length > 0 ? Math.max(...sparklinePoints.map((p: any) => p.equity)) : 0;
+  const sparklineMin = sparklinePoints.length > 0 ? Math.min(...sparklinePoints.map((p: any) => p.equity)) : 0;
+  const sparklineRange = sparklineMax - sparklineMin || 1;
 
   return (
     <div className="bg-forex-card rounded-xl border border-slate-700 p-4">
@@ -56,6 +83,25 @@ export default function ProfitMetricsPanel() {
         </div>
       </div>
 
+      {/* Equity Sparkline */}
+      {sparklinePoints.length > 0 && (
+        <div className="mb-4">
+          <p className="text-xs text-slate-400 mb-1">Equity Curve</p>
+          <svg viewBox="0 0 200 40" className="w-full h-10" preserveAspectRatio="none">
+            <polyline
+              fill="none"
+              stroke="#3b82f6"
+              strokeWidth="1.5"
+              points={sparklinePoints.map((p: any, i: number) => {
+                const x = (i / (sparklinePoints.length - 1)) * 200;
+                const y = 40 - ((p.equity - sparklineMin) / sparklineRange) * 40;
+                return `${x},${y}`;
+              }).join(" ")}
+            />
+          </svg>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-3 text-sm">
         <div className="bg-slate-800/30 p-2 rounded text-center">
           <p className="text-xs text-slate-400">Win Rate</p>
@@ -70,6 +116,29 @@ export default function ProfitMetricsPanel() {
           <p className="font-semibold">{stats?.total_trades || 0}</p>
         </div>
       </div>
+
+      {stats && (
+        <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+          <div className="bg-slate-800/30 p-2 rounded text-center">
+            <p className="text-xs text-slate-400">Max Drawdown</p>
+            <p className="font-semibold text-forex-bearish">{stats?.max_drawdown_pct?.toFixed(2) || "-"}%</p>
+          </div>
+          <div className="bg-slate-800/30 p-2 rounded text-center">
+            <p className="text-xs text-slate-400">Sharpe Ratio</p>
+            <p className="font-semibold">{stats?.sharpe_ratio?.toFixed(2) || "-"}</p>
+          </div>
+          <div className="bg-slate-800/30 p-2 rounded text-center">
+            <p className="text-xs text-slate-400">Expectancy</p>
+            <p className="font-semibold">{stats?.expectancy?.toFixed(2) || "-"}</p>
+          </div>
+          <div className="bg-slate-800/30 p-2 rounded text-center">
+            <p className="text-xs text-slate-400">W/L Ratio</p>
+            <p className="font-semibold">
+              {stats?.winning_trades || 0}/{stats?.losing_trades || 0}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

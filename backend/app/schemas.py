@@ -14,6 +14,11 @@ class TradeMode(str, Enum):
     live = "live"
 
 
+class DataProvider(str, Enum):
+    metaapi = "metaapi"
+    mt5_zmq = "mt5_zmq"
+
+
 class TradeCreate(BaseModel):
     symbol: str = "EURUSD"
     direction: TradeDirection
@@ -23,6 +28,7 @@ class TradeCreate(BaseModel):
     risk_pct: Optional[float] = None
     position_size: Optional[float] = None
     mode: TradeMode = TradeMode.paper
+    provider: DataProvider = DataProvider.metaapi
     ai_decision_id: Optional[int] = None
     rationale: Optional[str] = None
 
@@ -45,6 +51,7 @@ class TradeOut(BaseModel):
     close_time: Optional[datetime]
     created_at: datetime
     rationale: Optional[str]
+    provider: Optional[DataProvider] = None
 
     class Config:
         from_attributes = True
@@ -64,6 +71,7 @@ class AIDecisionOut(BaseModel):
     risk_reward: Optional[float]
     rationale: Optional[str]
     model_used: Optional[str]
+    provider: Optional[DataProvider] = None
 
     class Config:
         from_attributes = True
@@ -201,6 +209,15 @@ class ActivePairCreate(BaseModel):
     priority: int = 1
 
 
+class AccountInfoOut(BaseModel):
+    balance: Optional[float] = None
+    equity: Optional[float] = None
+    margin: Optional[float] = None
+    free_margin: Optional[float] = None
+    currency: Optional[str] = None
+    leverage: Optional[int] = None
+
+
 class AppSettingsOut(BaseModel):
     default_pair: str
     max_risk_per_trade_pct: float
@@ -236,4 +253,5 @@ class ManualTradeCreate(BaseModel):
     risk_pct: Optional[float] = None
     position_size: Optional[float] = None
     mode: Optional[str] = "paper"
+    provider: Optional[DataProvider] = DataProvider.metaapi
     rationale: Optional[str] = None

@@ -1,5 +1,11 @@
+from enum import Enum
 from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+
+class DataProvider(str, Enum):
+    metaapi = "metaapi"
+    mt5_zmq = "mt5_zmq"
 
 
 class Settings(BaseSettings):
@@ -17,6 +23,10 @@ class Settings(BaseSettings):
     MAX_DAILY_LOSS_PCT: float = 5.0
     DEFAULT_PAIR: str = "EURUSD"
     APP_ENV: str = "development"
+    DATA_PROVIDER: DataProvider = DataProvider.metaapi
+    MT5_ZMQ_HOST: str = "host.docker.internal"
+    MT5_ZMQ_REQ_PORT: int = 5555
+    MT5_ZMQ_PUB_PORT: int = 5556
 
     class Config:
         env_file = ".env"

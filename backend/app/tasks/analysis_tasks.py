@@ -7,7 +7,10 @@ from app.services.risk.manager import RiskManager
 from app.services.settings_service import get_setting_bool
 from app.database import AsyncSessionLocal
 from app import schemas
+from app.config import get_settings
 from sqlalchemy import select
+
+settings = get_settings()
 
 
 @celery_app.task
@@ -15,6 +18,7 @@ def run_full_analysis():
     async def _analyze():
         async with AsyncSessionLocal() as db:
             from app import models
+            from app.services.websocket_broadcaster import broadcast_ai_decision, broadcast_trade_event
             aggregator = AnalysisAggregator()
             ai = OpenRouterClient()
             executor = ExecutionService()
@@ -49,9 +53,27 @@ def run_full_analysis():
                     fundamental_snapshot=analysis.get("fundamental"),
                     sentiment_snapshot=analysis.get("sentiment"),
                     model_used="anthropic/claude-sonnet-4.5",
+                    provider=settings.DATA_PROVIDER.value,
                 )
                 db.add(db_decision)
                 await db.commit()
+                await db.refresh(db_decision)
+
+                # Broadcast AI decision to all connected clients
+                await broadcast_ai_decision({
+                    "id": db_decision.id,
+                    "symbol": symbol,
+                    "decision": decision.decision,
+                    "confidence": decision.confidence,
+                    "timeframe": decision.timeframe,
+                    "entry_price": decision.entry_price,
+                    "stop_loss": decision.stop_loss,
+                    "take_profit": decision.take_profit,
+                    "position_size_pct": decision.position_size_pct,
+                    "risk_reward": decision.risk_reward,
+                    "rationale": decision.rationale,
+                    "manual_override": manual_override,
+                })
 
                 if decision.decision in ("BUY", "SELL") and not manual_override:
                     ok, reason = await risk.validate_ai_decision(db, decision)
@@ -64,16 +86,35 @@ def run_full_analysis():
                             take_profit=decision.take_profit,
                             risk_pct=decision.position_size_pct,
                             mode=schemas.TradeMode.paper,
+                            provider=settings.DATA_PROVIDER,
                             ai_decision_id=db_decision.id,
                             rationale=decision.rationale,
                         )
-                        await executor.execute_trade(db, trade_in)
+                        trade = await executor.execute_trade(db, trade_in)
+                        await broadcast_trade_event("executed", {
+                            "id": trade.id,
+                            "symbol": trade.symbol,
+                            "direction": trade.direction,
+                            "entry_price": trade.entry_price,
+                            "stop_loss": trade.stop_loss,
+                            "take_profit": trade.take_profit,
+                            "mode": trade.mode,
+                            "ai_decision_id": trade.ai_decision_id,
+                        })
                     else:
                         decision.decision = "HOLD"
                         decision.rationale += f" [RISK BLOCKED: {reason}]"
                         db_decision.decision = "HOLD"
                         db_decision.rationale = decision.rationale
                         await db.commit()
+                        await broadcast_ai_decision({
+                            "id": db_decision.id,
+                            "symbol": symbol,
+                            "decision": "HOLD",
+                            "confidence": decision.confidence,
+                            "rationale": decision.rationale,
+                            "manual_override": manual_override,
+                        })
 
                 results.append({"symbol": symbol, "decision": decision.decision, "confidence": decision.confidence})
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Globe, Newspaper, ChevronDown, ChevronUp } from "lucide-react";
+import { Activity, Globe, Newspaper, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import { API_URL } from "@/utils/api";
 
 interface AnalysisPanelProps {
@@ -10,28 +10,28 @@ interface AnalysisPanelProps {
 
 export default function AnalysisPanel({ symbol }: AnalysisPanelProps) {
   const [analysis, setAnalysis] = useState<any>(null);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({ tech: true, fund: false, sent: false });
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchAnalysis();
   }, [symbol]);
 
   async function fetchAnalysis() {
+    setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/v1/analysis/full?symbol=${symbol}`);
+      const res = await fetch(`${API_URL}/api/v1/analysis/summary?symbol=${symbol}`);
       if (!res.ok) return;
       const data = await res.json();
       setAnalysis(data);
     } catch (e) {
       console.error("analysis fetch error", e);
+    } finally {
+      setLoading(false);
     }
   }
 
   const toggle = (key: string) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
-
-  const tech = analysis?.technical;
-  const fund = analysis?.fundamental;
-  const sent = analysis?.sentiment;
 
   const renderSignal = (label: string, signal: string) => {
     const color = signal === "bullish" ? "text-forex-bullish" : signal === "bearish" ? "text-forex-bearish" : "text-slate-400";
@@ -43,35 +43,36 @@ export default function AnalysisPanel({ symbol }: AnalysisPanelProps) {
     );
   };
 
+  const combinedSignal = analysis?.combined_signal || "neutral";
+  const combinedColor = combinedSignal === "bullish" ? "bg-emerald-900/30 text-emerald-300 border-emerald-700" :
+                       combinedSignal === "bearish" ? "bg-red-900/30 text-red-300 border-red-700" :
+                       "bg-slate-800 text-slate-400 border-slate-600";
+
   return (
     <div className="bg-forex-card rounded-xl border border-slate-700 p-4">
-      <h2 className="text-lg font-semibold mb-3">Multi-Factor Analysis</h2>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-5 h-5 text-forex-accent" />
+          <h2 className="text-lg font-semibold">Analysis</h2>
+        </div>
+        <span className={`text-xs px-2 py-0.5 rounded border ${combinedColor} font-semibold uppercase`}>
+          {combinedSignal}
+        </span>
+      </div>
+
+      {loading && <p className="text-sm text-slate-500">Loading analysis...</p>}
 
       {/* Technical */}
       <div className="mb-3 border-b border-slate-700 pb-3">
         <button onClick={() => toggle("tech")} className="flex items-center gap-2 w-full text-left">
           <Activity className="w-4 h-4 text-forex-accent" />
           <span className="font-semibold">Technical</span>
+          <span className="text-xs ml-2 text-slate-500">{analysis?.technical_signal || "-"}</span>
           {expanded["tech"] ? <ChevronUp className="w-4 h-4 ml-auto" /> : <ChevronDown className="w-4 h-4 ml-auto" />}
         </button>
-        {renderSignal("Overall", tech?.overall_signal)}
-        {expanded["tech"] && tech?.timeframes && (
-          <div className="mt-2 space-y-1 bg-slate-800/30 p-2 rounded">
-            {Object.entries(tech.timeframes).map(([tf, val]: [string, any]) => (
-              <div key={tf}>
-                <p className="text-xs font-semibold text-slate-300">{tf}</p>
-                {renderSignal("Signal", val.signal)}
-                {val.ema_signal && renderSignal("EMA", val.ema_signal)}
-                {val.rsi_value !== undefined && (
-                  <div className="flex justify-between text-xs py-0.5">
-                    <span className="text-slate-500">RSI</span>
-                    <span>{val.rsi_value.toFixed(1)}</span>
-                  </div>
-                )}
-                {val.macd_signal && renderSignal("MACD", val.macd_signal)}
-                {val.bb_signal && renderSignal("BB", val.bb_signal)}
-              </div>
-            ))}
+        {expanded["tech"] && (
+          <div className="mt-2 space-y-1 bg-slate-800/30 p-2 rounded text-sm">
+            {renderSignal("Overall Signal", analysis?.technical_signal)}
           </div>
         )}
       </div>
@@ -81,23 +82,12 @@ export default function AnalysisPanel({ symbol }: AnalysisPanelProps) {
         <button onClick={() => toggle("fund")} className="flex items-center gap-2 w-full text-left">
           <Globe className="w-4 h-4 text-forex-accent" />
           <span className="font-semibold">Fundamental</span>
+          <span className="text-xs ml-2 text-slate-500">{analysis?.fundamental_signal || "-"}</span>
           {expanded["fund"] ? <ChevronUp className="w-4 h-4 ml-auto" /> : <ChevronDown className="w-4 h-4 ml-auto" />}
         </button>
-        {renderSignal("Direction", fund?.direction_bias)}
         {expanded["fund"] && (
           <div className="mt-2 space-y-1 bg-slate-800/30 p-2 rounded text-sm">
-            <div className="flex justify-between"><span className="text-slate-500">Event Risk</span><span>{fund?.event_risk || "-"}</span></div>
-            <div className="flex justify-between"><span className="text-slate-500">Rate Spread</span><span>{fund?.rate_spread || "-"}</span></div>
-            {fund?.news_headlines && (
-              <div className="mt-1">
-                <p className="text-xs text-slate-500">Headlines</p>
-                <ul className="list-disc list-inside text-xs text-slate-300">
-                  {fund.news_headlines.slice(0, 3).map((h: string, i: number) => (
-                    <li key={i}>{h}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {renderSignal("Direction Bias", analysis?.fundamental_signal)}
           </div>
         )}
       </div>
@@ -107,17 +97,36 @@ export default function AnalysisPanel({ symbol }: AnalysisPanelProps) {
         <button onClick={() => toggle("sent")} className="flex items-center gap-2 w-full text-left">
           <Newspaper className="w-4 h-4 text-forex-accent" />
           <span className="font-semibold">Sentiment</span>
+          <span className="text-xs ml-2 text-slate-500">{analysis?.sentiment_signal || "-"}</span>
           {expanded["sent"] ? <ChevronUp className="w-4 h-4 ml-auto" /> : <ChevronDown className="w-4 h-4 ml-auto" />}
         </button>
-        {renderSignal("Overall", sent?.overall_sentiment)}
         {expanded["sent"] && (
           <div className="mt-2 space-y-1 bg-slate-800/30 p-2 rounded text-sm">
-            {sent?.retail_sentiment && renderSignal("Retail", sent.retail_sentiment)}
-            {sent?.institutional_bias && renderSignal("Institutional", sent.institutional_bias)}
-            {sent?.news_sentiment && renderSignal("News", sent.news_sentiment)}
+            {renderSignal("Overall Sentiment", analysis?.sentiment_signal)}
           </div>
         )}
       </div>
+
+      {/* AI Confirmation */}
+      {analysis?.ai_decision && (
+        <div className="mt-3 pt-3 border-t border-slate-700">
+          <p className="text-xs text-slate-400 mb-1">AI Confirmation</p>
+          <div className="flex items-center gap-2">
+            <span className={`font-semibold text-sm ${
+              analysis.ai_decision === "BUY" ? "text-forex-bullish" :
+              analysis.ai_decision === "SELL" ? "text-forex-bearish" :
+              "text-slate-400"
+            }`}>
+              {analysis.ai_decision}
+            </span>
+            {analysis.ai_confidence && (
+              <span className="text-xs text-slate-500">
+                {(analysis.ai_confidence * 100).toFixed(0)}% confidence
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

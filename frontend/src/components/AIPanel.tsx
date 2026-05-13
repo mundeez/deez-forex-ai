@@ -1,15 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import { Brain, RefreshCw, AlertTriangle } from "lucide-react";
 
 interface AIPanelProps {
   decisions: any[];
-  onAnalyze: () => void;
+  onAnalyze: (provider: string) => void;
   loading: boolean;
   error?: string | null;
+  provider?: string;
 }
 
-export default function AIPanel({ decisions, onAnalyze, loading, error }: AIPanelProps) {
+export default function AIPanel({ decisions, onAnalyze, loading, error, provider = "metaapi" }: AIPanelProps) {
+  const [providerState, setProviderState] = useState(provider);
   const latest = decisions[0];
 
   const getDecisionColor = (decision: string) => {
@@ -25,14 +28,24 @@ export default function AIPanel({ decisions, onAnalyze, loading, error }: AIPane
           <Brain className="w-5 h-5 text-forex-accent" />
           <h2 className="text-lg font-semibold">AI Decision Engine</h2>
         </div>
-        <button
-          onClick={onAnalyze}
-          disabled={loading}
-          className="flex items-center gap-2 bg-forex-accent hover:bg-blue-600 text-white text-sm px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          {loading ? "Analyzing..." : "Run Analysis"}
-        </button>
+        <div className="flex items-center gap-2">
+          <select
+            value={providerState}
+            onChange={(e) => setProviderState(e.target.value)}
+            className="text-xs bg-slate-800 text-slate-300 border border-slate-600 rounded px-1 py-1"
+          >
+            <option value="metaapi">MetaAPI.cloud</option>
+            <option value="mt5_zmq">MT5 Desktop (ZMQ)</option>
+          </select>
+          <button
+            onClick={() => onAnalyze(providerState)}
+            disabled={loading}
+            className="flex items-center gap-2 bg-forex-accent hover:bg-blue-600 text-white text-sm px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            {loading ? "Analyzing..." : "Run Analysis"}
+          </button>
+        </div>
       </div>
 
       {error && (

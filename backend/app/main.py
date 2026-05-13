@@ -1,6 +1,7 @@
+import asyncio
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -13,6 +14,8 @@ from app.database import get_db, engine, Base
 from app.config import get_settings
 from app import models, schemas
 from app.services.data.metaapi_client import MetaApiClient
+from app.services.data.mt5_zmq_client import MT5ZMQClient
+from app.services.data.mt5_zmq_subscriber import MT5ZMQSubscriber
 from app.services.execution.executor import ExecutionService
 from app.services.risk.manager import RiskManager
 from app.services.settings_service import build_settings_response, set_setting, get_setting_bool
@@ -33,12 +36,24 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     app.state.redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     app.state.metaapi = MetaApiClient()
+    app.state.mt5_zmq = MT5ZMQClient()
     app.state.executor = ExecutionService()
     app.state.risk = RiskManager()
     app.state.ai = OpenRouterClient()
     app.state.aggregator = AnalysisAggregator()
+
+    # Start MT5 tick subscriber if using ZMQ
+    if settings.DATA_PROVIDER == schemas.DataProvider.mt5_zmq:
+        app.state.mt5_sub = MT5ZMQSubscriber(on_tick=broadcast_price_tick)
+        await app.state.mt5_sub.start()
+    else:
+        app.state.mt5_sub = None
+
     yield
     await app.state.redis.close()
+    if app.state.mt5_sub:
+        await app.state.mt5_sub.stop()
+    await app.state.mt5_zmq.close()
 
 
 app = FastAPI(
@@ -62,9 +77,20 @@ async def health_check():
     return {"status": "ok", "env": settings.APP_ENV}
 
 
+def _get_data_client(provider: schemas.DataProvider = None):
+    provider = provider or settings.DATA_PROVIDER
+    if provider == schemas.DataProvider.mt5_zmq:
+        return app.state.mt5_zmq
+    return app.state.metaapi
+
+
 @app.get("/api/v1/market/current")
-async def get_current_market(symbol: str = settings.DEFAULT_PAIR, db: AsyncSession = Depends(get_db)):
-    client: MetaApiClient = app.state.metaapi
+async def get_current_market(
+    symbol: str = settings.DEFAULT_PAIR,
+    provider: schemas.DataProvider = None,
+    db: AsyncSession = Depends(get_db)
+):
+    client = _get_data_client(provider)
     try:
         price = await client.get_current_price(symbol)
         return {
@@ -82,9 +108,10 @@ async def get_historical_candles(
     symbol: str = settings.DEFAULT_PAIR,
     timeframe: str = "1h",
     limit: int = 300,
+    provider: schemas.DataProvider = None,
     db: AsyncSession = Depends(get_db)
 ):
-    client: MetaApiClient = app.state.metaapi
+    client = _get_data_client(provider)
     try:
         candles = await client.get_historical_candles(symbol, timeframe, limit)
         return {"symbol": symbol, "timeframe": timeframe, "candles": candles}
@@ -93,8 +120,12 @@ async def get_historical_candles(
 
 
 @app.get("/api/v1/market/summary")
-async def get_market_summary(symbol: str = settings.DEFAULT_PAIR, db: AsyncSession = Depends(get_db)):
-    client: MetaApiClient = app.state.metaapi
+async def get_market_summary(
+    symbol: str = settings.DEFAULT_PAIR,
+    provider: schemas.DataProvider = None,
+    db: AsyncSession = Depends(get_db)
+):
+    client = _get_data_client(provider)
     try:
         price = await client.get_current_price(symbol)
         candles = await client.get_historical_candles(symbol, "1d", 2)
@@ -196,6 +227,7 @@ async def create_manual_trade(
         risk_pct=trade_in.risk_pct,
         position_size=trade_in.position_size,
         mode=mode_enum,
+        provider=trade_in.provider,
         rationale=trade_in.rationale,
     )
     ok, reason = await risk.validate_new_trade(db, schema_in)
@@ -209,7 +241,6 @@ async def create_manual_trade(
 
 @app.get("/api/v1/positions")
 async def get_open_positions(db: AsyncSession = Depends(get_db)):
-    client: MetaApiClient = app.state.metaapi
     result = await db.execute(
         select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN).order_by(desc(models.Trade.open_time))
     )
@@ -217,6 +248,7 @@ async def get_open_positions(db: AsyncSession = Depends(get_db)):
     positions = []
     for t in trades:
         try:
+            client = _get_data_client(schemas.DataProvider(t.provider))
             price = await client.get_current_price(t.symbol)
             current = price.get("bid") if t.direction == "sell" else price.get("ask")
         except Exception:
@@ -238,7 +270,11 @@ async def get_open_positions(db: AsyncSession = Depends(get_db)):
                 dist_tp = (current - t.take_profit) if t.take_profit else None
         duration = None
         if t.open_time:
-            duration = int((datetime.utcnow() - t.open_time).total_seconds() / 60)
+            now = datetime.now(timezone.utc)
+            open_time = t.open_time
+            if open_time.tzinfo is None:
+                open_time = open_time.replace(tzinfo=timezone.utc)
+            duration = int((now - open_time).total_seconds() / 60)
         positions.append({
             "id": t.id,
             "symbol": t.symbol,
@@ -259,15 +295,19 @@ async def get_open_positions(db: AsyncSession = Depends(get_db)):
             "ai_decision_id": t.ai_decision_id,
             "rationale": t.rationale,
         })
-    return positions
+    return {"positions": positions}
 
 
 @app.post("/api/v1/positions/{trade_id}/close")
 async def close_position(trade_id: int, db: AsyncSession = Depends(get_db)):
     executor: ExecutionService = app.state.executor
-    client: MetaApiClient = app.state.metaapi
+    result = await db.execute(select(models.Trade).where(models.Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
+    client = _get_data_client(schemas.DataProvider(trade.provider))
     try:
-        price = await client.get_current_price(settings.DEFAULT_PAIR)
+        price = await client.get_current_price(trade.symbol)
         current = price.get("bid")
     except Exception:
         raise HTTPException(status_code=503, detail="Unable to fetch current price")
@@ -452,7 +492,11 @@ async def get_ai_decisions(
 
 
 @app.post("/api/v1/ai/analyze")
-async def trigger_ai_analysis(symbol: str = settings.DEFAULT_PAIR, db: AsyncSession = Depends(get_db)):
+async def trigger_ai_analysis(
+    symbol: str = settings.DEFAULT_PAIR,
+    provider: schemas.DataProvider = None,
+    db: AsyncSession = Depends(get_db)
+):
     aggregator: AnalysisAggregator = app.state.aggregator
     ai: OpenRouterClient = app.state.ai
     executor: ExecutionService = app.state.executor
@@ -476,6 +520,7 @@ async def trigger_ai_analysis(symbol: str = settings.DEFAULT_PAIR, db: AsyncSess
         fundamental_snapshot=analysis.get("fundamental"),
         sentiment_snapshot=analysis.get("sentiment"),
         model_used=settings.OPENROUTER_MODEL,
+        provider=(provider or settings.DATA_PROVIDER).value,
     )
     db.add(db_decision)
     await db.commit()
@@ -494,6 +539,7 @@ async def trigger_ai_analysis(symbol: str = settings.DEFAULT_PAIR, db: AsyncSess
                 take_profit=decision.take_profit,
                 risk_pct=decision.position_size_pct,
                 mode=schemas.TradeMode.paper,
+                provider=provider or settings.DATA_PROVIDER,
                 ai_decision_id=db_decision.id,
                 rationale=decision.rationale,
             )
@@ -512,9 +558,10 @@ async def trigger_ai_analysis(symbol: str = settings.DEFAULT_PAIR, db: AsyncSess
 async def get_technical_analysis(
     symbol: str = settings.DEFAULT_PAIR,
     timeframe: str = "1h",
+    provider: schemas.DataProvider = None,
     db: AsyncSession = Depends(get_db)
 ):
-    client: MetaApiClient = app.state.metaapi
+    client = _get_data_client(provider)
     analyzer = TechnicalAnalyzer()
     try:
         candles = await client.get_historical_candles(symbol, timeframe, 300)
@@ -622,6 +669,16 @@ async def get_backtests(db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 
 
+@app.get("/api/v1/account/info")
+async def get_account_info(provider: schemas.DataProvider = None):
+    client = _get_data_client(provider)
+    try:
+        info = await client.get_account_info()
+        return schemas.AccountInfoOut(**info)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/api/v1/settings")
 async def get_app_settings(db: AsyncSession = Depends(get_db)):
     return await build_settings_response(db)
@@ -633,7 +690,9 @@ async def update_app_settings(payload: schemas.AppSettingsUpdate, db: AsyncSessi
     data = payload.model_dump(exclude_unset=True)
     for key, value in data.items():
         await set_setting(db, key, value)
-    return await build_settings_response(db)
+    response = await build_settings_response(db)
+    await broadcast_settings_change({"type": "settings_updated", "settings": response})
+    return response
 
 
 @app.get("/api/v1/manual-override")
@@ -647,19 +706,25 @@ async def toggle_manual_override(db: AsyncSession = Depends(get_db)):
     current = await get_setting_bool(db, "manual_override")
     new_val = not current
     await set_setting(db, "manual_override", str(new_val).lower())
+    await broadcast_settings_change({"type": "manual_override_changed", "manual_override": new_val})
     return {"manual_override": new_val}
 
 
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+        self.subscriptions: dict[WebSocket, dict] = {}
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        self.subscriptions[websocket] = {"symbols": [], "topics": ["prices", "trades", "ai_decisions", "settings"]}
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        if websocket in self.subscriptions:
+            del self.subscriptions[websocket]
 
     async def broadcast(self, message: dict):
         disconnected = []
@@ -671,6 +736,26 @@ class ConnectionManager:
         for d in disconnected:
             self.disconnect(d)
 
+    async def broadcast_to_subscribers(self, topic: str, message: dict):
+        disconnected = []
+        for connection in self.active_connections:
+            subs = self.subscriptions.get(connection, {})
+            topics = subs.get("topics", [])
+            if topic in topics or "all" in topics:
+                try:
+                    await connection.send_text(json.dumps(message))
+                except Exception:
+                    disconnected.append(connection)
+        for d in disconnected:
+            self.disconnect(d)
+
+    def update_subscription(self, websocket: WebSocket, symbols: list = None, topics: list = None):
+        if websocket in self.subscriptions:
+            if symbols is not None:
+                self.subscriptions[websocket]["symbols"] = symbols
+            if topics is not None:
+                self.subscriptions[websocket]["topics"] = topics
+
 
 manager = ConnectionManager()
 
@@ -678,6 +763,26 @@ manager = ConnectionManager()
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    redis_listener_task = None
+
+    async def redis_listener():
+        try:
+            import redis.asyncio as aioredis
+            redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            pubsub = redis.pubsub()
+            await pubsub.subscribe("ws:prices", "ws:trades", "ws:ai_decisions", "ws:settings")
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        data = json.loads(message["data"])
+                        await websocket.send_text(json.dumps(data))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    redis_listener_task = asyncio.create_task(redis_listener())
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -685,12 +790,16 @@ async def websocket_endpoint(websocket: WebSocket):
             action = msg.get("action")
             if action == "subscribe_prices":
                 symbols = msg.get("symbols", [settings.DEFAULT_PAIR])
-                client: MetaApiClient = app.state.metaapi
+                provider = msg.get("provider")
+                provider_enum = schemas.DataProvider(provider) if provider else settings.DATA_PROVIDER
+                manager.update_subscription(websocket, symbols=symbols)
+                client = _get_data_client(provider_enum)
                 for sym in symbols:
                     try:
                         price = await client.get_current_price(sym)
                         await websocket.send_text(json.dumps({
                             "type": "price_tick",
+                            "topic": "prices",
                             "symbol": sym,
                             "bid": price.get("bid"),
                             "ask": price.get("ask"),
@@ -698,9 +807,68 @@ async def websocket_endpoint(websocket: WebSocket):
                         }))
                     except Exception:
                         pass
+            elif action == "subscribe_topics":
+                topics = msg.get("topics", ["prices", "trades", "ai_decisions", "settings"])
+                manager.update_subscription(websocket, topics=topics)
+                await websocket.send_text(json.dumps({"type": "subscription_updated", "topics": topics}))
             elif action == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
             else:
                 await websocket.send_text(json.dumps({"type": "echo", "data": data}))
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+    finally:
+        if redis_listener_task:
+            redis_listener_task.cancel()
+            try:
+                await redis_listener_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def broadcast_price_tick(symbol: str, bid: float, ask: float, timestamp: str = None):
+    message = {
+        "type": "price_tick",
+        "topic": "prices",
+        "symbol": symbol,
+        "bid": bid,
+        "ask": ask,
+        "timestamp": timestamp or datetime.utcnow().isoformat(),
+    }
+    await manager.broadcast_to_subscribers("prices", message)
+    from app.services.websocket_broadcaster import broadcast_via_redis, CHANNEL_PRICES
+    await broadcast_via_redis(CHANNEL_PRICES, message)
+
+
+async def broadcast_trade_event(event_type: str, trade_data: dict):
+    message = {
+        "type": "trade_event",
+        "topic": "trades",
+        "event": event_type,
+        "data": trade_data,
+    }
+    await manager.broadcast_to_subscribers("trades", message)
+    from app.services.websocket_broadcaster import broadcast_via_redis, CHANNEL_TRADES
+    await broadcast_via_redis(CHANNEL_TRADES, message)
+
+
+async def broadcast_ai_decision(decision_data: dict):
+    message = {
+        "type": "ai_decision",
+        "topic": "ai_decisions",
+        "data": decision_data,
+    }
+    await manager.broadcast_to_subscribers("ai_decisions", message)
+    from app.services.websocket_broadcaster import broadcast_via_redis, CHANNEL_AI_DECISIONS
+    await broadcast_via_redis(CHANNEL_AI_DECISIONS, message)
+
+
+async def broadcast_settings_change(settings_data: dict):
+    message = {
+        "type": "settings_change",
+        "topic": "settings",
+        "data": settings_data,
+    }
+    await manager.broadcast_to_subscribers("settings", message)
+    from app.services.websocket_broadcaster import broadcast_via_redis, CHANNEL_SETTINGS
+    await broadcast_via_redis(CHANNEL_SETTINGS, message)

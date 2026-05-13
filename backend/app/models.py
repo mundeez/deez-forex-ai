@@ -21,6 +21,11 @@ class TradeMode(str, enum.Enum):
     LIVE = "live"
 
 
+class DataProvider(str, enum.Enum):
+    METAAPI = "metaapi"
+    MT5_ZMQ = "mt5_zmq"
+
+
 class MarketData(Base):
     __tablename__ = "market_data"
 
@@ -58,6 +63,7 @@ class Trade(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     meta_order_id = Column(String(100))
     rationale = Column(Text)
+    provider = Column(Enum(DataProvider), default=DataProvider.METAAPI)
 
 
 class AIDecision(Base):
@@ -79,6 +85,7 @@ class AIDecision(Base):
     fundamental_snapshot = Column(JSON)
     sentiment_snapshot = Column(JSON)
     model_used = Column(String(100))
+    provider = Column(Enum(DataProvider), default=DataProvider.METAAPI)
 
 
 class BacktestRun(Base):
