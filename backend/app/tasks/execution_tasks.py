@@ -31,6 +31,35 @@ def check_open_positions():
                 })
                 if trade.ai_decision_id:
                     vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+
+            # Check trailing stops
+            trailing_closed = await executor.check_trailing_stops(db)
+            for trade in trailing_closed:
+                await broadcast_trade_event("closed", {
+                    "id": trade.id,
+                    "symbol": trade.symbol,
+                    "direction": trade.direction,
+                    "exit_price": trade.exit_price,
+                    "pnl": trade.pnl,
+                    "pnl_pct": trade.pnl_pct,
+                    "mode": trade.mode,
+                    "close_reason": "trailing_stop",
+                })
+                if trade.ai_decision_id:
+                    vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+
+            # Check partial profits
+            partials = await executor.check_partial_profits(db)
+            for trade in partials:
+                await broadcast_trade_event("partial", {
+                    "id": trade.id,
+                    "symbol": trade.symbol,
+                    "partial_pnl": trade.partial_pnl,
+                    "closed_portion": trade.closed_portion,
+                    "position_size": trade.position_size,
+                    "stop_loss": trade.stop_loss,
+                })
+
             # Then check time-based closes
             time_closed = await executor.check_and_close_time_based_positions(db)
             for trade in time_closed:
@@ -46,7 +75,13 @@ def check_open_positions():
                 })
                 if trade.ai_decision_id:
                     vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
-        return {"checked": True, "sl_tp_closed": len(closed_trades), "time_closed": len(time_closed)}
+        return {
+            "checked": True,
+            "sl_tp_closed": len(closed_trades),
+            "trailing_closed": len(trailing_closed),
+            "partials": len(partials),
+            "time_closed": len(time_closed),
+        }
     return asyncio.run(_check())
 
 
@@ -141,8 +176,18 @@ def update_daily_pnl():
             result = await db.execute(select(func.count(models.Trade.id)).where(models.Trade.status == models.TradeStatus.OPEN))
             open_count = result.scalar() or 0
 
+            # Get previous peak
+            prev_snap = await db.execute(
+                select(models.AccountSnapshot).order_by(models.AccountSnapshot.timestamp.desc()).limit(1)
+            )
+            prev = prev_snap.scalar_one_or_none()
+            peak = max(prev.peak_equity, equity) if prev and prev.peak_equity else equity
+            drawdown = ((peak - equity) / peak * 100) if peak > 0 else 0.0
+
             snapshot = models.AccountSnapshot(
                 equity=equity,
+                peak_equity=peak,
+                drawdown_pct=round(drawdown, 2),
                 realized_pnl=realized,
                 unrealized_pnl=unrealized,
                 total_trades=0,

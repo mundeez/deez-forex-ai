@@ -249,6 +249,109 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
+                  {/* Trailing Stop & Partial Profits */}
+                  <div className="border-t border-slate-700 pt-4">
+                    <h3 className="text-lg font-semibold mb-4 text-slate-200">Trailing Stop & Partial Profits</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.trailing_stop_enabled !== false}
+                          onChange={(e) => updateField("trailing_stop_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Trailing Stop</span>
+                          <p className="text-xs text-slate-500">Moves SL to breakeven at 1x ATR, then trails by ATR distance</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Trailing Stop Distance (x ATR)</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={settings.trailing_stop_distance_atr || 1.0}
+                          onChange={(e) => updateField("trailing_stop_distance_atr", parseFloat(e.target.value))}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.partial_profit_enabled !== false}
+                          onChange={(e) => updateField("partial_profit_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Partial Profit Taking</span>
+                          <p className="text-xs text-slate-500">Close 50% at 1R profit, move SL to breakeven</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Partial Profit % to Close</label>
+                        <input
+                          type="number"
+                          value={settings.partial_profit_pct || 50}
+                          onChange={(e) => updateField("partial_profit_pct", parseFloat(e.target.value))}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Spread & Drawdown Guards */}
+                  <div className="border-t border-slate-700 pt-4">
+                    <h3 className="text-lg font-semibold mb-4 text-slate-200">Filters & Guards</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.spread_filter_enabled !== false}
+                          onChange={(e) => updateField("spread_filter_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Spread Filter</span>
+                          <p className="text-xs text-slate-500">Skip trades when spread &gt; 30% of ATR</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Max Spread / ATR Ratio</label>
+                        <input
+                          type="number"
+                          step="0.05"
+                          value={settings.max_spread_to_atr_ratio || 0.30}
+                          onChange={(e) => updateField("max_spread_to_atr_ratio", parseFloat(e.target.value))}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.drawdown_guard_enabled !== false}
+                          onChange={(e) => updateField("drawdown_guard_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Drawdown Guard</span>
+                          <p className="text-xs text-slate-500">Reduce position size during losing streaks</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Correlation Guard</label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={settings.correlation_guard_enabled !== false}
+                            onChange={(e) => updateField("correlation_guard_enabled", e.target.checked)}
+                            className="w-4 h-4 accent-forex-accent"
+                          />
+                          <span className="text-sm text-slate-300">Block correlated pairs</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="border-t border-slate-700 pt-4">
                     <div className="flex items-center gap-2 mb-4">
                       <Clock className="w-5 h-5 text-forex-accent" />

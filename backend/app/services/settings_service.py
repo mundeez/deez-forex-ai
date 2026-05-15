@@ -29,6 +29,20 @@ DEFAULTS = {
     "enable_sentiment": "true",
     "chart_refresh_ms": "30000",
     "analysis_poll_ms": "15000",
+    "trailing_stop_enabled": "true",
+    "trailing_stop_distance_atr": "1.0",
+    "trailing_stop_activation_atr": "1.0",
+    "partial_profit_enabled": "true",
+    "partial_profit_pct": "50.0",
+    "partial_profit_r_multiple": "1.0",
+    "spread_filter_enabled": "true",
+    "max_spread_to_atr_ratio": "0.30",
+    "drawdown_guard_enabled": "true",
+    "drawdown_reduce_10pct": "50.0",
+    "drawdown_reduce_20pct": "75.0",
+    "drawdown_block_30pct": "true",
+    "correlation_guard_enabled": "true",
+    "max_correlation_allowed": "0.75",
 }
 
 

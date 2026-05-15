@@ -144,31 +144,130 @@ class RiskManager:
         )
         return await self.validate_new_trade(db, trade_in)
 
+    async def validate_sl_tp_atr(
+        self, db: AsyncSession, entry: float, stop_loss: float, take_profit: float, atr: float
+    ) -> Tuple[bool, str]:
+        """Validate that SL/TP distances are within acceptable ATR multiples."""
+        if not atr or atr <= 0:
+            return True, "OK"
+        strategy_mode = await self._get_strategy_mode(db)
+        sl_dist = abs(entry - stop_loss)
+        tp_dist = abs(take_profit - entry)
+        sl_atr = sl_dist / atr
+        tp_atr = tp_dist / atr
+
+        limits = {
+            "scalping": {"sl_min": 0.5, "sl_max": 2.0, "tp_min": 1.0, "tp_max": 3.0},
+            "day_trading": {"sl_min": 1.0, "sl_max": 3.0, "tp_min": 2.0, "tp_max": 5.0},
+            "swing": {"sl_min": 2.0, "sl_max": 5.0, "tp_min": 3.0, "tp_max": 8.0},
+        }
+        lim = limits.get(strategy_mode, limits["scalping"])
+
+        if sl_atr < lim["sl_min"]:
+            return False, f"SL too tight: {sl_atr:.2f}x ATR (min {lim['sl_min']}x)"
+        if sl_atr > lim["sl_max"]:
+            return False, f"SL too wide: {sl_atr:.2f}x ATR (max {lim['sl_max']}x)"
+        if tp_atr < lim["tp_min"]:
+            return False, f"TP too close: {tp_atr:.2f}x ATR (min {lim['tp_min']}x)"
+        if tp_atr > lim["tp_max"]:
+            return False, f"TP too far: {tp_atr:.2f}x ATR (max {lim['tp_max']}x)"
+        return True, "OK"
+
+    async def validate_spread(self, db: AsyncSession, symbol: str, atr: float) -> Tuple[bool, str]:
+        """Skip trades when spread is too wide relative to ATR."""
+        from app.services.settings_service import get_setting_bool, get_setting_float
+        if not await get_setting_bool(db, "spread_filter_enabled"):
+            return True, "OK"
+        if not atr or atr <= 0:
+            return True, "OK"
+
+        # Fetch current price to get spread
+        from app.services.data.metaapi_client import MetaApiClient
+        client = MetaApiClient()
+        try:
+            price = await client.get_current_price(symbol)
+            spread = abs((price.get("ask") or 0) - (price.get("bid") or 0))
+        except Exception:
+            return True, "OK"
+
+        ratio = spread / atr
+        max_ratio = await get_setting_float(db, "max_spread_to_atr_ratio")
+        if ratio > max_ratio:
+            return False, f"Spread {spread:.5f} is {ratio:.2f}x ATR (max {max_ratio}x)"
+        return True, "OK"
+
+    async def apply_drawdown_reduction(self, db: AsyncSession, base_position_size: float) -> Tuple[float, str]:
+        """Reduce position size if account is in drawdown."""
+        from app.services.settings_service import get_setting_bool, get_setting_float
+        if not await get_setting_bool(db, "drawdown_guard_enabled"):
+            return base_position_size, "OK"
+
+        equity = await self._get_equity(db)
+        # Get peak equity from latest snapshot
+        result = await db.execute(
+            select(models.AccountSnapshot).order_by(models.AccountSnapshot.timestamp.desc()).limit(1)
+        )
+        snap = result.scalar_one_or_none()
+        peak = snap.peak_equity if snap and snap.peak_equity else equity
+        peak = max(peak, equity)
+
+        dd_pct = (peak - equity) / peak * 100 if peak > 0 else 0
+
+        if dd_pct >= 30:
+            block = await get_setting_bool(db, "drawdown_block_30pct")
+            if block:
+                return 0.0, f"Trading blocked: drawdown {dd_pct:.1f}% >= 30%"
+        if dd_pct >= 20:
+            reduce = await get_setting_float(db, "drawdown_reduce_20pct") / 100.0
+            return base_position_size * (1 - reduce), f"Position reduced {reduce*100:.0f}%: drawdown {dd_pct:.1f}%"
+        if dd_pct >= 10:
+            reduce = await get_setting_float(db, "drawdown_reduce_10pct") / 100.0
+            return base_position_size * (1 - reduce), f"Position reduced {reduce*100:.0f}%: drawdown {dd_pct:.1f}%"
+        return base_position_size, "OK"
+
+    async def validate_correlation(self, db: AsyncSession, symbol: str) -> Tuple[bool, str]:
+        """Prevent opening highly correlated pairs simultaneously."""
+        from app.services.settings_service import get_setting_bool, get_setting_float
+        if not await get_setting_bool(db, "correlation_guard_enabled"):
+            return True, "OK"
+
+        # Simple correlation matrix for major pairs
+        CORR = {
+            "EURUSD": {"GBPUSD": 0.85, "AUDUSD": 0.75, "NZDUSD": 0.70},
+            "GBPUSD": {"EURUSD": 0.85, "AUDUSD": 0.65, "NZDUSD": 0.60},
+            "USDJPY": {"USDCAD": 0.70, "USDCHF": 0.80},
+            "USDCAD": {"USDJPY": 0.70, "USDCHF": 0.65},
+            "USDCHF": {"USDJPY": 0.80, "USDCAD": 0.65},
+            "AUDUSD": {"EURUSD": 0.75, "GBPUSD": 0.65, "NZDUSD": 0.80},
+            "NZDUSD": {"EURUSD": 0.70, "GBPUSD": 0.60, "AUDUSD": 0.80},
+            "EURGBP": {"EURUSD": 0.50, "GBPUSD": 0.50},
+            "GBPJPY": {"GBPUSD": 0.50, "USDJPY": 0.60},
+            "XAUUSD": {"USDJPY": -0.40, "EURUSD": 0.30},
+        }
+
+        max_corr = await get_setting_float(db, "max_correlation_allowed")
+        result = await db.execute(
+            select(models.Trade.symbol).where(models.Trade.status == models.TradeStatus.OPEN)
+        )
+        open_symbols = [r[0] for r in result.all()]
+
+        for osym in open_symbols:
+            corr = CORR.get(symbol, {}).get(osym) or CORR.get(osym, {}).get(symbol)
+            if corr and abs(corr) >= max_corr:
+                return False, f"Correlation {corr:.2f} with {osym} exceeds limit {max_corr}"
+        return True, "OK"
+
     def calculate_position_size(self, equity: float, risk_pct: float, entry: float, stop_loss: float) -> float:
         """Calculate lot size based on risk amount and stop distance."""
         if not entry or not stop_loss or entry == stop_loss:
             return 0.01
         risk_amount = equity * (risk_pct / 100)
         sl_dist = abs(entry - stop_loss)
-        # pip value approx: 1 standard lot = $10/pip on EURUSD
-        # position_size in lots = risk_amount / (sl_dist in pips * $10 per pip per lot)
-        # sl_dist for EURUSD at 1.0850: 0.0010 = 10 pips = $100 risk at 0.01 lot... wait
-        # Actually: 0.01 lot = $0.10 per pip. 10 pips = $1.00
-        # So: position_size = risk_amount / (sl_dist * 100000 * 10) ... no
-        # Simpler: sl_dist in price terms. For EURUSD, 1 pip = 0.0001
-        # 0.01 lot: 1 pip = $0.10. So for sl_dist pips = sl_dist / 0.0001
-        # position_size = risk_amount / (sl_pips * 0.10) * 0.01
-        # position_size = risk_amount / (sl_dist / 0.0001 * 0.10) * 0.01
-        # = risk_amount / (sl_dist * 10000 * 0.10) * 0.01
-        # = risk_amount / (sl_dist * 1000) * 0.01
-        # = risk_amount * 0.01 / (sl_dist * 1000)
-        # Let's simplify:
-        pip_value_per_lot = 10.0  # $10 per pip per standard lot for EURUSD
+        pip_value_per_lot = 10.0
         sl_pips = sl_dist / 0.0001
         risk_per_lot = sl_pips * pip_value_per_lot
         if risk_per_lot <= 0:
             return 0.01
         lots = risk_amount / risk_per_lot
-        # Round down to nearest 0.001 (nano lot) for precision
-        lots = max(0.001, min(lots, equity / (entry * 100000)))  # cap by margin (100:1 leverage approx)
+        lots = max(0.001, min(lots, equity / (entry * 100000)))
         return round(lots, 3)

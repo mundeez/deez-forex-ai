@@ -11,14 +11,20 @@ interface Position {
   entry_price: number;
   stop_loss?: number;
   take_profit?: number;
+  position_size?: number;
+  original_position_size?: number;
   pnl?: number;
   pnl_pct?: number;
+  partial_pnl?: number;
+  closed_portion?: number;
   open_time?: string;
   duration_minutes?: number;
   distance_to_sl?: number;
   distance_to_tp?: number;
   mode: string;
   strategy_mode?: string;
+  trailing_stop_active?: boolean;
+  trailing_stop_distance?: number;
 }
 
 export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }) {
@@ -145,7 +151,12 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
                 </div>
                 <div className="flex items-center gap-1">
                   <Shield className="w-3 h-3 text-red-400" />
-                  <span>SL: {p.distance_to_sl?.toFixed(1) || "-"} pips</span>
+                  <span>
+                    SL: {p.distance_to_sl?.toFixed(1) || "-"} pips
+                    {p.trailing_stop_active && (
+                      <span className="text-amber-400 ml-1">(TRAIL)</span>
+                    )}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1">
                   <Target className="w-3 h-3 text-emerald-400" />
@@ -155,12 +166,22 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
                   <span className={`px-1.5 py-0.5 rounded text-[10px] ${p.mode === "live" ? "bg-red-900/50 text-red-300" : "bg-blue-900/50 text-blue-300"}`}>
                     {p.mode.toUpperCase()}
                   </span>
+                  {p.closed_portion && p.closed_portion > 0 && (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-900/30 text-emerald-300">
+                      {Math.round(p.closed_portion * 100)}% CLOSED
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
                   <span className="text-[10px] text-slate-500">
                     EOD: {getEodMinutesRemaining()}m
                   </span>
                 </div>
+                {p.partial_pnl && p.partial_pnl !== 0 && (
+                  <div className="col-span-2 text-[10px] text-emerald-400">
+                    Partial PnL: {p.partial_pnl >= 0 ? "+" : ""}${p.partial_pnl.toFixed(2)}
+                  </div>
+                )}
               </div>
 
               <button

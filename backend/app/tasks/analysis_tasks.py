@@ -144,36 +144,97 @@ def run_full_analysis():
                 if decision.decision in ("BUY", "SELL") and not manual_override:
                     ok, reason = await risk.validate_ai_decision(db, decision)
                     if ok:
-                        equity = await risk._get_equity(db)
-                        position_size = risk.calculate_position_size(
-                            equity, decision.position_size_pct,
-                            decision.entry_price, decision.stop_loss
+                        # Extract ATR from smallest timeframe analysis
+                        tech = analysis.get("technical", {})
+                        tfs = tech.get("timeframes", {})
+                        first_tf = next(iter(tfs.values()), {})
+                        ind = first_tf.get("indicators", {})
+                        atr = ind.get("atr_14", 0.0)
+
+                        # 1. ATR-based SL/TP validation
+                        ok2, reason2 = await risk.validate_sl_tp_atr(
+                            db, decision.entry_price, decision.stop_loss, decision.take_profit, atr
                         )
-                        trade_in = schemas.TradeCreate(
-                            symbol=symbol,
-                            direction=schemas.TradeDirection(decision.decision.lower()),
-                            entry_price=decision.entry_price,
-                            stop_loss=decision.stop_loss,
-                            take_profit=decision.take_profit,
-                            risk_pct=decision.position_size_pct,
-                            mode=schemas.TradeMode.paper,
-                            provider=settings.DATA_PROVIDER,
-                            ai_decision_id=db_decision.id,
-                            rationale=decision.rationale,
-                        )
-                        trade = await executor.execute_trade(db, trade_in, position_size=position_size, strategy_mode=strategy_mode)
-                        await broadcast_trade_event("executed", {
-                            "id": trade.id,
-                            "symbol": trade.symbol,
-                            "direction": trade.direction,
-                            "entry_price": trade.entry_price,
-                            "stop_loss": trade.stop_loss,
-                            "take_profit": trade.take_profit,
-                            "mode": trade.mode,
-                            "position_size": trade.position_size,
-                            "ai_decision_id": trade.ai_decision_id,
-                            "strategy_mode": strategy_mode,
-                        })
+                        if not ok2:
+                            ok = False
+                            reason = reason2
+
+                        # 2. Spread efficiency filter
+                        if ok:
+                            ok3, reason3 = await risk.validate_spread(db, symbol, atr)
+                            if not ok3:
+                                ok = False
+                                reason = reason3
+
+                        # 3. Correlation guard
+                        if ok:
+                            ok4, reason4 = await risk.validate_correlation(db, symbol)
+                            if not ok4:
+                                ok = False
+                                reason = reason4
+
+                        if ok:
+                            equity = await risk._get_equity(db)
+                            position_size = risk.calculate_position_size(
+                                equity, decision.position_size_pct,
+                                decision.entry_price, decision.stop_loss
+                            )
+
+                            # 4. Drawdown-based position size reduction
+                            position_size, dd_reason = await risk.apply_drawdown_reduction(db, position_size)
+                            if position_size <= 0:
+                                ok = False
+                                reason = dd_reason
+
+                        if ok:
+                            # Calculate trailing stop distance from ATR
+                            from app.services.settings_service import get_setting_float
+                            trailing_atr_mult = await get_setting_float(db, "trailing_stop_distance_atr")
+                            trailing_distance = atr * trailing_atr_mult if atr and trailing_atr_mult else None
+
+                            trade_in = schemas.TradeCreate(
+                                symbol=symbol,
+                                direction=schemas.TradeDirection(decision.decision.lower()),
+                                entry_price=decision.entry_price,
+                                stop_loss=decision.stop_loss,
+                                take_profit=decision.take_profit,
+                                risk_pct=decision.position_size_pct,
+                                mode=schemas.TradeMode.paper,
+                                provider=settings.DATA_PROVIDER,
+                                ai_decision_id=db_decision.id,
+                                rationale=decision.rationale,
+                            )
+                            trade = await executor.execute_trade(
+                                db, trade_in, position_size=position_size,
+                                strategy_mode=strategy_mode, trailing_distance=trailing_distance
+                            )
+                            await broadcast_trade_event("executed", {
+                                "id": trade.id,
+                                "symbol": trade.symbol,
+                                "direction": trade.direction,
+                                "entry_price": trade.entry_price,
+                                "stop_loss": trade.stop_loss,
+                                "take_profit": trade.take_profit,
+                                "mode": trade.mode,
+                                "position_size": trade.position_size,
+                                "ai_decision_id": trade.ai_decision_id,
+                                "strategy_mode": strategy_mode,
+                            })
+                        else:
+                            decision.decision = "HOLD"
+                            decision.rationale += f" [RISK BLOCKED: {reason}]"
+                            db_decision.decision = "HOLD"
+                            db_decision.rationale = decision.rationale
+                            await db.commit()
+                            await broadcast_ai_decision({
+                                "id": db_decision.id,
+                                "symbol": symbol,
+                                "decision": "HOLD",
+                                "confidence": decision.confidence,
+                                "rationale": decision.rationale,
+                                "manual_override": manual_override,
+                                "strategy_mode": strategy_mode,
+                            })
                     else:
                         decision.decision = "HOLD"
                         decision.rationale += f" [RISK BLOCKED: {reason}]"

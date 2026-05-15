@@ -55,9 +55,12 @@ class Trade(Base):
     stop_loss = Column(Float)
     take_profit = Column(Float)
     position_size = Column(Float)
+    original_position_size = Column(Float)
     risk_pct = Column(Float)
     pnl = Column(Float)
     pnl_pct = Column(Float)
+    partial_pnl = Column(Float, default=0.0)
+    closed_portion = Column(Float, default=0.0)
     ai_decision_id = Column(Integer)
     open_time = Column(DateTime(timezone=True))
     close_time = Column(DateTime(timezone=True))
@@ -65,6 +68,10 @@ class Trade(Base):
     meta_order_id = Column(String(100))
     rationale = Column(Text)
     provider = Column(Enum(DataProvider), default=DataProvider.MT5_ZMQ)
+    trailing_stop_active = Column(Boolean, default=False)
+    trailing_stop_distance = Column(Float)
+    highest_price_seen = Column(Float)
+    lowest_price_seen = Column(Float)
 
 
 class AIDecision(Base):
@@ -136,6 +143,8 @@ class AccountSnapshot(Base):
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     equity = Column(Float, nullable=False)
+    peak_equity = Column(Float, nullable=False)
+    drawdown_pct = Column(Float, default=0.0)
     realized_pnl = Column(Float, default=0.0)
     unrealized_pnl = Column(Float, default=0.0)
     total_trades = Column(Integer, default=0)

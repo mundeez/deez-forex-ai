@@ -39,19 +39,27 @@ class TradeOut(BaseModel):
     direction: str
     status: str
     mode: str
+    strategy_mode: Optional[str] = None
     entry_price: Optional[float]
     exit_price: Optional[float]
     stop_loss: Optional[float]
     take_profit: Optional[float]
     position_size: Optional[float]
+    original_position_size: Optional[float] = None
     risk_pct: Optional[float]
     pnl: Optional[float]
     pnl_pct: Optional[float]
+    partial_pnl: Optional[float] = 0.0
+    closed_portion: Optional[float] = 0.0
     open_time: Optional[datetime]
     close_time: Optional[datetime]
     created_at: datetime
     rationale: Optional[str]
     provider: Optional[DataProvider] = None
+    trailing_stop_active: Optional[bool] = False
+    trailing_stop_distance: Optional[float] = None
+    highest_price_seen: Optional[float] = None
+    lowest_price_seen: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -124,19 +132,25 @@ class PositionOut(BaseModel):
     direction: str
     status: str
     mode: str
+    strategy_mode: Optional[str] = None
     entry_price: Optional[float]
     stop_loss: Optional[float]
     take_profit: Optional[float]
     position_size: Optional[float]
+    original_position_size: Optional[float] = None
     risk_pct: Optional[float]
     pnl: Optional[float]
     pnl_pct: Optional[float]
+    partial_pnl: Optional[float] = 0.0
+    closed_portion: Optional[float] = 0.0
     open_time: Optional[datetime]
     duration_minutes: Optional[int]
     distance_to_sl: Optional[float]
     distance_to_tp: Optional[float]
     ai_decision_id: Optional[int]
     rationale: Optional[str]
+    trailing_stop_active: Optional[bool] = False
+    trailing_stop_distance: Optional[float] = None
 
     class Config:
         from_attributes = True

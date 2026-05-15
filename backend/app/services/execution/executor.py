@@ -7,7 +7,7 @@ from app import models, schemas
 from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.config import get_settings
-from app.services.settings_service import get_setting_int, get_setting_bool
+from app.services.settings_service import get_setting_int, get_setting_bool, get_setting_float
 
 settings = get_settings()
 
@@ -23,9 +23,10 @@ class ExecutionService:
             return self.mt5_zmq
         return self.metaapi
 
-    async def execute_trade(self, db: AsyncSession, trade_in: schemas.TradeCreate, position_size: float = None, strategy_mode: str = "scalping") -> models.Trade:
+    async def execute_trade(self, db: AsyncSession, trade_in: schemas.TradeCreate, position_size: float = None, strategy_mode: str = "scalping", trailing_distance: float = None) -> models.Trade:
         now = datetime.utcnow()
         client = self._get_client(trade_in.provider)
+        size = position_size or trade_in.position_size or 0.01
         trade = models.Trade(
             symbol=trade_in.symbol,
             direction=trade_in.direction.value,
@@ -35,12 +36,14 @@ class ExecutionService:
             entry_price=trade_in.entry_price,
             stop_loss=trade_in.stop_loss,
             take_profit=trade_in.take_profit,
-            position_size=position_size or trade_in.position_size or 0.01,
+            position_size=size,
+            original_position_size=size,
             risk_pct=trade_in.risk_pct,
             ai_decision_id=trade_in.ai_decision_id,
             open_time=now,
             rationale=trade_in.rationale,
             provider=trade_in.provider.value,
+            trailing_stop_distance=trailing_distance,
         )
 
         is_live = trade_in.mode == schemas.TradeMode.live
@@ -176,3 +179,140 @@ class ExecutionService:
             except Exception:
                 pass
         return closed
+
+    async def check_trailing_stops(self, db: AsyncSession):
+        """Update trailing stops and close if hit."""
+        from app.services.settings_service import get_setting_bool
+        trailing_enabled = await get_setting_bool(db, "trailing_stop_enabled")
+        if not trailing_enabled:
+            return []
+
+        result = await db.execute(
+            select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN)
+        )
+        open_trades = result.scalars().all()
+        closed = []
+        updated = []
+        client = self._get_client()
+
+        for trade in open_trades:
+            if not trade.trailing_stop_distance:
+                continue
+
+            try:
+                price_data = await client.get_current_price(trade.symbol)
+                price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
+            except Exception:
+                continue
+            if not price:
+                continue
+
+            entry = trade.entry_price
+            sl = trade.stop_loss
+            dist = trade.trailing_stop_distance
+
+            if trade.direction == models.TradeDirection.BUY.value:
+                # Track highest price seen
+                if trade.highest_price_seen is None or price > trade.highest_price_seen:
+                    trade.highest_price_seen = price
+                highest = trade.highest_price_seen or entry
+                # Activate trailing once price moves dist above entry
+                activation = entry + dist
+                if price >= activation and not trade.trailing_stop_active:
+                    trade.trailing_stop_active = True
+                    # Move SL to breakeven (or better)
+                    new_sl = max(sl, entry) if sl else entry
+                    trade.stop_loss = round(new_sl, 5)
+                    updated.append(trade)
+                elif trade.trailing_stop_active:
+                    new_sl = highest - dist
+                    if new_sl > trade.stop_loss:
+                        trade.stop_loss = round(new_sl, 5)
+                        updated.append(trade)
+                # Check if price hit trailing stop
+                if trade.trailing_stop_active and price <= trade.stop_loss:
+                    closed_trade = await self.close_trade(db, trade.id, price, "trailing_stop")
+                    closed.append(closed_trade)
+                    continue
+
+            else:  # SELL
+                if trade.lowest_price_seen is None or price < trade.lowest_price_seen:
+                    trade.lowest_price_seen = price
+                lowest = trade.lowest_price_seen or entry
+                activation = entry - dist
+                if price <= activation and not trade.trailing_stop_active:
+                    trade.trailing_stop_active = True
+                    new_sl = min(sl, entry) if sl else entry
+                    trade.stop_loss = round(new_sl, 5)
+                    updated.append(trade)
+                elif trade.trailing_stop_active:
+                    new_sl = lowest + dist
+                    if new_sl < trade.stop_loss:
+                        trade.stop_loss = round(new_sl, 5)
+                        updated.append(trade)
+                if trade.trailing_stop_active and price >= trade.stop_loss:
+                    closed_trade = await self.close_trade(db, trade.id, price, "trailing_stop")
+                    closed.append(closed_trade)
+                    continue
+
+        await db.commit()
+        return closed
+
+    async def check_partial_profits(self, db: AsyncSession):
+        """Close 50% of position at 1R profit and move SL to breakeven."""
+        from app.services.settings_service import get_setting_bool, get_setting_float
+        partial_enabled = await get_setting_bool(db, "partial_profit_enabled")
+        if not partial_enabled:
+            return []
+
+        partial_pct = await get_setting_float(db, "partial_profit_pct") / 100.0
+        r_multiple = await get_setting_float(db, "partial_profit_r_multiple")
+
+        result = await db.execute(
+            select(models.Trade).where(
+                models.Trade.status == models.TradeStatus.OPEN,
+                models.Trade.closed_portion == 0.0,
+            )
+        )
+        open_trades = result.scalars().all()
+        partials = []
+        client = self._get_client()
+
+        for trade in open_trades:
+            if not trade.entry_price or not trade.stop_loss:
+                continue
+            sl_dist = abs(trade.entry_price - trade.stop_loss)
+            if sl_dist == 0:
+                continue
+            target_price = trade.entry_price + (sl_dist * r_multiple) if trade.direction == models.TradeDirection.BUY.value else trade.entry_price - (sl_dist * r_multiple)
+
+            try:
+                price_data = await client.get_current_price(trade.symbol)
+                price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
+            except Exception:
+                continue
+            if not price:
+                continue
+
+            # Check if 1R target reached
+            if trade.direction == models.TradeDirection.BUY.value:
+                reached = price >= target_price
+            else:
+                reached = price <= target_price
+
+            if reached:
+                # Close partial_pct of position
+                close_size = trade.position_size * partial_pct
+                portion_pnl = (price - trade.entry_price) * close_size * 100000 if trade.direction == models.TradeDirection.BUY.value else (trade.entry_price - price) * close_size * 100000
+
+                trade.partial_pnl = (trade.partial_pnl or 0) + portion_pnl
+                trade.closed_portion = (trade.closed_portion or 0) + partial_pct
+                trade.position_size = trade.position_size - close_size
+
+                # Move SL to breakeven
+                trade.stop_loss = round(trade.entry_price, 5)
+                trade.rationale = (trade.rationale or "") + f" | Partial close {int(partial_pct*100)}% at {price:.5f} (1R). SL moved to BE."
+                partials.append(trade)
+
+        await db.commit()
+        return partials
