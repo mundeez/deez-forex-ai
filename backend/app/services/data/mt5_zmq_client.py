@@ -24,7 +24,8 @@ class MT5ZMQClient:
         if self._socket is None or self._socket.closed:
             self._context = zmq.asyncio.Context()
             self._socket = self._context.socket(zmq.REQ)
-            self._socket.setsockopt(zmq.RCVTIMEO, 5000)
+            self._socket.setsockopt(zmq.RCVTIMEO, 2000)  # 2s timeout to fail fast
+            self._socket.setsockopt(zmq.SNDTIMEO, 2000)
             self._socket.setsockopt(zmq.LINGER, 0)
             self._socket.connect(self.req_addr)
 

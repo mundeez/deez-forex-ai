@@ -60,7 +60,7 @@ services:
       FRED_API_KEY: ${FRED_API_KEY:-}
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: ${DATA_PROVIDER:-mt5_zmq}
+      DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
@@ -94,7 +94,7 @@ services:
       FRED_API_KEY: ${FRED_API_KEY:-}
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: ${DATA_PROVIDER:-mt5_zmq}
+      DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
@@ -126,7 +126,7 @@ services:
       FRED_API_KEY: ${FRED_API_KEY:-}
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: ${DATA_PROVIDER:-mt5_zmq}
+      DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
