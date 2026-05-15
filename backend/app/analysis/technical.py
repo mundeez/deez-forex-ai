@@ -45,6 +45,44 @@ def _atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / length, min_periods=length).mean()
 
 
+def _vwap(df: pd.DataFrame) -> pd.Series:
+    """Volume Weighted Average Price."""
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    volume = df.get("volume", pd.Series(1, index=df.index))
+    cum_tp_vol = (tp * volume).cumsum()
+    cum_vol = volume.cumsum()
+    return cum_tp_vol / cum_vol
+
+
+def _adx(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    """Average Directional Index (trend strength, 0-100)."""
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+    tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / length, min_periods=length).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / length, min_periods=length).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / length, min_periods=length).mean() / atr)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    return dx.ewm(alpha=1 / length, min_periods=length).mean()
+
+
+def _bb_squeeze(df: pd.DataFrame, length: int = 20, squeeze_lookback: int = 120) -> bool:
+    """Detect Bollinger Band squeeze: bands narrow to lowest in lookback period."""
+    middle = df["close"].rolling(length).mean()
+    sigma = df["close"].rolling(length).std()
+    bandwidth = ((middle + 2 * sigma) - (middle - 2 * sigma)) / middle
+    if len(bandwidth) < squeeze_lookback:
+        return False
+    current_bw = bandwidth.iloc[-1]
+    min_bw = bandwidth.iloc[-squeeze_lookback:-1].min()
+    return current_bw <= min_bw * 1.05  # within 5% of the narrowest
+
+
 class TechnicalAnalyzer:
     def analyze(self, candles: List[Dict[str, Any]]) -> Dict[str, Any]:
         if len(candles) < 60:
@@ -69,6 +107,9 @@ class TechnicalAnalyzer:
         df["BB_MIDDLE"] = bb_middle
         df["BB_LOWER"] = bb_lower
         df["ATR_14"] = _atr(df, 14)
+        df["VWAP"] = _vwap(df)
+        df["ADX_14"] = _adx(df, 14)
+        squeeze = _bb_squeeze(df)
 
         last = df.iloc[-1]
 
@@ -84,6 +125,8 @@ class TechnicalAnalyzer:
         bb_lower_val = last.get("BB_LOWER")
         bb_middle_val = last.get("BB_MIDDLE")
         atr = last.get("ATR_14")
+        vwap = last.get("VWAP")
+        adx = last.get("ADX_14")
         close_price = last["close"]
 
         bullish_factors = 0
@@ -125,6 +168,23 @@ class TechnicalAnalyzer:
             elif close_price >= bb_upper_val:
                 bearish_factors += 1
 
+        # VWAP directional bias (stronger on intraday timeframes)
+        if pd.notna(vwap):
+            total_factors += 1
+            if close_price > vwap:
+                bullish_factors += 1
+            else:
+                bearish_factors += 1
+
+        # ADX trend strength: only count direction if ADX > 20 (avoid ranging markets)
+        if pd.notna(adx) and adx > 20:
+            total_factors += 1
+            # ADX itself doesn't give direction, but confirms existing signal
+            if bullish_factors > bearish_factors:
+                bullish_factors += 1
+            elif bearish_factors > bullish_factors:
+                bearish_factors += 1
+
         trend = "neutral"
         if bullish_factors > bearish_factors:
             trend = "bullish"
@@ -134,6 +194,10 @@ class TechnicalAnalyzer:
         confidence = 0.0
         if total_factors > 0:
             confidence = max(bullish_factors, bearish_factors) / total_factors
+
+        # Reduce confidence if ADX < 20 (weak trend = less reliable)
+        if pd.notna(adx) and adx < 20:
+            confidence = confidence * 0.7
 
         support, resistance = self._find_support_resistance(df)
         divergence = self._detect_divergence(df)
@@ -154,11 +218,14 @@ class TechnicalAnalyzer:
                 "bb_lower": round(bb_lower_val, 5) if pd.notna(bb_lower_val) else None,
                 "bb_middle": round(bb_middle_val, 5) if pd.notna(bb_middle_val) else None,
                 "atr_14": round(atr, 5) if pd.notna(atr) else None,
+                "vwap": round(vwap, 5) if pd.notna(vwap) else None,
+                "adx_14": round(adx, 2) if pd.notna(adx) else None,
                 "close": round(close_price, 5),
             },
             "support": support,
             "resistance": resistance,
             "divergence": divergence,
+            "bb_squeeze": squeeze,
         }
 
     def _find_support_resistance(self, df: pd.DataFrame, lookback: int = 20) -> tuple:

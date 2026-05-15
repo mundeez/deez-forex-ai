@@ -49,6 +49,7 @@ class Trade(Base):
     direction = Column(Enum(TradeDirection), nullable=False)
     status = Column(Enum(TradeStatus), default=TradeStatus.PENDING)
     mode = Column(Enum(TradeMode), default=TradeMode.PAPER)
+    strategy_mode = Column(String(20), default="scalping")
     entry_price = Column(Float)
     exit_price = Column(Float)
     stop_loss = Column(Float)
@@ -63,7 +64,7 @@ class Trade(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     meta_order_id = Column(String(100))
     rationale = Column(Text)
-    provider = Column(Enum(DataProvider), default=DataProvider.METAAPI)
+    provider = Column(Enum(DataProvider), default=DataProvider.MT5_ZMQ)
 
 
 class AIDecision(Base):
@@ -149,3 +150,33 @@ class ActivePair(Base):
     selection_mode = Column(String(10), default="manual")
     priority = Column(Integer, default=1)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class MarketStateSnapshot(Base):
+    __tablename__ = "market_state_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    strategy_mode = Column(String(20), default="scalping")
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    technical_vector = Column(JSON)
+    decision = Column(String(10))
+    confidence = Column(Float)
+    outcome_pnl = Column(Float)
+    outcome_status = Column(String(20))
+    qdrant_point_id = Column(String(50))
+
+
+class PairPerformanceByHour(Base):
+    __tablename__ = "pair_performance_by_hour"
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    hour_utc = Column(Integer, nullable=False)
+    strategy_mode = Column(String(20), default="scalping")
+    total_trades = Column(Integer, default=0)
+    winning_trades = Column(Integer, default=0)
+    avg_pnl = Column(Float, default=0.0)
+    avg_confidence = Column(Float, default=0.0)
+    volatility_score = Column(Float, default=0.0)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

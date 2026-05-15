@@ -1,28 +1,48 @@
 //+------------------------------------------------------------------+
 //|                                            ZeroMQ_Server.mq5     |
 //|  Direct MT5 bridge for deez-forex-ai via ZeroMQ                  |
-//|  Requires: ZmqSocket (https://github.com/dingmaotu/mql-zmq)      |
+//|  Uses direct libzmq.dll imports (no wrapper classes)             |
 //+------------------------------------------------------------------+
 #property copyright "deez-forex-ai"
-#property version   "1.00"
+#property version   "1.02"
 #property strict
 
-#include <ZmqSocket.mqh>
 #include <Trade/Trade.mqh>
+
+//--- ZeroMQ constants
+#define ZMQ_PUB 1
+#define ZMQ_REP 4
+#define ZMQ_DONTWAIT 1
+#define ZMQ_RCVTIMEO 27
+
+//--- Direct libzmq.dll imports
+#import "libzmq.dll"
+   long  zmq_ctx_new();
+   long  zmq_socket(long context, int type);
+   int   zmq_bind(long socket, string addr);
+   int   zmq_send(long socket, uchar &buf[], int len, int flags);
+   int   zmq_recv(long socket, uchar &buf[], int len, int flags);
+   int   zmq_setsockopt(long socket, int option, int &optval[], int optvallen);
+   int   zmq_setsockopt(long socket, int option, int optval, int optvallen);
+   int   zmq_close(long socket);
+   int   zmq_ctx_term(long context);
+   int   zmq_errno();
+#import
 
 //--- Input parameters
 input string ZMQ_HOST        = "0.0.0.0";
 input int    ZMQ_REQ_PORT    = 5555;      // Command/Response port
 input int    ZMQ_PUB_PORT    = 5556;      // Tick publisher port
-input int    RECONNECT_MS    = 5000;      // Reconnect interval
+input int    TIMER_MS        = 100;       // Command poll interval
 input bool   DEMO_ONLY_GUARD = true;      // Block live trades on non-demo accounts
 
 //--- Sockets
-ZmqSocket g_rep_socket;   // REQ/REP pattern — replies to backend commands
-ZmqSocket g_pub_socket;   // PUB pattern — pushes ticks to backend
+long g_context   = 0;
+long g_rep_sock  = 0;
+long g_pub_sock  = 0;
 
 //--- Trade helper
-CTrade    g_trade;
+CTrade g_trade;
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -30,94 +50,119 @@ int OnInit()
    g_trade.SetExpertMagicNumber(123456);
    g_trade.SetDeviationInPoints(10);
 
-   // Bind REP socket for commands
-   if(!g_rep_socket.Bind(StringFormat("tcp://%s:%d", ZMQ_HOST, ZMQ_REQ_PORT)))
+   g_context = zmq_ctx_new();
+   if(g_context == 0)
    {
-      Print("ZeroMQ REP bind failed on port ", ZMQ_REQ_PORT);
+      Print("zmq_ctx_new failed");
       return INIT_FAILED;
    }
-   Print("ZeroMQ REP bound to ", ZMQ_HOST, ":", ZMQ_REQ_PORT);
 
-   // Bind PUB socket for ticks
-   if(!g_pub_socket.Bind(StringFormat("tcp://%s:%d", ZMQ_HOST, ZMQ_PUB_PORT)))
+   g_rep_sock = zmq_socket(g_context, ZMQ_REP);
+   g_pub_sock = zmq_socket(g_context, ZMQ_PUB);
+
+   if(g_rep_sock == 0 || g_pub_sock == 0)
    {
-      Print("ZeroMQ PUB bind failed on port ", ZMQ_PUB_PORT);
+      Print("zmq_socket failed");
       return INIT_FAILED;
    }
-   Print("ZeroMQ PUB bound to ", ZMQ_HOST, ":", ZMQ_PUB_PORT);
 
-   // Allow non-blocking receive
-   g_rep_socket.SetReceiveTimeout(100);
+   // Set 100ms receive timeout on REP socket
+   int timeout = 100;
+   zmq_setsockopt(g_rep_sock, ZMQ_RCVTIMEO, timeout, 4);
 
+   string rep_addr = StringFormat("tcp://%s:%d", ZMQ_HOST, ZMQ_REQ_PORT);
+   string pub_addr = StringFormat("tcp://%s:%d", ZMQ_HOST, ZMQ_PUB_PORT);
+
+   if(zmq_bind(g_rep_sock, rep_addr) != 0)
+   {
+      Print("REP bind failed on ", rep_addr, " errno:", zmq_errno());
+      return INIT_FAILED;
+   }
+   Print("ZeroMQ REP bound to ", rep_addr);
+
+   if(zmq_bind(g_pub_sock, pub_addr) != 0)
+   {
+      Print("PUB bind failed on ", pub_addr, " errno:", zmq_errno());
+      return INIT_FAILED;
+   }
+   Print("ZeroMQ PUB bound to ", pub_addr);
+
+   EventSetMillisecondTimer(TIMER_MS);
    return INIT_SUCCEEDED;
 }
 
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   g_rep_socket.Close();
-   g_pub_socket.Close();
+   EventKillTimer();
+   if(g_rep_sock != 0) zmq_close(g_rep_sock);
+   if(g_pub_sock != 0) zmq_close(g_pub_sock);
+   if(g_context != 0)  zmq_ctx_term(g_context);
    Print("ZeroMQ Server stopped.");
 }
 
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Publish tick data every OnTick()
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol, tick)) return;
 
    string json = StringFormat(
-      "{\"type\":\"tick\",\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"last\":%.5f,\"volume\":%llu,\"timestamp\":%I64d}",
-      _Symbol,
-      tick.bid,
-      tick.ask,
-      tick.last,
-      tick.volume,
-      tick.time_msc
+      "{\"type\":\"tick\",\"symbol\":\"%s\",\"bid\":%.5f,\"ask\":%.5f,\"last\":%.5f,\"volume\":%I64u,\"timestamp\":%I64d}",
+      _Symbol, tick.bid, tick.ask, tick.last, tick.volume, tick.time_msc
    );
 
-   g_pub_socket.Send(json, true);
+   SendString(g_pub_sock, json);
 }
 
 //+------------------------------------------------------------------+
 void OnTimer()
 {
-   // Process any pending command messages
-   while(g_rep_socket.HasMore())
+   // Poll REP socket for commands (non-blocking due to RCVTIMEO)
+   string payload;
+   while(RecvString(g_rep_sock, payload))
    {
-      string msg;
-      if(g_rep_socket.Receive(msg, true))
-      {
-         string response = HandleCommand(msg);
-         g_rep_socket.Send(response, true);
-      }
+      string response = HandleCommand(payload);
+      SendString(g_rep_sock, response);
    }
+}
+
+//+------------------------------------------------------------------+
+void SendString(long sock, string msg)
+{
+   uchar buf[];
+   StringToCharArray(msg, buf, 0, StringLen(msg), CP_UTF8);
+   int len = ArraySize(buf);
+   zmq_send(sock, buf, len, 0);
+}
+
+//+------------------------------------------------------------------+
+bool RecvString(long sock, string &out)
+{
+   uchar buf[4096];
+   int rc = zmq_recv(sock, buf, 4096, 0);
+   if(rc <= 0) return false;
+   out = CharArrayToString(buf, 0, rc, CP_UTF8);
+   return true;
 }
 
 //+------------------------------------------------------------------+
 string HandleCommand(string json)
 {
-   // Simple JSON parsing — extract action field
    string action = ExtractStringField(json, "action");
    string symbol = ExtractStringField(json, "symbol");
    if(symbol == "") symbol = _Symbol;
 
    if(action == "GET_PRICE")
       return HandleGetPrice(symbol);
-
    if(action == "GET_CANDLES")
       return HandleGetCandles(json, symbol);
-
    if(action == "GET_ACCOUNT")
       return HandleGetAccount();
-
    if(action == "GET_POSITIONS")
       return HandleGetPositions();
-
    if(action == "TRADE")
       return HandleTrade(json);
-
    if(action == "CLOSE")
       return HandleClose(json);
 
@@ -232,7 +277,6 @@ string HandleTrade(string json)
    if(sl > 0) request.sl = sl;
    if(tp > 0) request.tp = tp;
 
-   // Fill price
    MqlTick tick;
    if(!SymbolInfoTick(symbol, tick))
       return "{\"error\":\"Cannot get price\"}";
@@ -274,7 +318,6 @@ string ExtractStringField(string json, string key)
    int start = StringFind(json, pattern);
    if(start == -1)
    {
-      // Try without quotes (for numbers / booleans)
       pattern = "\"" + key + "\":";
       start = StringFind(json, pattern);
       if(start == -1) return "";

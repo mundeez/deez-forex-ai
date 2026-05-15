@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, AlertTriangle, Bot, Globe, BarChart3, Shield, Bell } from "lucide-react";
+import { ArrowLeft, Save, AlertTriangle, Bot, Globe, BarChart3, Shield, Bell, Zap, Clock } from "lucide-react";
 import { API_URL } from "@/utils/api";
 
 interface SettingsData {
@@ -122,6 +122,7 @@ export default function SettingsPage() {
   const availablePairs = AVAILABLE_PAIRS.filter((s) => !usedPairs.includes(s));
 
   const tabs = [
+    { id: "trading", label: "Trading", icon: Zap },
     { id: "risk", label: "Risk", icon: Shield },
     { id: "pairs", label: "Pairs", icon: Globe },
     { id: "ai", label: "AI", icon: Bot },
@@ -168,6 +169,145 @@ export default function SettingsPage() {
               {message && (
                 <div className={`text-sm px-4 py-2 rounded-lg ${message.includes("success") || message.includes("updated") ? "bg-emerald-900/30 text-emerald-300" : "bg-red-900/30 text-red-300"}`}>
                   {message}
+                </div>
+              )}
+
+              {/* Trading Settings */}
+              {activeTab === "trading" && (
+                <div className="bg-forex-card rounded-xl border border-slate-700 p-6 space-y-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Zap className="w-5 h-5 text-forex-accent" />
+                    <h2 className="text-xl font-semibold">Trading Strategy</h2>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="text-sm text-slate-300 block mb-2">Strategy Mode</label>
+                      <div className="flex gap-2">
+                        {["scalping", "day_trading", "swing"].map((mode) => (
+                          <button
+                            key={mode}
+                            onClick={() => updateField("strategy_mode", mode)}
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                              settings.strategy_mode === mode
+                                ? "bg-forex-accent text-white"
+                                : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                            }`}
+                          >
+                            {mode === "scalping" ? "Scalping" : mode === "day_trading" ? "Day Trading" : "Swing"}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-2">
+                        {settings.strategy_mode === "scalping"
+                          ? "Fast trades (1-15 min). Analyzes 1m/5m/15m. Tight stops. Max 10 min hold."
+                          : settings.strategy_mode === "day_trading"
+                          ? "Intraday trades (15 min - 4 hrs). Analyzes 5m/15m/1h. Medium stops. Max 2 hr hold."
+                          : "Longer holds (4+ hrs). Analyzes 1h/4h/1D. Wide stops. No time limit."}
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-sm text-slate-300 block mb-2">Data Provider</label>
+                      <div className="flex gap-2">
+                        {["mt5_zmq", "metaapi"].map((provider) => (
+                          <button
+                            key={provider}
+                            onClick={() => updateField("data_provider", provider)}
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                              settings.data_provider === provider
+                                ? "bg-forex-accent text-white"
+                                : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                            }`}
+                          >
+                            {provider === "mt5_zmq" ? "MT5 ZMQ" : "MetaAPI"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-sm text-slate-300 block mb-2">Equity Balance ($)</label>
+                      <input
+                        type="number"
+                        value={settings.equity_balance || 100}
+                        onChange={(e) => updateField("equity_balance", parseFloat(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                      />
+                      <p className="text-xs text-slate-500 mt-1">Current account balance for position sizing</p>
+                    </div>
+
+                    <div>
+                      <label className="text-sm text-slate-300 block mb-2">Max Trade Duration (minutes)</label>
+                      <input
+                        type="number"
+                        value={settings.max_trade_duration_min || 10}
+                        onChange={(e) => updateField("max_trade_duration_min", parseInt(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                      />
+                      <p className="text-xs text-slate-500 mt-1">Auto-close trades after this many minutes</p>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-slate-700 pt-4">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Clock className="w-5 h-5 text-forex-accent" />
+                      <h3 className="text-lg font-semibold">End of Day / Weekend Closure</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.eod_close_enabled !== false}
+                          onChange={(e) => updateField("eod_close_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Close all trades before EOD</span>
+                          <p className="text-xs text-slate-500">Closes all positions at 21:30 UTC Mon-Fri</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">No New Entries Before (UTC)</label>
+                        <input
+                          type="time"
+                          value={settings.eod_no_new_entries_before || "21:00"}
+                          onChange={(e) => updateField("eod_no_new_entries_before", e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.weekend_close_enabled !== false}
+                          onChange={(e) => updateField("weekend_close_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Close before weekend</span>
+                          <p className="text-xs text-slate-500">Closes all positions Friday 21:00 UTC</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Weekend Resume (UTC Sunday)</label>
+                        <input
+                          type="time"
+                          value={settings.weekend_resume_time_utc || "22:00"}
+                          onChange={(e) => updateField("weekend_resume_time_utc", e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={saveSettings}
+                    disabled={saving}
+                    className="flex items-center gap-2 bg-forex-accent hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold transition disabled:opacity-50"
+                  >
+                    <Save className="w-4 h-4" />
+                    {saving ? "Saving..." : "Save Trading Settings"}
+                  </button>
                 </div>
               )}
 

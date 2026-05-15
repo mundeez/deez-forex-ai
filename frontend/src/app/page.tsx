@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Header from "@/components/Header";
 import ChartPanel from "@/components/ChartPanel";
 import MarketInfoBar from "@/components/MarketInfoBar";
@@ -14,7 +14,11 @@ import PairSelector from "@/components/PairSelector";
 import ManualOverrideToggle from "@/components/ManualOverrideToggle";
 import { useWebSocket } from "@/hooks/useWebSocket";
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws";
+function getWsUrl(): string {
+  if (typeof window === "undefined") return "";
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/ws`;
+}
 
 export default function Home() {
   const [activeSymbol, setActiveSymbol] = useState("EURUSD");
@@ -22,8 +26,13 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activePairs, setActivePairs] = useState<string[]>(["EURUSD"]);
   const [provider, setProvider] = useState<string>("metaapi");
+  const [wsUrl, setWsUrl] = useState<string>("");
 
-  const { prices, aiDecisions, connected } = useWebSocket(WS_URL, activePairs, provider);
+  useEffect(() => {
+    setWsUrl(getWsUrl());
+  }, []);
+
+  const { prices, aiDecisions, connected } = useWebSocket(wsUrl, activePairs, provider);
 
   const livePrice = prices[activeSymbol];
 

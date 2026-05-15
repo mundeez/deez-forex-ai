@@ -220,6 +220,8 @@ class AccountInfoOut(BaseModel):
 
 class AppSettingsOut(BaseModel):
     default_pair: str
+    data_provider: str
+    strategy_mode: str
     max_risk_per_trade_pct: float
     max_risk_per_trade_abs: Optional[float]
     max_daily_loss_pct: float
@@ -229,10 +231,23 @@ class AppSettingsOut(BaseModel):
     manual_override: bool
     max_open_per_symbol: int
     equity_balance: float
+    max_trade_duration_min: int
+    eod_close_enabled: bool
+    eod_close_time_utc: str
+    eod_no_new_entries_before: str
+    weekend_close_enabled: bool
+    weekend_close_time_utc: str
+    weekend_resume_time_utc: str
+    enable_technical: bool
+    enable_fundamental: bool
+    enable_sentiment: bool
+    chart_refresh_ms: int
+    analysis_poll_ms: int
     active_pairs: List[Dict[str, Any]]
 
 
 class AppSettingsUpdate(BaseModel):
+    strategy_mode: Optional[str] = None
     max_risk_per_trade_pct: Optional[float] = None
     max_risk_per_trade_abs: Optional[float] = None
     max_daily_loss_pct: Optional[float] = None
@@ -242,6 +257,18 @@ class AppSettingsUpdate(BaseModel):
     manual_override: Optional[bool] = None
     max_open_per_symbol: Optional[int] = None
     equity_balance: Optional[float] = None
+    max_trade_duration_min: Optional[int] = None
+    eod_close_enabled: Optional[bool] = None
+    eod_close_time_utc: Optional[str] = None
+    eod_no_new_entries_before: Optional[str] = None
+    weekend_close_enabled: Optional[bool] = None
+    weekend_close_time_utc: Optional[str] = None
+    weekend_resume_time_utc: Optional[str] = None
+    enable_technical: Optional[bool] = None
+    enable_fundamental: Optional[bool] = None
+    enable_sentiment: Optional[bool] = None
+    chart_refresh_ms: Optional[int] = None
+    analysis_poll_ms: Optional[int] = None
 
 
 class ManualTradeCreate(BaseModel):

@@ -1,16 +1,55 @@
 import asyncio
+from datetime import datetime, time
+from typing import Tuple
 from app.celery_app import celery_app
 from app.analysis.aggregator import AnalysisAggregator
 from app.ai.openrouter_client import OpenRouterClient
 from app.services.execution.executor import ExecutionService
 from app.services.risk.manager import RiskManager
-from app.services.settings_service import get_setting_bool
+from app.services.settings_service import get_setting_bool, get_setting, get_setting_float
 from app.database import AsyncSessionLocal
 from app import schemas
 from app.config import get_settings
 from sqlalchemy import select
 
 settings = get_settings()
+
+
+def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
+    """Check if trading should be paused (EOD, weekend, etc.)."""
+    now = datetime.utcnow()
+
+    eod_enabled = get_setting_bool(db, "eod_close_enabled")
+    if eod_enabled:
+        no_entry_before = get_setting(db, "eod_no_new_entries_before")
+        try:
+            hour, minute = map(int, no_entry_before.split(":"))
+            cutoff = time(hour, minute)
+            if now.time() >= cutoff:
+                return True, f"Trading paused: no new entries after {no_entry_before} UTC (EOD)"
+        except Exception:
+            pass
+
+    weekend_enabled = get_setting_bool(db, "weekend_close_enabled")
+    if weekend_enabled:
+        weekend_close_str = get_setting(db, "weekend_close_time_utc")
+        weekend_resume_str = get_setting(db, "weekend_resume_time_utc")
+        try:
+            wc_h, wc_m = map(int, weekend_close_str.split(":"))
+            wr_h, wr_m = map(int, weekend_resume_str.split(":"))
+            # Friday after close_time
+            if now.weekday() == 4 and now.time() >= time(wc_h, wc_m):
+                return True, f"Trading paused: weekend closure after {weekend_close_str} UTC Friday"
+            # Saturday
+            if now.weekday() == 5:
+                return True, "Trading paused: weekend"
+            # Sunday before resume_time
+            if now.weekday() == 6 and now.time() < time(wr_h, wr_m):
+                return True, f"Trading paused: weekend, resumes {weekend_resume_str} UTC Sunday"
+        except Exception:
+            pass
+
+    return False, ""
 
 
 @celery_app.task
@@ -24,6 +63,14 @@ def run_full_analysis():
             executor = ExecutionService()
             risk = RiskManager()
 
+            strategy_mode = await get_setting(db, "strategy_mode")
+            strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+
+            # Check trading pause (EOD / weekend)
+            paused, pause_reason = _trading_paused(strategy_mode, db)
+            if paused:
+                return {"status": "paused", "reason": pause_reason}
+
             active_result = await db.execute(select(models.ActivePair).order_by(models.ActivePair.priority))
             active_pairs = active_result.scalars().all()
 
@@ -35,8 +82,8 @@ def run_full_analysis():
 
             for pair in active_pairs:
                 symbol = pair.symbol
-                analysis = await aggregator.gather_all(symbol)
-                decision = await ai.get_trade_decision(analysis)
+                analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode)
+                decision = await ai.get_trade_decision(analysis, strategy_mode=strategy_mode)
 
                 db_decision = models.AIDecision(
                     symbol=symbol,
@@ -52,7 +99,7 @@ def run_full_analysis():
                     technical_snapshot=analysis.get("technical"),
                     fundamental_snapshot=analysis.get("fundamental"),
                     sentiment_snapshot=analysis.get("sentiment"),
-                    model_used="anthropic/claude-sonnet-4.5",
+                    model_used=settings.OPENROUTER_MODEL,
                     provider=settings.DATA_PROVIDER.value,
                 )
                 db.add(db_decision)
@@ -73,11 +120,17 @@ def run_full_analysis():
                     "risk_reward": decision.risk_reward,
                     "rationale": decision.rationale,
                     "manual_override": manual_override,
+                    "strategy_mode": strategy_mode,
                 })
 
                 if decision.decision in ("BUY", "SELL") and not manual_override:
                     ok, reason = await risk.validate_ai_decision(db, decision)
                     if ok:
+                        equity = await risk._get_equity(db)
+                        position_size = risk.calculate_position_size(
+                            equity, decision.position_size_pct,
+                            decision.entry_price, decision.stop_loss
+                        )
                         trade_in = schemas.TradeCreate(
                             symbol=symbol,
                             direction=schemas.TradeDirection(decision.decision.lower()),
@@ -90,7 +143,7 @@ def run_full_analysis():
                             ai_decision_id=db_decision.id,
                             rationale=decision.rationale,
                         )
-                        trade = await executor.execute_trade(db, trade_in)
+                        trade = await executor.execute_trade(db, trade_in, position_size=position_size, strategy_mode=strategy_mode)
                         await broadcast_trade_event("executed", {
                             "id": trade.id,
                             "symbol": trade.symbol,
@@ -99,7 +152,9 @@ def run_full_analysis():
                             "stop_loss": trade.stop_loss,
                             "take_profit": trade.take_profit,
                             "mode": trade.mode,
+                            "position_size": trade.position_size,
                             "ai_decision_id": trade.ai_decision_id,
+                            "strategy_mode": strategy_mode,
                         })
                     else:
                         decision.decision = "HOLD"
@@ -114,6 +169,7 @@ def run_full_analysis():
                             "confidence": decision.confidence,
                             "rationale": decision.rationale,
                             "manual_override": manual_override,
+                            "strategy_mode": strategy_mode,
                         })
 
                 results.append({"symbol": symbol, "decision": decision.decision, "confidence": decision.confidence})
@@ -128,6 +184,9 @@ def auto_select_pairs():
     async def _select():
         async with AsyncSessionLocal() as db:
             from app import models
+            strategy_mode = await get_setting(db, "strategy_mode")
+            strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+
             result = await db.execute(select(models.ActivePair).where(models.ActivePair.selection_mode == "auto"))
             auto_pairs = result.scalars().all()
             if not auto_pairs:
@@ -137,7 +196,7 @@ def auto_select_pairs():
             available = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "GBPJPY", "XAUUSD"]
             scored = []
             for sym in available:
-                analysis = await aggregator.gather_all(sym)
+                analysis = await aggregator.gather_all(sym, strategy_mode=strategy_mode)
                 score = aggregator._score_pair(analysis)
                 scored.append((sym, score))
 
@@ -149,6 +208,6 @@ def auto_select_pairs():
                     pair.symbol = top[idx][0]
 
             await db.commit()
-            return {"selected": [s for s, _ in top]}
+            return {"selected": [s for s, _ in top], "strategy_mode": strategy_mode}
 
     return asyncio.run(_select())

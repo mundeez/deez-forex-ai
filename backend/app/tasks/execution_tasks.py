@@ -1,8 +1,9 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from app.celery_app import celery_app
 from app.database import AsyncSessionLocal
 from app.services.execution.executor import ExecutionService
+from app.services.settings_service import get_setting_bool, get_setting_float
 from sqlalchemy import select, func
 from app import models
 
@@ -13,6 +14,7 @@ def check_open_positions():
         async with AsyncSessionLocal() as db:
             from app.services.websocket_broadcaster import broadcast_trade_event
             executor = ExecutionService()
+            # Check SL/TP first
             closed_trades = await executor.check_and_close_positions(db)
             for trade in closed_trades:
                 await broadcast_trade_event("closed", {
@@ -23,9 +25,75 @@ def check_open_positions():
                     "pnl": trade.pnl,
                     "pnl_pct": trade.pnl_pct,
                     "mode": trade.mode,
+                    "close_reason": "sl_tp",
                 })
-        return {"checked": True}
+            # Then check time-based closes
+            time_closed = await executor.check_and_close_time_based_positions(db)
+            for trade in time_closed:
+                await broadcast_trade_event("closed", {
+                    "id": trade.id,
+                    "symbol": trade.symbol,
+                    "direction": trade.direction,
+                    "exit_price": trade.exit_price,
+                    "pnl": trade.pnl,
+                    "pnl_pct": trade.pnl_pct,
+                    "mode": trade.mode,
+                    "close_reason": "max_duration",
+                })
+        return {"checked": True, "sl_tp_closed": len(closed_trades), "time_closed": len(time_closed)}
     return asyncio.run(_check())
+
+
+@celery_app.task
+def close_eod_positions():
+    async def _close():
+        async with AsyncSessionLocal() as db:
+            from app.services.websocket_broadcaster import broadcast_trade_event
+            eod_enabled = await get_setting_bool(db, "eod_close_enabled")
+            if not eod_enabled:
+                return {"closed": 0, "reason": "EOD close disabled"}
+
+            executor = ExecutionService()
+            closed_trades = await executor.close_all_open_positions(db, close_reason="eod")
+            for trade in closed_trades:
+                await broadcast_trade_event("closed", {
+                    "id": trade.id,
+                    "symbol": trade.symbol,
+                    "direction": trade.direction,
+                    "exit_price": trade.exit_price,
+                    "pnl": trade.pnl,
+                    "pnl_pct": trade.pnl_pct,
+                    "mode": trade.mode,
+                    "close_reason": "eod",
+                })
+            return {"closed": len(closed_trades), "reason": "eod"}
+    return asyncio.run(_close())
+
+
+@celery_app.task
+def close_weekend_positions():
+    async def _close():
+        async with AsyncSessionLocal() as db:
+            from app.services.websocket_broadcaster import broadcast_trade_event
+            weekend_enabled = await get_setting_bool(db, "weekend_close_enabled")
+            if not weekend_enabled:
+                return {"closed": 0, "reason": "Weekend close disabled"}
+
+            executor = ExecutionService()
+            closed_trades = await executor.close_all_open_positions(db, close_reason="weekend")
+            for trade in closed_trades:
+                await broadcast_trade_event("closed", {
+                    "id": trade.id,
+                    "symbol": trade.symbol,
+                    "direction": trade.direction,
+                    "exit_price": trade.exit_price,
+                    "pnl": trade.pnl,
+                    "pnl_pct": trade.pnl_pct,
+                    "mode": trade.mode,
+                    "close_reason": "weekend",
+                })
+            return {"closed": len(closed_trades), "reason": "weekend"}
+    return asyncio.run(_close())
 
 
 @celery_app.task
@@ -35,6 +103,7 @@ def update_daily_pnl():
             from app.services.websocket_broadcaster import broadcast_settings_change
             today = datetime.utcnow().date()
             start_of_day = datetime.combine(today, datetime.min.time())
+            equity_balance = await get_setting_float(db, "equity_balance")
 
             result = await db.execute(
                 select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
@@ -51,7 +120,7 @@ def update_daily_pnl():
             )
             unrealized = result.scalar() or 0.0
 
-            equity = 10000.0 + realized + unrealized
+            equity = equity_balance + realized + unrealized
 
             db_pnl = models.DailyPnl(
                 date=datetime.utcnow(),

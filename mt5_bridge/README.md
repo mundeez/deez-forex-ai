@@ -16,12 +16,11 @@ Your MacBook (MT5)  <--SSH tunnel-->  Linux Server (Docker backend)
      :5556  PUB socket                    MT5ZMQSubscriber
 ```
 
-## Step 1: Install the ZmqSocket Library in MT5
+## Step 1: Install the mql-zmq Library in MT5
 
-1. Download the [mql-zmq](https://github.com/dingmaotu/mql-zmq) release.
-2. Copy `ZmqSocket.mqh` and the DLLs into your MT5 data folder:
-   - `MQL5/Include/ZmqSocket.mqh`
-   - `MQL5/Libraries/libsodium.dll`
+1. Download the [dingmaotu/mql-zmq](https://github.com/dingmaotu/mql-zmq) release.
+2. Copy the entire `Include/Zmq/` folder and the DLL into your MT5 data folder:
+   - `MQL5/Include/Zmq/Zmq.mqh` (and all files in `Include/Zmq/`)
    - `MQL5/Libraries/libzmq.dll`
 
 ## Step 2: Compile and Attach the EA

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield } from "lucide-react";
+import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield, Timer } from "lucide-react";
 import { API_URL } from "@/utils/api";
 
 interface Position {
@@ -18,14 +18,19 @@ interface Position {
   distance_to_sl?: number;
   distance_to_tp?: number;
   mode: string;
+  strategy_mode?: string;
 }
 
 export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }) {
   const [positions, setPositions] = useState<Position[]>([]);
+  const [settings, setSettings] = useState<any>({});
 
   useEffect(() => {
     fetchPositions();
-    const interval = setInterval(fetchPositions, 10000);
+    fetchSettings();
+    const interval = setInterval(() => {
+      fetchPositions();
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -37,6 +42,17 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
       setPositions(data.positions || []);
     } catch (e) {
       console.error("positions fetch error", e);
+    }
+  }
+
+  async function fetchSettings() {
+    try {
+      const res = await fetch(`${API_URL}/api/v1/settings`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setSettings(data.settings || data);
+    } catch (e) {
+      console.error("settings fetch error", e);
     }
   }
 
@@ -55,9 +71,34 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
   function formatDuration(minutes?: number) {
     if (!minutes) return "-";
     const h = Math.floor(minutes / 60);
-    const m = minutes % 60;
+    const m = Math.floor(minutes % 60);
     if (h > 0) return `${h}h ${m}m`;
     return `${m}m`;
+  }
+
+  function getMaxDuration(strategyMode?: string) {
+    const mode = strategyMode || settings.strategy_mode || "scalping";
+    const map: Record<string, number> = { scalping: 10, day_trading: 120, swing: 1440 };
+    return settings.max_trade_duration_min || map[mode] || 10;
+  }
+
+  function getTimeRemaining(position: Position) {
+    const maxDur = getMaxDuration(position.strategy_mode);
+    const elapsed = position.duration_minutes || 0;
+    const remaining = Math.max(0, maxDur - elapsed);
+    return remaining;
+  }
+
+  function getEodMinutesRemaining() {
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    const utcMin = now.getUTCMinutes();
+    const eodHour = 21;
+    const eodMin = 30;
+    const totalNow = utcHour * 60 + utcMin;
+    const totalEod = eodHour * 60 + eodMin;
+    if (totalNow >= totalEod) return 0;
+    return totalEod - totalNow;
   }
 
   return (
@@ -97,6 +138,12 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
                   <span>{formatDuration(p.duration_minutes)}</span>
                 </div>
                 <div className="flex items-center gap-1">
+                  <Timer className="w-3 h-3 text-amber-400" />
+                  <span className={getTimeRemaining(p) <= 2 ? "text-red-400 font-semibold" : ""}>
+                    {getTimeRemaining(p)}m left
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
                   <Shield className="w-3 h-3 text-red-400" />
                   <span>SL: {p.distance_to_sl?.toFixed(1) || "-"} pips</span>
                 </div>
@@ -107,6 +154,11 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
                 <div className="flex items-center gap-1">
                   <span className={`px-1.5 py-0.5 rounded text-[10px] ${p.mode === "live" ? "bg-red-900/50 text-red-300" : "bg-blue-900/50 text-blue-300"}`}>
                     {p.mode.toUpperCase()}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-slate-500">
+                    EOD: {getEodMinutesRemaining()}m
                   </span>
                 </div>
               </div>
