@@ -1,6 +1,6 @@
 import json
 import httpx
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pydantic import BaseModel
 from app.config import get_settings
 
@@ -154,6 +154,111 @@ class OpenRouterClient:
 
         prompt += "Provide a JSON trade decision with entry, stop loss, take profit, confidence, and rationale."
         return prompt
+
+    async def get_batched_trade_decisions(self, analyses: List[Dict[str, Any]], strategy_mode: str = "scalping") -> List[TradeDecision]:
+        """Batch multiple pair analyses into a single AI prompt for efficiency."""
+        if not self.api_key or len(analyses) == 0:
+            return [self._fallback_decision(a, strategy_mode) for a in analyses]
+
+        if len(analyses) == 1:
+            return [await self.get_trade_decision(analyses[0], strategy_mode)]
+
+        prompt = self._build_batched_prompt(analyses, strategy_mode)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://deez-forex-ai.local",
+            "X-Title": "deez-forex-ai",
+        }
+        payload = {
+            "model": self.model,
+            "temperature": 0.15,
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "system", "content": self._system_prompt(strategy_mode) + "\n\nIMPORTANT: You are analyzing MULTIPLE currency pairs. Return a JSON array where each element is a decision object for the corresponding pair in the same order provided."},
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(self.base_url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        content = data["choices"][0]["message"]["content"]
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            parsed = self._extract_json(content)
+
+        # Handle both array and object-with-array formats
+        decisions_list = parsed if isinstance(parsed, list) else parsed.get("decisions", parsed.get("results", []))
+
+        results = []
+        for idx, analysis in enumerate(analyses):
+            symbol = analysis.get("symbol", "EURUSD")
+            if idx < len(decisions_list):
+                d = decisions_list[idx]
+                results.append(TradeDecision(
+                    decision=str(d.get("decision", "HOLD")).upper(),
+                    confidence=float(d.get("confidence", 0.0)),
+                    timeframe=d.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
+                    entry_price=float(d.get("entry_price", 0.0)),
+                    stop_loss=float(d.get("stop_loss", 0.0)),
+                    take_profit=float(d.get("take_profit", 0.0)),
+                    position_size_pct=float(d.get("position_size_pct", 1.0)),
+                    risk_reward=float(d.get("risk_reward", 1.0)),
+                    rationale=d.get("rationale", "No rationale provided."),
+                    symbol=symbol,
+                ))
+            else:
+                results.append(self._fallback_decision(analysis, strategy_mode))
+        return results
+
+    def _build_batched_prompt(self, analyses: List[Dict[str, Any]], strategy_mode: str) -> str:
+        blocks = []
+        for idx, analysis in enumerate(analyses):
+            symbol = analysis.get("symbol", "EURUSD")
+            tech = analysis.get("technical", {})
+            fund = analysis.get("fundamental", {})
+            sent = analysis.get("sentiment", {})
+            tfs = tech.get("timeframes", {})
+
+            tf_blocks = []
+            for tf_name, tf_data in tfs.items():
+                tf_blocks.append(f"- {tf_name.upper()}: {json.dumps(tf_data, indent=2)}")
+
+            block = (
+                f"--- PAIR {idx + 1}: {symbol} ---\n"
+                f"TECHNICAL ANALYSIS:\n"
+                f"- Overall signal: {tech.get('overall_signal', 'neutral')}\n"
+                + "\n".join(tf_blocks) + "\n"
+            )
+
+            if strategy_mode != "scalping":
+                block += (
+                    f"FUNDAMENTAL ANALYSIS:\n"
+                    f"- Event risk: {fund.get('event_risk', 'low')}\n"
+                    f"- Direction bias: {fund.get('direction_bias', 'neutral')}\n\n"
+                    f"SENTIMENT ANALYSIS:\n"
+                    f"- Overall: {sent.get('overall_sentiment', 'neutral')} (score: {sent.get('sentiment_score', 0)})\n\n"
+                )
+            else:
+                block += (
+                    f"MARKET CONTEXT:\n"
+                    f"- Event risk: {fund.get('event_risk', 'low')}\n"
+                    f"- Sentiment: {sent.get('overall_sentiment', 'neutral')}\n\n"
+                )
+            blocks.append(block)
+
+        return (
+            "Analyze the following currency pairs and return a JSON array of decisions.\n"
+            "Each array element must have: decision (BUY, SELL, or HOLD), confidence (0.0-1.0), "
+            "timeframe, entry_price, stop_loss, take_profit, position_size_pct, risk_reward, rationale.\n"
+            "Maintain the SAME ORDER as the pairs listed below.\n\n"
+            + "\n".join(blocks)
+        )
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
         start = text.find("{")

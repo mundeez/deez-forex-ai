@@ -126,6 +126,7 @@ export default function SettingsPage() {
     { id: "risk", label: "Risk", icon: Shield },
     { id: "pairs", label: "Pairs", icon: Globe },
     { id: "ai", label: "AI", icon: Bot },
+    { id: "notifications", label: "Notifications", icon: Bell },
     { id: "general", label: "General", icon: BarChart3 },
   ];
 
@@ -348,6 +349,43 @@ export default function SettingsPage() {
                           />
                           <span className="text-sm text-slate-300">Block correlated pairs</span>
                         </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* News Halt */}
+                  <div className="border-t border-slate-700 pt-4">
+                    <h3 className="text-lg font-semibold mb-4 text-slate-200">News-Based Trading Halt</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.news_halt_enabled !== false}
+                          onChange={(e) => updateField("news_halt_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Pause trading around high-impact news</span>
+                          <p className="text-xs text-slate-500">Uses free ForexFactory calendar (FOMC, NFP, CPI, etc.)</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Buffer Before Event (min)</label>
+                        <input
+                          type="number"
+                          value={settings.news_halt_buffer_before_min || 15}
+                          onChange={(e) => updateField("news_halt_buffer_before_min", parseInt(e.target.value))}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Buffer After Event (min)</label>
+                        <input
+                          type="number"
+                          value={settings.news_halt_buffer_after_min || 30}
+                          onChange={(e) => updateField("news_halt_buffer_after_min", parseInt(e.target.value))}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
                       </div>
                     </div>
                   </div>
@@ -610,6 +648,36 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
+                  <div className="border-t border-slate-700 pt-4">
+                    <h3 className="text-lg font-semibold mb-4 text-slate-200">Advanced AI Options</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.batched_ai_enabled === true}
+                          onChange={(e) => updateField("batched_ai_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Batched AI Prompts</span>
+                          <p className="text-xs text-slate-500">Analyze all pairs in a single AI call (cheaper, cross-pair awareness)</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.auto_strategy_switch_enabled === true}
+                          onChange={(e) => updateField("auto_strategy_switch_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Auto Strategy Switching</span>
+                          <p className="text-xs text-slate-500">Automatically pick scalping/day/swing based on session & volatility</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   <button
                     onClick={saveSettings}
                     disabled={saving}
@@ -617,6 +685,79 @@ export default function SettingsPage() {
                   >
                     <Save className="w-4 h-4" />
                     {saving ? "Saving..." : "Save AI Settings"}
+                  </button>
+                </div>
+              )}
+
+              {/* Notifications Settings */}
+              {activeTab === "notifications" && (
+                <div className="bg-forex-card rounded-xl border border-slate-700 p-6 space-y-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Bell className="w-5 h-5 text-forex-accent" />
+                    <h2 className="text-xl font-semibold">Notifications</h2>
+                  </div>
+                  <p className="text-sm text-slate-400">Get alerts when trades open, close, or hit partial profits. Supports Discord, Slack, Pushover, and generic webhooks.</p>
+
+                  <div className="grid grid-cols-1 gap-4">
+                    <div>
+                      <label className="text-sm text-slate-300 block mb-1">Discord Webhook URL</label>
+                      <input
+                        type="text"
+                        value={settings.discord_webhook_url || ""}
+                        onChange={(e) => updateField("discord_webhook_url", e.target.value)}
+                        placeholder="https://discord.com/api/webhooks/..."
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm text-slate-300 block mb-1">Slack Webhook URL</label>
+                      <input
+                        type="text"
+                        value={settings.slack_webhook_url || ""}
+                        onChange={(e) => updateField("slack_webhook_url", e.target.value)}
+                        placeholder="https://hooks.slack.com/services/..."
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Pushover App Token</label>
+                        <input
+                          type="text"
+                          value={settings.pushover_app_token || ""}
+                          onChange={(e) => updateField("pushover_app_token", e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Pushover User Key</label>
+                        <input
+                          type="text"
+                          value={settings.pushover_user_key || ""}
+                          onChange={(e) => updateField("pushover_user_key", e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-sm text-slate-300 block mb-1">Generic Webhook URL</label>
+                      <input
+                        type="text"
+                        value={settings.webhook_url || ""}
+                        onChange={(e) => updateField("webhook_url", e.target.value)}
+                        placeholder="https://your-api.com/webhook"
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={saveSettings}
+                    disabled={saving}
+                    className="flex items-center gap-2 bg-forex-accent hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold transition disabled:opacity-50"
+                  >
+                    <Save className="w-4 h-4" />
+                    {saving ? "Saving..." : "Save Notification Settings"}
                   </button>
                 </div>
               )}

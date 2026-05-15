@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, time
 from app.celery_app import celery_app
 from app.database import AsyncSessionLocal
 from app.services.execution.executor import ExecutionService
+from app.services.notification_service import NotificationService
 from app.services.settings_service import get_setting_bool, get_setting_float
 from sqlalchemy import select, func
 from app import models
@@ -15,6 +16,7 @@ def check_open_positions():
             from app.services.websocket_broadcaster import broadcast_trade_event
             from app.services.vector_store import VectorStore
             executor = ExecutionService()
+            notifier = NotificationService()
             vs = VectorStore()
             # Check SL/TP first
             closed_trades = await executor.check_and_close_positions(db)
@@ -31,6 +33,19 @@ def check_open_positions():
                 })
                 if trade.ai_decision_id:
                     vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+                try:
+                    await notifier.send_trade_closed(
+                        db,
+                        symbol=trade.symbol,
+                        direction=trade.direction.upper(),
+                        entry_price=trade.entry_price,
+                        exit_price=trade.exit_price,
+                        pnl=trade.pnl or 0,
+                        pnl_pct=trade.pnl_pct or 0,
+                        close_reason="sl_tp",
+                    )
+                except Exception:
+                    pass
 
             # Check trailing stops
             trailing_closed = await executor.check_trailing_stops(db)
@@ -47,6 +62,19 @@ def check_open_positions():
                 })
                 if trade.ai_decision_id:
                     vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+                try:
+                    await notifier.send_trade_closed(
+                        db,
+                        symbol=trade.symbol,
+                        direction=trade.direction.upper(),
+                        entry_price=trade.entry_price,
+                        exit_price=trade.exit_price,
+                        pnl=trade.pnl or 0,
+                        pnl_pct=trade.pnl_pct or 0,
+                        close_reason="trailing_stop",
+                    )
+                except Exception:
+                    pass
 
             # Check partial profits
             partials = await executor.check_partial_profits(db)
@@ -75,6 +103,19 @@ def check_open_positions():
                 })
                 if trade.ai_decision_id:
                     vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+                try:
+                    await notifier.send_trade_closed(
+                        db,
+                        symbol=trade.symbol,
+                        direction=trade.direction.upper(),
+                        entry_price=trade.entry_price,
+                        exit_price=trade.exit_price,
+                        pnl=trade.pnl or 0,
+                        pnl_pct=trade.pnl_pct or 0,
+                        close_reason="max_duration",
+                    )
+                except Exception:
+                    pass
         return {
             "checked": True,
             "sl_tp_closed": len(closed_trades),

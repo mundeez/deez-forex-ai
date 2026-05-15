@@ -1,16 +1,18 @@
 import asyncio
-from datetime import datetime, time
-from typing import Tuple
+from datetime import datetime, time, timedelta
+from typing import Tuple, List, Dict, Any
 from app.celery_app import celery_app
 from app.analysis.aggregator import AnalysisAggregator
 from app.ai.openrouter_client import OpenRouterClient
 from app.services.execution.executor import ExecutionService
 from app.services.risk.manager import RiskManager
-from app.services.settings_service import get_setting_bool, get_setting, get_setting_float
+from app.services.news_service import NewsService
+from app.services.notification_service import NotificationService
+from app.services.settings_service import get_setting_bool, get_setting, get_setting_float, get_setting_int
 from app.database import AsyncSessionLocal
 from app import schemas
 from app.config import get_settings
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 settings = get_settings()
 
@@ -52,6 +54,27 @@ def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
     return False, ""
 
 
+async def _resolve_strategy_mode(db, aggregator: AnalysisAggregator) -> str:
+    """Determine strategy mode: manual setting or auto-switch."""
+    auto_switch = get_setting_bool(db, "auto_strategy_switch_enabled")
+    if not auto_switch:
+        mode = await get_setting(db, "strategy_mode")
+        return mode if mode in ("scalping", "day_trading", "swing") else "scalping"
+
+    # Auto-switch logic based on volatility and session
+    now = datetime.utcnow()
+    hour = now.hour
+
+    # Default to day_trading for London/NY overlap (high volatility)
+    if 8 <= hour < 17:
+        return "day_trading"
+    # Scalping for early London / late NY
+    if (hour >= 6 and hour < 8) or (hour >= 17 and hour < 20):
+        return "scalping"
+    # Swing for overnight / low volatility
+    return "swing"
+
+
 @celery_app.task
 def run_full_analysis():
     async def _analyze():
@@ -62,9 +85,10 @@ def run_full_analysis():
             ai = OpenRouterClient()
             executor = ExecutionService()
             risk = RiskManager()
+            news = NewsService()
+            notifier = NotificationService()
 
-            strategy_mode = await get_setting(db, "strategy_mode")
-            strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+            strategy_mode = await _resolve_strategy_mode(db, aggregator)
 
             # Check trading pause (EOD / weekend)
             paused, pause_reason = _trading_paused(strategy_mode, db)
@@ -84,10 +108,75 @@ def run_full_analysis():
             from app.services.vector_store import VectorStore
             vs = VectorStore()
 
+            # News-based trading halt per pair
+            news_halt_enabled = get_setting_bool(db, "news_halt_enabled")
+            news_buffer_before = await get_setting_int(db, "news_halt_buffer_before_min") or 15
+            news_buffer_after = await get_setting_int(db, "news_halt_buffer_after_min") or 30
+
+            # Gather all analyses first
+            analyses: List[Dict[str, Any]] = []
             for pair in active_pairs:
                 symbol = pair.symbol
                 analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode)
-                decision = await ai.get_trade_decision(analysis, strategy_mode=strategy_mode)
+                analysis["symbol"] = symbol
+                analyses.append(analysis)
+
+            # Check news halt for each pair
+            allowed_analyses = []
+            for analysis in analyses:
+                symbol = analysis["symbol"]
+                if news_halt_enabled:
+                    news_halted, news_reason = await news.is_trading_halted(
+                        symbol,
+                        buffer_minutes_before=news_buffer_before,
+                        buffer_minutes_after=news_buffer_after,
+                    )
+                else:
+                    news_halted = False
+                    news_reason = ""
+                if news_halted:
+                    results.append({"symbol": symbol, "decision": "HOLD", "confidence": 0.0, "reason": news_reason})
+                    # Broadcast as HOLD with news reason
+                    db_decision = models.AIDecision(
+                        symbol=symbol,
+                        decision="HOLD",
+                        confidence=0.0,
+                        rationale=news_reason,
+                        model_used=settings.OPENROUTER_MODEL,
+                        provider=settings.DATA_PROVIDER.value,
+                    )
+                    db.add(db_decision)
+                    await db.commit()
+                    await db.refresh(db_decision)
+                    await broadcast_ai_decision({
+                        "id": db_decision.id,
+                        "symbol": symbol,
+                        "decision": "HOLD",
+                        "confidence": 0.0,
+                        "rationale": news_reason,
+                        "manual_override": manual_override,
+                        "strategy_mode": strategy_mode,
+                    })
+                else:
+                    allowed_analyses.append(analysis)
+
+            # Use batched AI prompt if enabled and multiple pairs
+            batched_enabled = get_setting_bool(db, "batched_ai_enabled")
+            decisions_map = {}
+
+            if batched_enabled and len(allowed_analyses) > 1:
+                batched_decisions = await ai.get_batched_trade_decisions(allowed_analyses, strategy_mode=strategy_mode)
+                for analysis, decision in zip(allowed_analyses, batched_decisions):
+                    decisions_map[analysis["symbol"]] = decision
+            else:
+                for analysis in allowed_analyses:
+                    decision = await ai.get_trade_decision(analysis, strategy_mode=strategy_mode)
+                    decisions_map[analysis["symbol"]] = decision
+
+            # Process decisions
+            for analysis in allowed_analyses:
+                symbol = analysis["symbol"]
+                decision = decisions_map[symbol]
 
                 db_decision = models.AIDecision(
                     symbol=symbol,
@@ -220,6 +309,22 @@ def run_full_analysis():
                                 "ai_decision_id": trade.ai_decision_id,
                                 "strategy_mode": strategy_mode,
                             })
+
+                            # Send notification
+                            try:
+                                await notifier.send_trade_opened(
+                                    db,
+                                    symbol=trade.symbol,
+                                    direction=trade.direction.upper(),
+                                    entry_price=trade.entry_price,
+                                    stop_loss=trade.stop_loss,
+                                    take_profit=trade.take_profit,
+                                    position_size=trade.position_size,
+                                    strategy_mode=strategy_mode,
+                                    rationale=decision.rationale,
+                                )
+                            except Exception:
+                                pass
                         else:
                             decision.decision = "HOLD"
                             decision.rationale += f" [RISK BLOCKED: {reason}]"
@@ -263,8 +368,7 @@ def auto_select_pairs():
     async def _select():
         async with AsyncSessionLocal() as db:
             from app import models
-            strategy_mode = await get_setting(db, "strategy_mode")
-            strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+            strategy_mode = await _resolve_strategy_mode(db, AnalysisAggregator())
 
             result = await db.execute(select(models.ActivePair).where(models.ActivePair.selection_mode == "auto"))
             auto_pairs = result.scalars().all()
@@ -290,3 +394,57 @@ def auto_select_pairs():
             return {"selected": [s for s, _ in top], "strategy_mode": strategy_mode}
 
     return asyncio.run(_select())
+
+
+@celery_app.task
+def record_hourly_performance():
+    async def _record():
+        async with AsyncSessionLocal() as db:
+            from app import models
+            now = datetime.utcnow()
+            hour = now.hour
+            strategy_mode = await get_setting(db, "strategy_mode") or "scalping"
+
+            # Get today's closed trades
+            start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            result = await db.execute(
+                select(models.Trade).where(
+                    models.Trade.status == models.TradeStatus.CLOSED,
+                    models.Trade.close_time >= start_of_day,
+                )
+            )
+            trades = result.scalars().all()
+
+            for trade in trades:
+                sym = trade.symbol
+                perf_result = await db.execute(
+                    select(models.PairPerformanceByHour).where(
+                        models.PairPerformanceByHour.symbol == sym,
+                        models.PairPerformanceByHour.hour_utc == hour,
+                        models.PairPerformanceByHour.strategy_mode == strategy_mode,
+                    )
+                )
+                perf = perf_result.scalar_one_or_none()
+                if not perf:
+                    perf = models.PairPerformanceByHour(
+                        symbol=sym,
+                        hour_utc=hour,
+                        strategy_mode=strategy_mode,
+                        total_trades=0,
+                        winning_trades=0,
+                        avg_pnl=0.0,
+                    )
+                    db.add(perf)
+
+                perf.total_trades += 1
+                if (trade.pnl or 0) > 0:
+                    perf.winning_trades += 1
+                # Update rolling average PnL
+                old_avg = perf.avg_pnl or 0.0
+                perf.avg_pnl = old_avg + ((trade.pnl or 0) - old_avg) / perf.total_trades
+                perf.updated_at = now
+
+            await db.commit()
+            return {"recorded": len(trades), "hour": hour}
+
+    return asyncio.run(_record())
