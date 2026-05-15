@@ -13,7 +13,9 @@ def check_open_positions():
     async def _check():
         async with AsyncSessionLocal() as db:
             from app.services.websocket_broadcaster import broadcast_trade_event
+            from app.services.vector_store import VectorStore
             executor = ExecutionService()
+            vs = VectorStore()
             # Check SL/TP first
             closed_trades = await executor.check_and_close_positions(db)
             for trade in closed_trades:
@@ -27,6 +29,8 @@ def check_open_positions():
                     "mode": trade.mode,
                     "close_reason": "sl_tp",
                 })
+                if trade.ai_decision_id:
+                    vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
             # Then check time-based closes
             time_closed = await executor.check_and_close_time_based_positions(db)
             for trade in time_closed:
@@ -40,6 +44,8 @@ def check_open_positions():
                     "mode": trade.mode,
                     "close_reason": "max_duration",
                 })
+                if trade.ai_decision_id:
+                    vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
         return {"checked": True, "sl_tp_closed": len(closed_trades), "time_closed": len(time_closed)}
     return asyncio.run(_check())
 
@@ -156,3 +162,73 @@ def update_daily_pnl():
 
         return {"realized": realized, "unrealized": unrealized}
     return asyncio.run(_update())
+
+
+@celery_app.task
+def compute_pair_performance():
+    async def _compute():
+        async with AsyncSessionLocal() as db:
+            now = datetime.utcnow()
+            # Look back 30 days for stats
+            since = now - timedelta(days=30)
+            symbols = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "GBPJPY", "XAUUSD"]
+            modes = ["scalping", "day_trading", "swing"]
+
+            for symbol in symbols:
+                for mode in modes:
+                    for hour in range(24):
+                        result = await db.execute(
+                            select(models.Trade).where(
+                                models.Trade.symbol == symbol,
+                                models.Trade.strategy_mode == mode,
+                                models.Trade.status == models.TradeStatus.CLOSED,
+                                models.Trade.close_time >= since,
+                                func.extract("hour", models.Trade.open_time) == hour,
+                            )
+                        )
+                        trades = result.scalars().all()
+                        if not trades:
+                            continue
+
+                        total = len(trades)
+                        wins = sum(1 for t in trades if (t.pnl or 0) > 0)
+                        avg_pnl = sum(t.pnl or 0 for t in trades) / total
+                        avg_conf = 0.5  # placeholder; could be fetched from ai_decisions join
+                        # Compute volatility as std dev of pnl
+                        if total > 1:
+                            import statistics
+                            vol = statistics.stdev([t.pnl or 0 for t in trades])
+                        else:
+                            vol = 0.0
+                        vol_score = min(1.0, vol / max(abs(avg_pnl) if avg_pnl != 0 else 1, 0.01))
+
+                        # Upsert into pair_performance_by_hour
+                        existing = await db.execute(
+                            select(models.PairPerformanceByHour).where(
+                                models.PairPerformanceByHour.symbol == symbol,
+                                models.PairPerformanceByHour.hour_utc == hour,
+                                models.PairPerformanceByHour.strategy_mode == mode,
+                            )
+                        )
+                        row = existing.scalar_one_or_none()
+                        if row:
+                            row.total_trades = total
+                            row.winning_trades = wins
+                            row.avg_pnl = round(avg_pnl, 2)
+                            row.avg_confidence = round(avg_conf, 2)
+                            row.volatility_score = round(vol_score, 2)
+                        else:
+                            row = models.PairPerformanceByHour(
+                                symbol=symbol,
+                                hour_utc=hour,
+                                strategy_mode=mode,
+                                total_trades=total,
+                                winning_trades=wins,
+                                avg_pnl=round(avg_pnl, 2),
+                                avg_confidence=round(avg_conf, 2),
+                                volatility_score=round(vol_score, 2),
+                            )
+                            db.add(row)
+            await db.commit()
+        return {"computed": True}
+    return asyncio.run(_compute())

@@ -80,6 +80,10 @@ def run_full_analysis():
             manual_override = await get_setting_bool(db, "manual_override")
             results = []
 
+            # Initialize Qdrant vector store
+            from app.services.vector_store import VectorStore
+            vs = VectorStore()
+
             for pair in active_pairs:
                 symbol = pair.symbol
                 analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode)
@@ -105,6 +109,20 @@ def run_full_analysis():
                 db.add(db_decision)
                 await db.commit()
                 await db.refresh(db_decision)
+
+                # Store market state snapshot to Qdrant vector DB
+                point_id = f"{db_decision.id}"
+                vs.upsert_snapshot(
+                    point_id=point_id,
+                    snapshot=analysis.get("technical", {}),
+                    payload={
+                        "symbol": symbol,
+                        "decision": decision.decision,
+                        "confidence": decision.confidence,
+                        "strategy_mode": strategy_mode,
+                        "timestamp": datetime.utcnow().isoformat(),
+                    },
+                )
 
                 # Broadcast AI decision to all connected clients
                 await broadcast_ai_decision({

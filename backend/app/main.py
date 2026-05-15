@@ -18,7 +18,7 @@ from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.services.data.mt5_zmq_subscriber import MT5ZMQSubscriber
 from app.services.execution.executor import ExecutionService
 from app.services.risk.manager import RiskManager
-from app.services.settings_service import build_settings_response, set_setting, get_setting_bool
+from app.services.settings_service import build_settings_response, set_setting, get_setting_bool, get_setting
 from app.ai.openrouter_client import OpenRouterClient
 from app.analysis.aggregator import AnalysisAggregator
 from app.analysis.technical import TechnicalAnalyzer
@@ -729,6 +729,42 @@ async def update_app_settings(payload: schemas.AppSettingsUpdate, db: AsyncSessi
     response = await build_settings_response(db)
     await broadcast_settings_change({"type": "settings_updated", "settings": response})
     return response
+
+
+@app.get("/api/v1/suggestions/best-now")
+async def get_best_now(db: AsyncSession = Depends(get_db)):
+    from app.suggestion_engine.engine import SuggestionEngine
+    strategy_mode = await get_setting(db, "strategy_mode")
+    strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+    engine = SuggestionEngine(db)
+    return {"suggestions": await engine.best_now(strategy_mode)}
+
+
+@app.get("/api/v1/suggestions/today")
+async def get_today_timeline(db: AsyncSession = Depends(get_db)):
+    from app.suggestion_engine.engine import SuggestionEngine
+    strategy_mode = await get_setting(db, "strategy_mode")
+    strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+    engine = SuggestionEngine(db)
+    return {"timeline": await engine.today_timeline(strategy_mode)}
+
+
+@app.get("/api/v1/suggestions/weekly")
+async def get_weekly_outlook(db: AsyncSession = Depends(get_db)):
+    from app.suggestion_engine.engine import SuggestionEngine
+    strategy_mode = await get_setting(db, "strategy_mode")
+    strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+    engine = SuggestionEngine(db)
+    return {"outlook": await engine.weekly_outlook(strategy_mode)}
+
+
+@app.get("/api/v1/suggestions/pair/{symbol}")
+async def get_pair_deep_dive(symbol: str, db: AsyncSession = Depends(get_db)):
+    from app.suggestion_engine.engine import SuggestionEngine
+    strategy_mode = await get_setting(db, "strategy_mode")
+    strategy_mode = strategy_mode if strategy_mode in ("scalping", "day_trading", "swing") else "scalping"
+    engine = SuggestionEngine(db)
+    return await engine.pair_deep_dive(symbol, strategy_mode)
 
 
 @app.get("/api/v1/manual-override")

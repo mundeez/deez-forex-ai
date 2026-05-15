@@ -41,5 +41,9 @@ celery_app.conf.update(
             "task": "app.tasks.execution_tasks.close_weekend_positions",
             "schedule": {"hour": 21, "minute": 0, "day_of_week": "fri"},
         },
+        "compute-pair-performance": {
+            "task": "app.tasks.execution_tasks.compute_pair_performance",
+            "schedule": 3600.0,  # Every hour
+        },
     }
 )

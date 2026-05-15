@@ -12,6 +12,7 @@ import AIDecisionPanel from "@/components/AIDecisionPanel";
 import ManualTradePanel from "@/components/ManualTradePanel";
 import PairSelector from "@/components/PairSelector";
 import ManualOverrideToggle from "@/components/ManualOverrideToggle";
+import SuggestionsPanel from "@/components/SuggestionsPanel";
 import { useWebSocket } from "@/hooks/useWebSocket";
 
 function getWsUrl(): string {
@@ -134,6 +135,7 @@ export default function Home() {
 
         {/* RIGHT COLUMN */}
         <div className="space-y-4">
+          <SuggestionsPanel />
           <PositionsPanel onRefresh={handleRefresh} />
           <TradeHistoryPanel limit={10} />
         </div>
