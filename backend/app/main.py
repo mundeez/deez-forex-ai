@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 import redis.asyncio as aioredis
 
-from app.database import get_db, engine, Base
+from app.database import get_db, engine, Base, AsyncSessionLocal
 from app.config import get_settings
 from app import models, schemas
 from app.services.data.metaapi_client import MetaApiClient
@@ -32,6 +32,9 @@ AVAILABLE_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.config import validate_settings
+    validate_settings()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     app.state.redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -56,6 +59,9 @@ async def lifespan(app: FastAPI):
     await app.state.mt5_zmq.close()
 
 
+# Build CORS origins list from env
+_cors_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+
 app = FastAPI(
     title="deez-forex-ai",
     description="Intelligent 24/7 Forex Trading Platform",
@@ -65,7 +71,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -74,7 +80,43 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "env": settings.APP_ENV}
+    """
+    Comprehensive health check covering all critical dependencies.
+    Returns 503 if any dependency is down.
+    """
+    import time
+    from sqlalchemy import text
+
+    start = time.time()
+    checks = {}
+    status = "ok"
+
+    # Check database
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text("SELECT 1"))
+            checks["database"] = {"status": "ok", "latency_ms": round((time.time() - start) * 1000, 2)}
+    except Exception as e:
+        checks["database"] = {"status": "error", "detail": str(e)}
+        status = "degraded"
+
+    # Check Redis
+    try:
+        redis_start = time.time()
+        await app.state.redis.ping()
+        checks["redis"] = {"status": "ok", "latency_ms": round((time.time() - redis_start) * 1000, 2)}
+    except Exception as e:
+        checks["redis"] = {"status": "error", "detail": str(e)}
+        status = "degraded"
+
+    response = {
+        "status": status,
+        "env": settings.APP_ENV,
+        "version": app.version,
+        "checks": checks,
+    }
+    status_code = 200 if status == "ok" else 503
+    return response
 
 
 async def _get_data_client(provider: schemas.DataProvider = None):
