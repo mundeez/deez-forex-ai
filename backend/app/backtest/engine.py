@@ -20,6 +20,10 @@ class BacktestEngine:
         self.aggregator = AnalysisAggregator()
         self.ai = OpenRouterClient()
 
+    # Realistic trading costs for backtesting (configurable)
+    SPREAD_PIPS = 1.5  # Typical EUR/USD spread
+    COMMISSION_PCT = 0.0005  # 0.05% per trade side
+
     async def run(
         self,
         symbol: str = "EURUSD",
@@ -46,6 +50,10 @@ class BacktestEngine:
         trades: List[Dict[str, Any]] = []
         max_equity = equity
         max_drawdown = 0.0
+
+        # Determine pip value and spread cost for this symbol
+        pip_value = 0.0001 if "JPY" not in symbol else 0.01
+        spread_cost = self.SPREAD_PIPS * pip_value
 
         for i in range(200, len(df)):
             snapshot = df.iloc[:i].to_dict("records")
@@ -83,21 +91,27 @@ class BacktestEngine:
                     future = df.iloc[j]
                     if open_trade["direction"] == "buy":
                         if future["low"] <= open_trade["sl"]:
-                            pnl = (open_trade["sl"] - open_trade["entry"]) * open_trade["size"] * 100000
+                            raw_pnl = (open_trade["sl"] - open_trade["entry"]) * open_trade["size"] * 100000
                             break
                         elif future["high"] >= open_trade["tp"]:
-                            pnl = (open_trade["tp"] - open_trade["entry"]) * open_trade["size"] * 100000
+                            raw_pnl = (open_trade["tp"] - open_trade["entry"]) * open_trade["size"] * 100000
                             break
                     else:
                         if future["high"] >= open_trade["sl"]:
-                            pnl = (open_trade["entry"] - open_trade["sl"]) * open_trade["size"] * 100000
+                            raw_pnl = (open_trade["entry"] - open_trade["sl"]) * open_trade["size"] * 100000
                             break
                         elif future["low"] <= open_trade["tp"]:
-                            pnl = (open_trade["entry"] - open_trade["tp"]) * open_trade["size"] * 100000
+                            raw_pnl = (open_trade["entry"] - open_trade["tp"]) * open_trade["size"] * 100000
                             break
                 else:
-                    pnl = 0
+                    raw_pnl = 0
                     j = len(df) - 1
+
+                # Apply realistic costs: spread + commission
+                trade_notional = open_trade["entry"] * open_trade["size"] * 100000
+                commission = trade_notional * self.COMMISSION_PCT * 2  # Entry + exit
+                spread_pnl_impact = spread_cost * open_trade["size"] * 100000
+                pnl = raw_pnl - commission - spread_pnl_impact
 
                 equity += pnl
                 equity_curve.append({"timestamp": future["timestamp"], "equity": equity})
@@ -128,7 +142,8 @@ class BacktestEngine:
         returns = [t["pnl_pct"] for t in trades]
         avg_return = sum(returns) / len(returns) if returns else 0
         std_return = pd.Series(returns).std() if len(returns) > 1 else 0
-        sharpe = (avg_return / std_return) * math.sqrt(252) if std_return > 0 else 0
+        # Forex trades 24/5 = ~260 trading days per year (not 252 like equities)
+        sharpe = (avg_return / std_return) * math.sqrt(260) if std_return > 0 else 0
         expectancy = avg_return
 
         return {

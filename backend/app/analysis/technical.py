@@ -176,14 +176,9 @@ class TechnicalAnalyzer:
             else:
                 bearish_factors += 1
 
-        # ADX trend strength: only count direction if ADX > 20 (avoid ranging markets)
-        if pd.notna(adx) and adx > 20:
-            total_factors += 1
-            # ADX itself doesn't give direction, but confirms existing signal
-            if bullish_factors > bearish_factors:
-                bullish_factors += 1
-            elif bearish_factors > bullish_factors:
-                bearish_factors += 1
+        # ADX only measures trend strength, not direction.
+        # We don't add it as a directional factor (that was a bug).
+        # Instead, we use it below to scale confidence.
 
         trend = "neutral"
         if bullish_factors > bearish_factors:

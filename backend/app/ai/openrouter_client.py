@@ -81,7 +81,7 @@ class OpenRouterClient:
         payload = {
             "model": self.model,
             "temperature": 0.15,
-            "max_tokens": 512,
+            "max_tokens": 384,  # Reduced from 512 — structured JSON needs far less
             "messages": [
                 {"role": "system", "content": self._system_prompt(strategy_mode)},
                 {"role": "user", "content": prompt},
@@ -89,10 +89,7 @@ class OpenRouterClient:
             "response_format": {"type": "json_object"},
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(self.base_url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await self._post_with_retry(headers, payload)
 
         content = data["choices"][0]["message"]["content"]
         try:
@@ -113,6 +110,64 @@ class OpenRouterClient:
             symbol=analysis.get("symbol", "EURUSD"),
         )
 
+    async def _post_with_retry(self, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Post to OpenRouter with exponential backoff retry."""
+        import logging
+        logger = logging.getLogger("app.ai.openrouter")
+        max_retries = 3
+        base_delay = 2.0
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(self.base_url, headers=headers, json=payload)
+                    resp.raise_for_status()
+                    return resp.json()
+            except httpx.HTTPStatusError as e:
+                # Retry on 429 (rate limit), 502, 503, 504 (server errors)
+                if e.response.status_code in (429, 502, 503, 504) and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning("OpenRouter returned %s, retrying in %.1fs (attempt %d/%d)",
+                                   e.response.status_code, delay, attempt + 1, max_retries)
+                    import asyncio
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning("OpenRouter connection error: %s, retrying in %.1fs (attempt %d/%d)",
+                                   e, delay, attempt + 1, max_retries)
+                    import asyncio
+                    await asyncio.sleep(delay)
+                else:
+                    raise
+        raise RuntimeError("Max retries exceeded for OpenRouter API")
+
+    def _compress_timeframe(self, tf_data: Dict[str, Any]) -> str:
+        """Compress timeframe analysis to ~30 tokens instead of 500+."""
+        signal = tf_data.get("signal", "neutral")
+        confidence = tf_data.get("confidence", 0.0)
+        ind = tf_data.get("indicators", {})
+        parts = [f"sig:{signal}({confidence:.0%})"]
+        # Only include key indicators that matter for the decision
+        if ind.get("rsi_14") is not None:
+            parts.append(f"RSI:{ind['rsi_14']:.0f}")
+        if ind.get("ema_9") is not None and ind.get("ema_21") is not None:
+            parts.append(f"EMA9{'>' if ind['ema_9'] > ind['ema_21'] else '<'}21")
+        if ind.get("macd_hist") is not None:
+            parts.append(f"MACD:{ind['macd_hist']:+.4f}")
+        if ind.get("adx_14") is not None:
+            parts.append(f"ADX:{ind['adx_14']:.0f}")
+        if ind.get("bb_squeeze"):
+            parts.append("BB_SQUEEZE")
+        if ind.get("atr_14") is not None:
+            parts.append(f"ATR:{ind['atr_14']:.5f}")
+        support = tf_data.get("support")
+        resistance = tf_data.get("resistance")
+        if support and resistance:
+            parts.append(f"S:{support:.5f} R:{resistance:.5f}")
+        return " ".join(parts)
+
     def _build_prompt(self, analysis: Dict[str, Any], strategy_mode: str) -> str:
         tech = analysis.get("technical", {})
         fund = analysis.get("fundamental", {})
@@ -121,38 +176,34 @@ class OpenRouterClient:
 
         tf_blocks = []
         for tf_name, tf_data in tfs.items():
-            tf_blocks.append(f"- {tf_name.upper()}: {json.dumps(tf_data, indent=2)}")
+            compressed = self._compress_timeframe(tf_data)
+            tf_blocks.append(f"  {tf_name.upper()}: {compressed}")
 
         prompt = (
             f"Symbol: {analysis.get('symbol', 'EURUSD')}\n"
             f"Strategy: {strategy_mode.upper()}\n\n"
-            f"TECHNICAL ANALYSIS:\n"
-            f"- Overall signal: {tech.get('overall_signal', 'neutral')}\n"
+            f"Technical Signal: {tech.get('overall_signal', 'neutral')}\n"
+            f"Timeframes:\n"
             + "\n".join(tf_blocks) + "\n\n"
         )
 
         if strategy_mode != "scalping":
+            events = fund.get("events", [])
+            events_summary = "; ".join([e.get("title", "") for e in events[:3]]) if events else "none"
             prompt += (
-                f"FUNDAMENTAL ANALYSIS:\n"
-                f"- Event risk: {fund.get('event_risk', 'low')}\n"
-                f"- Interest rate spread: {fund.get('interest_rate_spread', 'N/A')}\n"
-                f"- Direction bias: {fund.get('direction_bias', 'neutral')}\n"
-                f"- Upcoming events: {json.dumps(fund.get('events', []), indent=2)}\n\n"
-                f"SENTIMENT ANALYSIS:\n"
-                f"- Overall: {sent.get('overall_sentiment', 'neutral')} (score: {sent.get('sentiment_score', 0)})\n"
-                f"- Retail: {json.dumps(sent.get('retail', {}), indent=2)}\n"
-                f"- News: {json.dumps(sent.get('news', {}), indent=2)}\n"
-                f"- Institutional: {json.dumps(sent.get('institutional', {}), indent=2)}\n\n"
+                f"Fundamental: {fund.get('direction_bias', 'neutral')} "
+                f"(rate_spread:{fund.get('interest_rate_spread', 'N/A')}, "
+                f"events:{events_summary})\n"
+                f"Sentiment: {sent.get('overall_sentiment', 'neutral')} "
+                f"(score:{sent.get('sentiment_score', 0):.2f})\n\n"
             )
         else:
-            # For scalping, keep fundamental/sentiment brief
             prompt += (
-                f"MARKET CONTEXT:\n"
-                f"- Event risk: {fund.get('event_risk', 'low')}\n"
-                f"- Sentiment: {sent.get('overall_sentiment', 'neutral')}\n\n"
+                f"Context: risk={fund.get('event_risk', 'low')}, "
+                f"sentiment={sent.get('overall_sentiment', 'neutral')}\n\n"
             )
 
-        prompt += "Provide a JSON trade decision with entry, stop loss, take profit, confidence, and rationale."
+        prompt += "JSON: decision, confidence, entry, SL, TP, rationale."
         return prompt
 
     async def get_batched_trade_decisions(self, analyses: List[Dict[str, Any]], strategy_mode: str = "scalping") -> List[TradeDecision]:
@@ -173,7 +224,7 @@ class OpenRouterClient:
         payload = {
             "model": self.model,
             "temperature": 0.15,
-            "max_tokens": 1024,
+            "max_tokens": 512,  # Reduced from 1024 — batched JSON still compact
             "messages": [
                 {"role": "system", "content": self._system_prompt(strategy_mode) + "\n\nIMPORTANT: You are analyzing MULTIPLE currency pairs. Return a JSON array where each element is a decision object for the corresponding pair in the same order provided."},
                 {"role": "user", "content": prompt},
@@ -181,10 +232,7 @@ class OpenRouterClient:
             "response_format": {"type": "json_object"},
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(self.base_url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await self._post_with_retry(headers, payload)
 
         content = data["choices"][0]["message"]["content"]
         try:
@@ -227,36 +275,29 @@ class OpenRouterClient:
 
             tf_blocks = []
             for tf_name, tf_data in tfs.items():
-                tf_blocks.append(f"- {tf_name.upper()}: {json.dumps(tf_data, indent=2)}")
+                compressed = self._compress_timeframe(tf_data)
+                tf_blocks.append(f"  {tf_name.upper()}: {compressed}")
 
             block = (
-                f"--- PAIR {idx + 1}: {symbol} ---\n"
-                f"TECHNICAL ANALYSIS:\n"
-                f"- Overall signal: {tech.get('overall_signal', 'neutral')}\n"
+                f"[{idx + 1}] {symbol}: tech={tech.get('overall_signal', 'neutral')}\n"
                 + "\n".join(tf_blocks) + "\n"
             )
 
             if strategy_mode != "scalping":
                 block += (
-                    f"FUNDAMENTAL ANALYSIS:\n"
-                    f"- Event risk: {fund.get('event_risk', 'low')}\n"
-                    f"- Direction bias: {fund.get('direction_bias', 'neutral')}\n\n"
-                    f"SENTIMENT ANALYSIS:\n"
-                    f"- Overall: {sent.get('overall_sentiment', 'neutral')} (score: {sent.get('sentiment_score', 0)})\n\n"
+                    f"  fund={fund.get('direction_bias', 'neutral')}, "
+                    f"sent={sent.get('overall_sentiment', 'neutral')}\n\n"
                 )
             else:
                 block += (
-                    f"MARKET CONTEXT:\n"
-                    f"- Event risk: {fund.get('event_risk', 'low')}\n"
-                    f"- Sentiment: {sent.get('overall_sentiment', 'neutral')}\n\n"
+                    f"  ctx: risk={fund.get('event_risk', 'low')}, "
+                    f"sent={sent.get('overall_sentiment', 'neutral')}\n\n"
                 )
             blocks.append(block)
 
         return (
-            "Analyze the following currency pairs and return a JSON array of decisions.\n"
-            "Each array element must have: decision (BUY, SELL, or HOLD), confidence (0.0-1.0), "
-            "timeframe, entry_price, stop_loss, take_profit, position_size_pct, risk_reward, rationale.\n"
-            "Maintain the SAME ORDER as the pairs listed below.\n\n"
+            "Analyze these pairs. Return JSON array in SAME ORDER. "
+            "Each element: decision, confidence, entry, SL, TP, rationale.\n\n"
             + "\n".join(blocks)
         )
 
