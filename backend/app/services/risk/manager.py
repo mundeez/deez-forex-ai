@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from app.ai.openrouter_client import TradeDecision
 from app.services.settings_service import get_setting_float, get_setting_int, get_setting
 
 settings = get_settings()
+logger = logging.getLogger("app.services.risk")
 
 # Strategy-aware defaults (overridable via settings)
 STRATEGY_CONFIG = {
@@ -188,6 +190,7 @@ class RiskManager:
             price = await client.get_current_price(symbol)
             spread = abs((price.get("ask") or 0) - (price.get("bid") or 0))
         except Exception:
+            logger.warning("Failed to fetch current price for %s during spread validation", symbol, exc_info=True)
             return True, "OK"
 
         ratio = spread / atr

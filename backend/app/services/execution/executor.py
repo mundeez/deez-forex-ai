@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Tuple, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,7 @@ from app.config import get_settings
 from app.services.settings_service import get_setting_int, get_setting_bool, get_setting_float
 
 settings = get_settings()
+logger = logging.getLogger("app.services.execution")
 
 
 class ExecutionService:
@@ -118,6 +120,7 @@ class ExecutionService:
                 sym_bid = sym_price.get("bid", current_bid)
                 sym_ask = sym_price.get("ask", current_ask)
             except Exception:
+                logger.warning("Failed to fetch current price for %s, using default price", trade.symbol, exc_info=True)
                 sym_bid = current_bid
                 sym_ask = current_ask
 
@@ -157,7 +160,7 @@ class ExecutionService:
                             closed_trade = await self.close_trade(db, trade.id, exit_price, f"max_duration_{max_duration}min")
                             closed.append(closed_trade)
                     except Exception:
-                        pass
+                        logger.warning("Failed to fetch current price for %s during time-based close", trade.symbol, exc_info=True)
         return closed
 
     async def close_all_open_positions(self, db: AsyncSession, close_reason: str = "eod") -> List[models.Trade]:
@@ -177,7 +180,7 @@ class ExecutionService:
                     closed_trade = await self.close_trade(db, trade.id, exit_price, close_reason)
                     closed.append(closed_trade)
             except Exception:
-                pass
+                logger.warning("Failed to fetch current price for %s during close all", trade.symbol, exc_info=True)
         return closed
 
     async def check_trailing_stops(self, db: AsyncSession):
@@ -203,6 +206,7 @@ class ExecutionService:
                 price_data = await client.get_current_price(trade.symbol)
                 price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
             except Exception:
+                logger.warning("Failed to fetch current price for %s during trailing stop check", trade.symbol, exc_info=True)
                 continue
             if not price:
                 continue
@@ -290,6 +294,7 @@ class ExecutionService:
                 price_data = await client.get_current_price(trade.symbol)
                 price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
             except Exception:
+                logger.warning("Failed to fetch current price for %s during partial profit check", trade.symbol, exc_info=True)
                 continue
             if not price:
                 continue

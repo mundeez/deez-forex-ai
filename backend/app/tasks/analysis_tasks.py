@@ -1,7 +1,10 @@
 import asyncio
+import logging
 from datetime import datetime, time, timedelta
 from typing import Tuple, List, Dict, Any
 from app.celery_app import celery_app
+
+logger = logging.getLogger("app.tasks.analysis")
 from app.analysis.aggregator import AnalysisAggregator
 from app.ai.openrouter_client import OpenRouterClient
 from app.services.execution.executor import ExecutionService
@@ -30,7 +33,7 @@ def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
             if now.time() >= cutoff:
                 return True, f"Trading paused: no new entries after {no_entry_before} UTC (EOD)"
         except Exception:
-            pass
+            logger.warning("Failed to parse EOD time setting", exc_info=True)
 
     weekend_enabled = get_setting_bool(db, "weekend_close_enabled")
     if weekend_enabled:
@@ -49,7 +52,7 @@ def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
             if now.weekday() == 6 and now.time() < time(wr_h, wr_m):
                 return True, f"Trading paused: weekend, resumes {weekend_resume_str} UTC Sunday"
         except Exception:
-            pass
+            logger.warning("Failed to parse weekend time settings", exc_info=True)
 
     return False, ""
 
@@ -324,7 +327,7 @@ def run_full_analysis():
                                     rationale=decision.rationale,
                                 )
                             except Exception:
-                                pass
+                                logger.warning("Failed to send trade opened notification", exc_info=True)
                         else:
                             decision.decision = "HOLD"
                             decision.rationale += f" [RISK BLOCKED: {reason}]"

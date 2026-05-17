@@ -1,10 +1,12 @@
 import asyncio
 import json
+import logging
 import zmq.asyncio
 from typing import Optional, Callable
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("app.services.data.mt5_sub")
 
 
 class MT5ZMQSubscriber:
@@ -46,6 +48,7 @@ class MT5ZMQSubscriber:
             except zmq.Again:
                 await asyncio.sleep(0.01)
             except Exception:
+                logger.warning("Error processing ZMQ message, retrying", exc_info=True)
                 await asyncio.sleep(0.5)
 
     async def stop(self):

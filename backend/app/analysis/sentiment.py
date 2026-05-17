@@ -1,8 +1,10 @@
+import logging
 import httpx
 from typing import Dict, Any, List, Optional
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("app.analysis.sentiment")
 
 
 class SentimentAnalyzer:
@@ -93,6 +95,7 @@ class SentimentAnalyzer:
                 data = resp.json()
             return [a["title"] for a in data.get("articles", [])]
         except Exception:
+            logger.warning("Failed to fetch news headlines", exc_info=True)
             return []
 
     def _mock_cot_data(self) -> Dict[str, Any]:

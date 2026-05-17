@@ -1,17 +1,20 @@
 import asyncio
 import json
+import logging
+import time as pytime
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, text
 import redis.asyncio as aioredis
 
 from app.database import get_db, engine, Base, AsyncSessionLocal
 from app.config import get_settings
+from app.logging_config import setup_logging
 from app import models, schemas
 from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
@@ -34,6 +37,7 @@ AVAILABLE_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "
 async def lifespan(app: FastAPI):
     from app.config import validate_settings
     validate_settings()
+    setup_logging(level=settings.LOG_LEVEL)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -78,16 +82,40 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all incoming HTTP requests with timing."""
+    logger = logging.getLogger("app.main")
+    start = pytime.time()
+    method = request.method
+    path = request.url.path
+    try:
+        response = await call_next(request)
+        duration = round((pytime.time() - start) * 1000, 2)
+        logger.info(
+            "%s %s - %d - %sms",
+            method, path, response.status_code, duration,
+            extra={"duration_ms": duration},
+        )
+        return response
+    except Exception:
+        duration = round((pytime.time() - start) * 1000, 2)
+        logger.error(
+            "%s %s - ERROR after %sms",
+            method, path, duration,
+            exc_info=True,
+        )
+        raise
+
+
 @app.get("/health")
 async def health_check():
     """
     Comprehensive health check covering all critical dependencies.
     Returns 503 if any dependency is down.
     """
-    import time
-    from sqlalchemy import text
-
-    start = time.time()
+    logger = logging.getLogger("app.main")
+    start = pytime.time()
     checks = {}
     status = "ok"
 
@@ -95,18 +123,20 @@ async def health_check():
     try:
         async with AsyncSessionLocal() as session:
             result = await session.execute(text("SELECT 1"))
-            checks["database"] = {"status": "ok", "latency_ms": round((time.time() - start) * 1000, 2)}
+            checks["database"] = {"status": "ok", "latency_ms": round((pytime.time() - start) * 1000, 2)}
     except Exception as e:
-        checks["database"] = {"status": "error", "detail": str(e)}
+        logger.error("Health check: database connection failed: %s", e, exc_info=True)
+        checks["database"] = {"status": "error", "detail": "Database unavailable"}
         status = "degraded"
 
     # Check Redis
     try:
-        redis_start = time.time()
+        redis_start = pytime.time()
         await app.state.redis.ping()
-        checks["redis"] = {"status": "ok", "latency_ms": round((time.time() - redis_start) * 1000, 2)}
+        checks["redis"] = {"status": "ok", "latency_ms": round((pytime.time() - redis_start) * 1000, 2)}
     except Exception as e:
-        checks["redis"] = {"status": "error", "detail": str(e)}
+        logger.error("Health check: redis connection failed: %s", e, exc_info=True)
+        checks["redis"] = {"status": "error", "detail": "Redis unavailable"}
         status = "degraded"
 
     response = {
@@ -115,7 +145,6 @@ async def health_check():
         "version": app.version,
         "checks": checks,
     }
-    status_code = 200 if status == "ok" else 503
     return response
 
 
@@ -128,35 +157,50 @@ async def _get_data_client(provider: schemas.DataProvider = None):
 
 async def _safe_get_price(symbol: str, provider: schemas.DataProvider = None):
     """Try the requested provider first, fall back to the other if it fails."""
+    logger = logging.getLogger("app.main")
     primary = await _get_data_client(provider)
     try:
         return await primary.get_current_price(symbol)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "Primary provider %s failed to get price for %s: %s",
+            primary.__class__.__name__, symbol, e,
+            exc_info=True,
+        )
         # Fallback to the other provider
         fallback = app.state.mt5_zmq if primary == app.state.metaapi else app.state.metaapi
         try:
             return await fallback.get_current_price(symbol)
-        except Exception:
-            # Last resort: return mock price
-            return {
-                "symbol": symbol,
-                "bid": round(1.0850, 5),
-                "ask": round(1.0852, 5),
-                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-            }
+        except Exception as e:
+            logger.error(
+                "All data providers failed to get price for %s: %s",
+                symbol, e,
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail=f"Price data unavailable for {symbol}")
 
 
 async def _safe_get_candles(symbol: str, timeframe: str, limit: int, provider: schemas.DataProvider = None):
     """Try the requested provider first, fall back to the other if it fails."""
+    logger = logging.getLogger("app.main")
     primary = await _get_data_client(provider)
     try:
         return await primary.get_historical_candles(symbol, timeframe, limit)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "Primary provider %s failed to get candles for %s %s: %s",
+            primary.__class__.__name__, symbol, timeframe, e,
+            exc_info=True,
+        )
         fallback = app.state.mt5_zmq if primary == app.state.metaapi else app.state.metaapi
         try:
             return await fallback.get_historical_candles(symbol, timeframe, limit)
-        except Exception:
-            # Last resort: return empty list (caller should handle)
+        except Exception as e:
+            logger.error(
+                "All data providers failed to get candles for %s %s: %s",
+                symbol, timeframe, e,
+                exc_info=True,
+            )
             return []
 
 
@@ -236,8 +280,12 @@ async def get_market_summary(
             "day_change_pct": day_change_pct,
             "session_status": ", ".join(session_status),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        logger = logging.getLogger("app.main")
+        logger.error("Market summary failed for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(status_code=503, detail="Market data temporarily unavailable")
 
 
 @app.get("/api/v1/pairs")
@@ -319,11 +367,16 @@ async def get_open_positions(db: AsyncSession = Depends(get_db)):
     )
     trades = result.scalars().all()
     positions = []
+    logger = logging.getLogger("app.main")
     for t in trades:
         try:
             price = await _safe_get_price(t.symbol, schemas.DataProvider(t.provider))
             current = price.get("bid") if t.direction == "sell" else price.get("ask")
+        except HTTPException:
+            # _safe_get_price already logged; fall back to entry price for display
+            current = t.entry_price
         except Exception:
+            logger.warning("Price fetch failed for position %s %s, using entry price", t.id, t.symbol, exc_info=True)
             current = t.entry_price
         pnl = None
         pnl_pct = None
@@ -380,7 +433,11 @@ async def close_position(trade_id: int, db: AsyncSession = Depends(get_db)):
     try:
         price = await _safe_get_price(trade.symbol, schemas.DataProvider(trade.provider))
         current = price.get("bid")
-    except Exception:
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger = logging.getLogger("app.main")
+        logger.error("Failed to fetch price to close trade %s: %s", trade_id, e, exc_info=True)
         raise HTTPException(status_code=503, detail="Unable to fetch current price")
     if not current:
         raise HTTPException(status_code=503, detail="No price available")
@@ -665,7 +722,9 @@ async def get_fundamental_analysis(symbol: str = settings.DEFAULT_PAIR, db: Asyn
             "news_headlines": result.get("news_headlines"),
         }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        logger = logging.getLogger("app.main")
+        logger.error("Fundamental analysis failed for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(status_code=503, detail="Fundamental analysis unavailable")
 
 
 @app.get("/api/v1/analysis/sentiment")
@@ -682,7 +741,9 @@ async def get_sentiment_analysis(symbol: str = settings.DEFAULT_PAIR, db: AsyncS
             "institutional": result.get("institutional"),
         }
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        logger = logging.getLogger("app.main")
+        logger.error("Sentiment analysis failed for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(status_code=503, detail="Sentiment analysis unavailable")
 
 
 @app.get("/api/v1/analysis/full")
@@ -715,8 +776,9 @@ async def get_analysis_summary(symbol: str = settings.DEFAULT_PAIR, db: AsyncSes
                 select(models.AIDecision).where(models.AIDecision.symbol == symbol).order_by(desc(models.AIDecision.timestamp)).limit(1)
             )
             latest_ai = ai_result.scalar_one_or_none()
-        except Exception:
-            pass
+        except Exception as e:
+            logger = logging.getLogger("app.main")
+            logger.warning("Failed to fetch latest AI decision for %s: %s", symbol, e)
 
         return {
             "symbol": symbol,
@@ -727,8 +789,12 @@ async def get_analysis_summary(symbol: str = settings.DEFAULT_PAIR, db: AsyncSes
             "ai_decision": latest_ai.decision if latest_ai else None,
             "ai_confidence": latest_ai.confidence if latest_ai else None,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        logger = logging.getLogger("app.main")
+        logger.error("Analysis summary failed for %s: %s", symbol, e, exc_info=True)
+        raise HTTPException(status_code=503, detail="Analysis service temporarily unavailable")
 
 
 @app.get("/api/v1/backtests")
@@ -745,8 +811,9 @@ async def get_account_info(provider: schemas.DataProvider = None):
         client = await _get_data_client(provider)
         info = await client.get_account_info()
         return schemas.AccountInfoOut(**info)
-    except Exception:
-        # Fallback: return mock account info so the UI doesn't break
+    except Exception as e:
+        logger = logging.getLogger("app.main")
+        logger.warning("Account info unavailable from provider, returning fallback: %s", e)
         return schemas.AccountInfoOut(
             balance=100.0,
             equity=100.0,
@@ -845,7 +912,9 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_text(json.dumps(message))
-            except Exception:
+            except Exception as e:
+                logger = logging.getLogger("app.main")
+                logger.debug("WebSocket broadcast error, disconnecting client: %s", e)
                 disconnected.append(connection)
         for d in disconnected:
             self.disconnect(d)
@@ -858,7 +927,9 @@ class ConnectionManager:
             if topic in topics or "all" in topics:
                 try:
                     await connection.send_text(json.dumps(message))
-                except Exception:
+                except Exception as e:
+                    logger = logging.getLogger("app.main")
+                    logger.debug("WebSocket topic broadcast error, disconnecting client: %s", e)
                     disconnected.append(connection)
         for d in disconnected:
             self.disconnect(d)
@@ -880,6 +951,7 @@ async def websocket_endpoint(websocket: WebSocket):
     redis_listener_task = None
 
     async def redis_listener():
+        logger = logging.getLogger("app.main")
         try:
             import redis.asyncio as aioredis
             redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -890,10 +962,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     try:
                         data = json.loads(message["data"])
                         await websocket.send_text(json.dumps(data))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as e:
+                        logger.debug("WebSocket redis listener send failed: %s", e)
+        except asyncio.CancelledError:
+            pass  # Normal shutdown
+        except Exception as e:
+            logger.warning("WebSocket redis listener crashed: %s", e, exc_info=True)
 
     redis_listener_task = asyncio.create_task(redis_listener())
 
@@ -918,8 +992,11 @@ async def websocket_endpoint(websocket: WebSocket):
                             "ask": price.get("ask"),
                             "timestamp": price.get("timestamp"),
                         }))
-                    except Exception:
-                        pass
+                    except HTTPException:
+                        pass  # _safe_get_price already logged
+                    except Exception as e:
+                        logger = logging.getLogger("app.main")
+                        logger.debug("Initial price send failed for %s: %s", sym, e)
             elif action == "subscribe_topics":
                 topics = msg.get("topics", ["prices", "trades", "ai_decisions", "settings"])
                 manager.update_subscription(websocket, topics=topics)

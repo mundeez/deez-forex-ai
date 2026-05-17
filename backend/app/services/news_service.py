@@ -1,11 +1,13 @@
 """News and economic calendar service for trading halt decisions."""
 import json
+import logging
 import httpx
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("app.services.news")
 
 # Free ForexFactory calendar endpoint (JSON)
 FF_CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
@@ -53,7 +55,7 @@ class NewsService:
                     self._cache_time = datetime.utcnow()
                     return data
         except Exception:
-            pass
+            logger.warning("Failed to fetch economic calendar", exc_info=True)
 
         # Fallback: empty list
         return []
@@ -73,6 +75,7 @@ class NewsService:
             dt = dt + timedelta(hours=5)
             return dt
         except Exception:
+            logger.warning("Failed to parse event time", exc_info=True)
             return None
 
     def _is_high_impact(self, event: Dict[str, Any]) -> bool:

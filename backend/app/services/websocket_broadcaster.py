@@ -1,8 +1,10 @@
 import json
+import logging
 import redis.asyncio as aioredis
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("app.services.websocket")
 
 # Channel names for Redis pub/sub
 CHANNEL_PRICES = "ws:prices"
@@ -21,7 +23,7 @@ async def broadcast_via_redis(channel: str, message: dict):
         await redis.publish(channel, json.dumps(message))
         await redis.close()
     except Exception:
-        pass
+        logger.warning("Failed to broadcast via Redis", exc_info=True)
 
 
 async def broadcast_price_tick(symbol: str, bid: float, ask: float, timestamp: str = None):

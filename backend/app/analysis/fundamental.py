@@ -1,9 +1,11 @@
+import logging
 import httpx
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("app.analysis.fundamental")
 
 
 class FundamentalAnalyzer:
@@ -66,6 +68,7 @@ class FundamentalAnalyzer:
                         })
             return relevant[:10]
         except Exception:
+            logger.warning("Failed to fetch economic calendar", exc_info=True)
             return self._mock_events()
 
     def _mock_events(self) -> List[Dict[str, Any]]:
@@ -89,7 +92,7 @@ class FundamentalAnalyzer:
             if us_rate and eu_rate:
                 return round(us_rate - eu_rate, 2)
         except Exception:
-            pass
+            logger.warning("Failed to fetch interest rate spread from FRED", exc_info=True)
         return 1.25
 
     async def _fred_series(self, series_id: str) -> Optional[float]:
@@ -129,4 +132,5 @@ class FundamentalAnalyzer:
                 data = resp.json()
             return [a["title"] for a in data.get("articles", [])]
         except Exception:
+            logger.warning("Failed to fetch news headlines", exc_info=True)
             return ["News unavailable"]

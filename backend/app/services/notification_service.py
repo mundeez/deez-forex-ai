@@ -1,10 +1,12 @@
 """Notification service for trade alerts via webhooks."""
 import json
+import logging
 import httpx
 from typing import Dict, Any, Optional
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("app.services.notifications")
 
 
 class NotificationService:
@@ -78,7 +80,7 @@ class NotificationService:
                     headers={"Content-Type": "application/json"},
                 )
         except Exception:
-            pass
+            logger.warning("Failed to send Discord notification", exc_info=True)
 
     async def _send_slack(self, text: str):
         try:
@@ -89,7 +91,7 @@ class NotificationService:
                     headers={"Content-Type": "application/json"},
                 )
         except Exception:
-            pass
+            logger.warning("Failed to send Slack notification", exc_info=True)
 
     async def _send_pushover(self, title: str, text: str):
         try:
@@ -104,7 +106,7 @@ class NotificationService:
                     },
                 )
         except Exception:
-            pass
+            logger.warning("Failed to send Pushover notification", exc_info=True)
 
     async def _send_generic_webhook(self, payload: Dict[str, Any]):
         try:
@@ -115,4 +117,4 @@ class NotificationService:
                     headers={"Content-Type": "application/json"},
                 )
         except Exception:
-            pass
+            logger.warning("Failed to send generic webhook notification", exc_info=True)

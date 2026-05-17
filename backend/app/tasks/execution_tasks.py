@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta, time
 from app.celery_app import celery_app
+
+logger = logging.getLogger("app.tasks.execution")
 from app.database import AsyncSessionLocal
 from app.services.execution.executor import ExecutionService
 from app.services.notification_service import NotificationService
@@ -45,7 +48,7 @@ def check_open_positions():
                         close_reason="sl_tp",
                     )
                 except Exception:
-                    pass
+                    logger.warning("Failed to send trade closed notification for SL/TP", exc_info=True)
 
             # Check trailing stops
             trailing_closed = await executor.check_trailing_stops(db)
@@ -74,7 +77,7 @@ def check_open_positions():
                         close_reason="trailing_stop",
                     )
                 except Exception:
-                    pass
+                    logger.warning("Failed to send trade closed notification for trailing stop", exc_info=True)
 
             # Check partial profits
             partials = await executor.check_partial_profits(db)
@@ -115,7 +118,7 @@ def check_open_positions():
                         close_reason="max_duration",
                     )
                 except Exception:
-                    pass
+                    logger.warning("Failed to send trade closed notification for max duration", exc_info=True)
         return {
             "checked": True,
             "sl_tp_closed": len(closed_trades),

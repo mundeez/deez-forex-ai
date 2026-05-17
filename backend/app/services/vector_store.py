@@ -1,11 +1,13 @@
 """Qdrant vector store client for market state snapshots."""
 import json
+import logging
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger("app.services.vector_store")
 COLLECTION_NAME = "market_state_snapshots"
 VECTOR_SIZE = 32  # Number of technical indicator features we vectorize
 
@@ -95,5 +97,5 @@ class VectorStore:
                 points=[point_id],
                 payload={"outcome_pnl": pnl, "outcome_status": status},
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("Failed to update outcome for point %s: %s", point_id, e, exc_info=True)
