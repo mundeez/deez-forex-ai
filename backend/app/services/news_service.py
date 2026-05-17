@@ -62,18 +62,19 @@ class NewsService:
 
     def _parse_event_time(self, event: Dict[str, Any]) -> Optional[datetime]:
         """Parse event datetime from ForexFactory JSON format."""
+        import pytz
         date_str = event.get("date")
         time_str = event.get("time")
         if not date_str:
             return None
         try:
             # ForexFactory format: "2024-01-15" and "08:30"
+            # They use US Eastern Time (EST/EDT) - must use pytz for correct DST handling
             dt_str = f"{date_str} {time_str or '00:00'}"
-            # They use US Eastern Time (EST/EDT) - approximate as UTC-5
-            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-            # Convert EST -> UTC by adding 5 hours
-            dt = dt + timedelta(hours=5)
-            return dt
+            eastern = pytz.timezone("US/Eastern")
+            naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+            localized_dt = eastern.localize(naive_dt)
+            return localized_dt.astimezone(pytz.utc).replace(tzinfo=None)
         except Exception:
             logger.warning("Failed to parse event time", exc_info=True)
             return None

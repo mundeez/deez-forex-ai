@@ -1,10 +1,13 @@
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
+from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app import models
 from app.config import get_settings
 
-_settings_cache: dict = {}
+# In-memory settings cache: key -> (value, cached_at)
+_settings_cache: dict[str, Tuple[str, datetime]] = {}
+_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 DEFAULTS = {
     "max_risk_per_trade_pct": "2.0",
@@ -68,8 +71,17 @@ async def _get_or_create(db: AsyncSession, key: str) -> models.SettingsTable:
 
 
 async def get_setting(db: AsyncSession, key: str) -> str:
+    now = datetime.utcnow()
+    # Check in-memory cache first
+    if key in _settings_cache:
+        cached_value, cached_at = _settings_cache[key]
+        if (now - cached_at).total_seconds() < _CACHE_TTL_SECONDS:
+            return cached_value
+    # Cache miss or expired: fetch from DB
     row = await _get_or_create(db, key)
-    return row.value or DEFAULTS.get(key, "")
+    value = row.value or DEFAULTS.get(key, "")
+    _settings_cache[key] = (value, now)
+    return value
 
 
 async def get_setting_float(db: AsyncSession, key: str) -> float:
@@ -103,6 +115,8 @@ async def set_setting(db: AsyncSession, key: str, value: Any) -> None:
     else:
         row.value = str_val
     await db.commit()
+    # Invalidate cache for this key so next read gets fresh value
+    _settings_cache.pop(key, None)
 
 
 async def get_all_settings(db: AsyncSession) -> dict:

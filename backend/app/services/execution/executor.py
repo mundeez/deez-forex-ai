@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Tuple, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 
 from app import models, schemas
 from app.services.data.metaapi_client import MetaApiClient
@@ -72,10 +72,19 @@ class ExecutionService:
         return trade
 
     async def close_trade(self, db: AsyncSession, trade_id: int, exit_price: float, close_reason: str = "sl_tp") -> models.Trade:
-        result = await db.execute(select(models.Trade).where(models.Trade.id == trade_id))
+        # Use SELECT FOR UPDATE to prevent race conditions when multiple
+        # tasks try to close the same trade simultaneously.
+        result = await db.execute(
+            select(models.Trade)
+            .where(models.Trade.id == trade_id)
+            .with_for_update()
+        )
         trade: Optional[models.Trade] = result.scalar_one_or_none()
         if not trade:
             raise ValueError(f"Trade {trade_id} not found")
+        if trade.status != models.TradeStatus.OPEN:
+            logger.info("Trade %s already closed (status=%s), skipping", trade_id, trade.status)
+            return trade
 
         trade.exit_price = exit_price
         trade.status = models.TradeStatus.CLOSED
@@ -100,29 +109,45 @@ class ExecutionService:
         await db.refresh(trade)
         return trade
 
-    async def check_and_close_positions(self, db: AsyncSession):
-        """Check SL/TP hits and close positions."""
-        client = self._get_client()
-        price_data = await client.get_current_price(settings.DEFAULT_PAIR)
-        current_bid = price_data.get("bid")
-        current_ask = price_data.get("ask")
-        if not current_bid or not current_ask:
-            return []
+    async def _fetch_prices_batch(self, client, symbols: list) -> dict:
+        """Fetch prices for multiple symbols in parallel."""
+        import asyncio
+        prices = {}
+        # Deduplicate symbols
+        unique_symbols = list(set(symbols))
+        coros = [client.get_current_price(s) for s in unique_symbols]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        for sym, res in zip(unique_symbols, results):
+            if isinstance(res, Exception):
+                logger.warning("Batch price fetch failed for %s: %s", sym, res)
+                prices[sym] = None
+            else:
+                prices[sym] = res
+        return prices
 
+    async def check_and_close_positions(self, db: AsyncSession):
+        """Check SL/TP hits and close positions. Fetches all prices in parallel."""
+        client = self._get_client()
         result = await db.execute(
             select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN)
         )
         open_trades = result.scalars().all()
+        if not open_trades:
+            return []
+
+        # Batch fetch all prices in parallel (eliminates N+1 API calls)
+        symbols = [t.symbol for t in open_trades]
+        prices_map = await self._fetch_prices_batch(client, symbols)
+
         closed = []
         for trade in open_trades:
-            try:
-                sym_price = await client.get_current_price(trade.symbol)
-                sym_bid = sym_price.get("bid", current_bid)
-                sym_ask = sym_price.get("ask", current_ask)
-            except Exception:
-                logger.warning("Failed to fetch current price for %s, using default price", trade.symbol, exc_info=True)
-                sym_bid = current_bid
-                sym_ask = current_ask
+            price_data = prices_map.get(trade.symbol)
+            if not price_data:
+                continue
+            sym_bid = price_data.get("bid")
+            sym_ask = price_data.get("ask")
+            if not sym_bid or not sym_ask:
+                continue
 
             price = sym_ask if trade.direction == models.TradeDirection.BUY.value else sym_bid
             if (trade.direction == models.TradeDirection.BUY.value and price <= trade.stop_loss) or \
@@ -141,10 +166,16 @@ class ExecutionService:
             select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN)
         )
         open_trades = result.scalars().all()
-        closed = []
+        if not open_trades:
+            return []
         client = self._get_client()
         now = datetime.utcnow()
 
+        # Batch fetch all prices in parallel
+        symbols = [t.symbol for t in open_trades]
+        prices_map = await self._fetch_prices_batch(client, symbols)
+
+        closed = []
         for trade in open_trades:
             strategy_mode = trade.strategy_mode or "scalping"
             max_duration_map = {"scalping": 10, "day_trading": 120, "swing": 1440}
@@ -153,14 +184,13 @@ class ExecutionService:
             if trade.open_time:
                 duration_min = (now - trade.open_time).total_seconds() / 60
                 if duration_min >= max_duration:
-                    try:
-                        price_data = await client.get_current_price(trade.symbol)
-                        exit_price = price_data.get("bid") if trade.direction == models.TradeDirection.SELL.value else price_data.get("ask")
-                        if exit_price:
-                            closed_trade = await self.close_trade(db, trade.id, exit_price, f"max_duration_{max_duration}min")
-                            closed.append(closed_trade)
-                    except Exception:
-                        logger.warning("Failed to fetch current price for %s during time-based close", trade.symbol, exc_info=True)
+                    price_data = prices_map.get(trade.symbol)
+                    if not price_data:
+                        continue
+                    exit_price = price_data.get("bid") if trade.direction == models.TradeDirection.SELL.value else price_data.get("ask")
+                    if exit_price:
+                        closed_trade = await self.close_trade(db, trade.id, exit_price, f"max_duration_{max_duration}min")
+                        closed.append(closed_trade)
         return closed
 
     async def close_all_open_positions(self, db: AsyncSession, close_reason: str = "eod") -> List[models.Trade]:
@@ -169,18 +199,23 @@ class ExecutionService:
             select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN)
         )
         open_trades = result.scalars().all()
+        if not open_trades:
+            return []
         closed = []
         client = self._get_client()
 
+        # Batch fetch all prices in parallel
+        symbols = [t.symbol for t in open_trades]
+        prices_map = await self._fetch_prices_batch(client, symbols)
+
         for trade in open_trades:
-            try:
-                price_data = await client.get_current_price(trade.symbol)
-                exit_price = price_data.get("bid") if trade.direction == models.TradeDirection.SELL.value else price_data.get("ask")
-                if exit_price:
-                    closed_trade = await self.close_trade(db, trade.id, exit_price, close_reason)
-                    closed.append(closed_trade)
-            except Exception:
-                logger.warning("Failed to fetch current price for %s during close all", trade.symbol, exc_info=True)
+            price_data = prices_map.get(trade.symbol)
+            if not price_data:
+                continue
+            exit_price = price_data.get("bid") if trade.direction == models.TradeDirection.SELL.value else price_data.get("ask")
+            if exit_price:
+                closed_trade = await self.close_trade(db, trade.id, exit_price, close_reason)
+                closed.append(closed_trade)
         return closed
 
     async def check_trailing_stops(self, db: AsyncSession):
@@ -194,20 +229,27 @@ class ExecutionService:
             select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN)
         )
         open_trades = result.scalars().all()
+        if not open_trades:
+            return []
+
+        # Filter to trades with trailing stops configured
+        trailing_trades = [t for t in open_trades if t.trailing_stop_distance]
+        if not trailing_trades:
+            return []
+
+        client = self._get_client()
         closed = []
         updated = []
-        client = self._get_client()
 
-        for trade in open_trades:
-            if not trade.trailing_stop_distance:
-                continue
+        # Batch fetch all prices in parallel
+        symbols = [t.symbol for t in trailing_trades]
+        prices_map = await self._fetch_prices_batch(client, symbols)
 
-            try:
-                price_data = await client.get_current_price(trade.symbol)
-                price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
-            except Exception:
-                logger.warning("Failed to fetch current price for %s during trailing stop check", trade.symbol, exc_info=True)
+        for trade in trailing_trades:
+            price_data = prices_map.get(trade.symbol)
+            if not price_data:
                 continue
+            price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
             if not price:
                 continue
 
@@ -279,8 +321,14 @@ class ExecutionService:
             )
         )
         open_trades = result.scalars().all()
+        if not open_trades:
+            return []
         partials = []
         client = self._get_client()
+
+        # Batch fetch all prices in parallel
+        symbols = [t.symbol for t in open_trades]
+        prices_map = await self._fetch_prices_batch(client, symbols)
 
         for trade in open_trades:
             if not trade.entry_price or not trade.stop_loss:
@@ -290,12 +338,10 @@ class ExecutionService:
                 continue
             target_price = trade.entry_price + (sl_dist * r_multiple) if trade.direction == models.TradeDirection.BUY.value else trade.entry_price - (sl_dist * r_multiple)
 
-            try:
-                price_data = await client.get_current_price(trade.symbol)
-                price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
-            except Exception:
-                logger.warning("Failed to fetch current price for %s during partial profit check", trade.symbol, exc_info=True)
+            price_data = prices_map.get(trade.symbol)
+            if not price_data:
                 continue
+            price = price_data.get("ask") if trade.direction == models.TradeDirection.BUY.value else price_data.get("bid")
             if not price:
                 continue
 
