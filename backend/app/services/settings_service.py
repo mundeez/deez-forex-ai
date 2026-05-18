@@ -87,17 +87,17 @@ async def get_setting(db: AsyncSession, key: str) -> str:
 async def get_setting_float(db: AsyncSession, key: str) -> float:
     val = await get_setting(db, key)
     try:
-        return float(val) if val else float(DEFAULTS.get(key, "0"))
+        return float(val) if val and val.strip() else float(DEFAULTS.get(key, "0") or "0")
     except ValueError:
-        return float(DEFAULTS.get(key, "0"))
+        return float(DEFAULTS.get(key, "0") or "0")
 
 
 async def get_setting_int(db: AsyncSession, key: str) -> int:
     val = await get_setting(db, key)
     try:
-        return int(val) if val else int(DEFAULTS.get(key, "0"))
+        return int(val) if val and val.strip() else int(DEFAULTS.get(key, "0") or "0")
     except ValueError:
-        return int(DEFAULTS.get(key, "0"))
+        return int(DEFAULTS.get(key, "0") or "0")
 
 
 async def get_setting_bool(db: AsyncSession, key: str) -> bool:

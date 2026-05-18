@@ -1,18 +1,7 @@
 import os
-from enum import Enum
 from pydantic_settings import BaseSettings
 from functools import lru_cache
-
-
-class DataProvider(str, Enum):
-    metaapi = "metaapi"
-    mt5_zmq = "mt5_zmq"
-
-
-class StrategyMode(str, Enum):
-    scalping = "scalping"
-    day_trading = "day_trading"
-    swing = "swing"
+from app.enums import DataProvider, StrategyMode
 
 
 class Settings(BaseSettings):
@@ -35,8 +24,8 @@ class Settings(BaseSettings):
     MAX_RISK_PER_TRADE_PCT: float = 2.0
     MAX_DAILY_LOSS_PCT: float = 5.0
     DEFAULT_PAIR: str = "EURUSD"
-    DATA_PROVIDER: DataProvider = DataProvider.metaapi
-    STRATEGY_MODE: StrategyMode = StrategyMode.scalping
+    DATA_PROVIDER: DataProvider = DataProvider.METAAPI
+    STRATEGY_MODE: StrategyMode = StrategyMode.SCALPING
 
     # MT5 ZeroMQ Bridge
     MT5_ZMQ_HOST: str = "host.docker.internal"

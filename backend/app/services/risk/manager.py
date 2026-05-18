@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app import models, schemas
+from app.enums import TradeDirection, TradeMode
 from app.config import get_settings
 from app.ai.openrouter_client import TradeDecision
 from app.services.settings_service import get_setting_float, get_setting_int, get_setting
@@ -142,7 +143,7 @@ class RiskManager:
             stop_loss=decision.stop_loss,
             take_profit=decision.take_profit,
             risk_pct=decision.position_size_pct,
-            mode=schemas.TradeMode.paper,
+            mode=TradeMode.PAPER,
         )
         return await self.validate_new_trade(db, trade_in)
 

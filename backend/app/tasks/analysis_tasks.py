@@ -14,6 +14,7 @@ from app.services.notification_service import NotificationService
 from app.services.settings_service import get_setting_bool, get_setting, get_setting_float, get_setting_int
 from app.database import AsyncSessionLocal
 from app import schemas
+from app.enums import TradeDirection, TradeMode
 from app.config import get_settings
 from sqlalchemy import select, func
 
@@ -291,7 +292,7 @@ def run_full_analysis():
                                 stop_loss=decision.stop_loss,
                                 take_profit=decision.take_profit,
                                 risk_pct=decision.position_size_pct,
-                                mode=schemas.TradeMode.paper,
+                                mode=TradeMode.PAPER,
                                 provider=settings.DATA_PROVIDER,
                                 ai_decision_id=db_decision.id,
                                 rationale=decision.rationale,

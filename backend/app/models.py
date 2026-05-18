@@ -1,29 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Enum
 from sqlalchemy.sql import func
 from app.database import Base
-import enum
-
-
-class TradeStatus(str, enum.Enum):
-    PENDING = "pending"
-    OPEN = "open"
-    CLOSED = "closed"
-    CANCELLED = "cancelled"
-
-
-class TradeDirection(str, enum.Enum):
-    BUY = "buy"
-    SELL = "sell"
-
-
-class TradeMode(str, enum.Enum):
-    PAPER = "paper"
-    LIVE = "live"
-
-
-class DataProvider(str, enum.Enum):
-    METAAPI = "metaapi"
-    MT5_ZMQ = "mt5_zmq"
+from app.enums import TradeStatus, TradeDirection, TradeMode, DataProvider
 
 
 class MarketData(Base):

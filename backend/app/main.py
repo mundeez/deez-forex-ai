@@ -16,6 +16,7 @@ from app.database import get_db, engine, Base, AsyncSessionLocal
 from app.config import get_settings
 from app.logging_config import setup_logging
 from app import models, schemas
+from app.enums import TradeDirection, TradeMode
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
 from app.services.data.metaapi_client import MetaApiClient
@@ -52,7 +53,7 @@ async def lifespan(app: FastAPI):
     app.state.aggregator = AnalysisAggregator()
 
     # Start MT5 tick subscriber if using ZMQ
-    if settings.DATA_PROVIDER == schemas.DataProvider.mt5_zmq:
+    if settings.DATA_PROVIDER == DataProvider.MT5_ZMQ:
         app.state.mt5_sub = MT5ZMQSubscriber(on_tick=broadcast_price_tick)
         await app.state.mt5_sub.start()
     else:
@@ -158,7 +159,7 @@ async def health_check():
 
 async def _get_data_client(provider: schemas.DataProvider = None):
     provider = provider or settings.DATA_PROVIDER
-    if provider == schemas.DataProvider.mt5_zmq:
+    if provider == DataProvider.MT5_ZMQ:
         return app.state.mt5_zmq
     return app.state.metaapi
 
@@ -345,8 +346,8 @@ async def create_manual_trade(
     db: AsyncSession = Depends(get_db)
 ):
     risk: RiskManager = app.state.risk
-    direction_enum = schemas.TradeDirection.buy if trade_in.direction.lower() == "buy" else schemas.TradeDirection.sell
-    mode_enum = schemas.TradeMode.paper if (trade_in.mode or "paper").lower() == "paper" else schemas.TradeMode.live
+    direction_enum = TradeDirection.BUY if trade_in.direction.lower() == "buy" else TradeDirection.SELL
+    mode_enum = TradeMode.PAPER if (trade_in.mode or "paper").lower() == "paper" else TradeMode.LIVE
     schema_in = schemas.TradeCreate(
         symbol=trade_in.symbol,
         direction=direction_enum,
@@ -674,7 +675,7 @@ async def trigger_ai_analysis(
                 stop_loss=decision.stop_loss,
                 take_profit=decision.take_profit,
                 risk_pct=decision.position_size_pct,
-                mode=schemas.TradeMode.paper,
+                mode=TradeMode.PAPER,
                 provider=provider or settings.DATA_PROVIDER,
                 ai_decision_id=db_decision.id,
                 rationale=decision.rationale,

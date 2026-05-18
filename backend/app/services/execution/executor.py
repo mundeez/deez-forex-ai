@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 
 from app import models, schemas
+from app.enums import TradeDirection, TradeMode, DataProvider
 from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.config import get_settings
@@ -21,7 +22,7 @@ class ExecutionService:
 
     def _get_client(self, provider: schemas.DataProvider = None):
         provider = provider or settings.DATA_PROVIDER
-        if provider == schemas.DataProvider.mt5_zmq:
+        if provider == DataProvider.MT5_ZMQ:
             return self.mt5_zmq
         return self.metaapi
 
@@ -48,14 +49,14 @@ class ExecutionService:
             trailing_stop_distance=trailing_distance,
         )
 
-        is_live = trade_in.mode == schemas.TradeMode.live
-        is_metaapi = trade_in.provider == schemas.DataProvider.metaapi
+        is_live = trade_in.mode == TradeMode.LIVE
+        is_metaapi = trade_in.provider == DataProvider.METAAPI
         has_meta_token = bool(settings.META_API_TOKEN)
 
         if is_live and (has_meta_token if is_metaapi else True):
             order = {
                 "symbol": trade_in.symbol,
-                "actionType": "ORDER_TYPE_BUY" if trade_in.direction == schemas.TradeDirection.buy else "ORDER_TYPE_SELL",
+                "actionType": "ORDER_TYPE_BUY" if trade_in.direction == TradeDirection.BUY else "ORDER_TYPE_SELL",
                 "volume": trade.position_size,
                 "stopLoss": trade_in.stop_loss,
                 "takeProfit": trade_in.take_profit,

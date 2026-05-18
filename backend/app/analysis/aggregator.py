@@ -5,6 +5,7 @@ from app.analysis.fundamental import FundamentalAnalyzer
 from app.analysis.sentiment import SentimentAnalyzer
 from app.config import get_settings
 from app import schemas
+from app.enums import DataProvider
 
 settings = get_settings()
 
@@ -12,7 +13,7 @@ settings = get_settings()
 class AnalysisAggregator:
     def __init__(self, provider: schemas.DataProvider = None):
         self.provider = provider or settings.DATA_PROVIDER
-        if self.provider == schemas.DataProvider.mt5_zmq:
+        if self.provider == DataProvider.MT5_ZMQ:
             self.client = MT5ZMQClient()
         else:
             self.client = MetaApiClient()

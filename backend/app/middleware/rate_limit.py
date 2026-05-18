@@ -6,8 +6,9 @@ Uses a sliding window algorithm. In production, replace with Redis-backed limite
 import time
 import logging
 from typing import Dict, Tuple
-from fastapi import Request, HTTPException
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger("app.middleware.rate_limit")
 
@@ -64,7 +65,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if len(endpoint_requests) >= limit:
             logger.warning("Rate limit exceeded for %s on %s (%d/%d)", client_ip, path, len(endpoint_requests), limit)
-            raise HTTPException(status_code=429, detail="Rate limit exceeded. Please slow down.")
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Please slow down."},
+            )
 
         endpoint_requests.append(now)
         return await call_next(request)

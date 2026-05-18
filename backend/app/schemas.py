@@ -1,36 +1,33 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from enum import Enum
-
-
-class TradeDirection(str, Enum):
-    buy = "buy"
-    sell = "sell"
-
-
-class TradeMode(str, Enum):
-    paper = "paper"
-    live = "live"
-
-
-class DataProvider(str, Enum):
-    metaapi = "metaapi"
-    mt5_zmq = "mt5_zmq"
+from app.enums import TradeDirection, TradeMode, DataProvider
 
 
 class TradeCreate(BaseModel):
-    symbol: str = "EURUSD"
+    symbol: str = Field(default="EURUSD", min_length=3, max_length=10)
     direction: TradeDirection
-    entry_price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
-    risk_pct: Optional[float] = None
-    position_size: Optional[float] = None
-    mode: TradeMode = TradeMode.paper
-    provider: DataProvider = DataProvider.metaapi
+    entry_price: Optional[float] = Field(None, ge=0.0)
+    stop_loss: Optional[float] = Field(None, ge=0.0)
+    take_profit: Optional[float] = Field(None, ge=0.0)
+    risk_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    position_size: Optional[float] = Field(None, ge=0.0)
+    mode: TradeMode = TradeMode.PAPER
+    provider: DataProvider = DataProvider.METAAPI
     ai_decision_id: Optional[int] = None
     rationale: Optional[str] = None
+
+    @field_validator("symbol")
+    @classmethod
+    def _uppercase_symbol(cls, v: str) -> str:
+        return v.upper()
+
+    @field_validator("stop_loss", "take_profit")
+    @classmethod
+    def _price_precision(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None:
+            return round(v, 5)
+        return v
 
 
 class TradeOut(BaseModel):
@@ -262,16 +259,16 @@ class AppSettingsOut(BaseModel):
 
 class AppSettingsUpdate(BaseModel):
     strategy_mode: Optional[str] = None
-    max_risk_per_trade_pct: Optional[float] = None
-    max_risk_per_trade_abs: Optional[float] = None
-    max_daily_loss_pct: Optional[float] = None
-    ai_confidence_threshold: Optional[float] = None
-    min_risk_reward: Optional[float] = None
+    max_risk_per_trade_pct: Optional[float] = Field(None, ge=0.1, le=50.0)
+    max_risk_per_trade_abs: Optional[float] = Field(None, ge=0.0)
+    max_daily_loss_pct: Optional[float] = Field(None, ge=0.1, le=100.0)
+    ai_confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
+    min_risk_reward: Optional[float] = Field(None, ge=0.1)
     default_mode: Optional[str] = None
     manual_override: Optional[bool] = None
-    max_open_per_symbol: Optional[int] = None
-    equity_balance: Optional[float] = None
-    max_trade_duration_min: Optional[int] = None
+    max_open_per_symbol: Optional[int] = Field(None, ge=1, le=20)
+    equity_balance: Optional[float] = Field(None, ge=0.0)
+    max_trade_duration_min: Optional[int] = Field(None, ge=1, le=1440)
     eod_close_enabled: Optional[bool] = None
     eod_close_time_utc: Optional[str] = None
     eod_no_new_entries_before: Optional[str] = None
@@ -281,8 +278,8 @@ class AppSettingsUpdate(BaseModel):
     enable_technical: Optional[bool] = None
     enable_fundamental: Optional[bool] = None
     enable_sentiment: Optional[bool] = None
-    chart_refresh_ms: Optional[int] = None
-    analysis_poll_ms: Optional[int] = None
+    chart_refresh_ms: Optional[int] = Field(None, ge=100, le=60000)
+    analysis_poll_ms: Optional[int] = Field(None, ge=1000, le=300000)
 
 
 class ManualTradeCreate(BaseModel):
@@ -294,5 +291,5 @@ class ManualTradeCreate(BaseModel):
     risk_pct: Optional[float] = None
     position_size: Optional[float] = None
     mode: Optional[str] = "paper"
-    provider: Optional[DataProvider] = DataProvider.metaapi
+    provider: Optional[DataProvider] = DataProvider.METAAPI
     rationale: Optional[str] = None
