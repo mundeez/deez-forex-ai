@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import type { PriceTick, WebSocketMessage } from "@/types";
 
 export interface PriceData {
   bid: number;
@@ -46,13 +47,99 @@ export interface SettingsChangeEvent {
   open_trades?: number;
 }
 
+const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 15000, 30000]; // max 30s
+const MAX_RECONNECT_DELAY = 30000;
+
 export function useWebSocket(url: string, symbols: string[], provider?: string) {
   const ws = useRef<WebSocket | null>(null);
+  const reconnectAttempt = useRef(0);
+  const reconnectTimer = useRef<NodeJS.Timeout | null>(null);
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
   const [tradeEvents, setTradeEvents] = useState<TradeEvent[]>([]);
   const [aiDecisions, setAiDecisions] = useState<AIDecisionEvent[]>([]);
   const [settingsChanges, setSettingsChanges] = useState<SettingsChangeEvent[]>([]);
   const [connected, setConnected] = useState(false);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
+
+  const connect = useCallback(() => {
+    if (!url || ws.current?.readyState === WebSocket.OPEN) return;
+
+    try {
+      const socket = new WebSocket(url);
+      ws.current = socket;
+
+      socket.onopen = () => {
+        setConnected(true);
+        reconnectAttempt.current = 0;
+        const subMsg: any = { action: "subscribe_prices", symbols };
+        if (provider) subMsg.provider = provider;
+        socket.send(JSON.stringify(subMsg));
+        socket.send(
+          JSON.stringify({
+            action: "subscribe_topics",
+            topics: ["prices", "trades", "ai_decisions", "settings"],
+          })
+        );
+      };
+
+      socket.onmessage = (event) => {
+        const start = performance.now();
+        try {
+          const msg: WebSocketMessage = JSON.parse(event.data);
+          switch (msg.type) {
+            case "price_tick":
+              if (msg.symbol) {
+                setPrices((prev) => ({
+                  ...prev,
+                  [msg.symbol]: { bid: msg.bid, ask: msg.ask, timestamp: msg.timestamp },
+                }));
+              }
+              break;
+            case "trade_event":
+              setTradeEvents((prev) => [msg as any, ...prev].slice(0, 50));
+              break;
+            case "ai_decision":
+              setAiDecisions((prev) => [(msg as any).data, ...prev].slice(0, 20));
+              break;
+            case "settings_change":
+              setSettingsChanges((prev) => [(msg as any).data, ...prev].slice(0, 20));
+              break;
+            case "pong":
+              // Keepalive response
+              break;
+          }
+        } catch {
+          // Silently ignore malformed messages
+        }
+        setLatencyMs(Math.round(performance.now() - start));
+      };
+
+      socket.onclose = () => {
+        setConnected(false);
+        ws.current = null;
+        // Schedule reconnection with exponential backoff
+        const delay =
+          reconnectAttempt.current < RECONNECT_DELAYS.length
+            ? RECONNECT_DELAYS[reconnectAttempt.current]
+            : MAX_RECONNECT_DELAY;
+        reconnectAttempt.current += 1;
+        reconnectTimer.current = setTimeout(connect, delay);
+      };
+
+      socket.onerror = () => {
+        setConnected(false);
+        // onclose will handle reconnection
+      };
+    } catch {
+      // Connection failed immediately, schedule retry
+      const delay =
+        reconnectAttempt.current < RECONNECT_DELAYS.length
+          ? RECONNECT_DELAYS[reconnectAttempt.current]
+          : MAX_RECONNECT_DELAY;
+      reconnectAttempt.current += 1;
+      reconnectTimer.current = setTimeout(connect, delay);
+    }
+  }, [url, symbols.join(","), provider]);
 
   const send = useCallback((msg: object) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
@@ -60,46 +147,21 @@ export function useWebSocket(url: string, symbols: string[], provider?: string) 
     }
   }, []);
 
+  // Initial connection + keepalive ping
   useEffect(() => {
-    if (!url) return;
-    const socket = new WebSocket(url);
-    ws.current = socket;
-
-    socket.onopen = () => {
-      setConnected(true);
-      const subMsg: any = { action: "subscribe_prices", symbols };
-      if (provider) subMsg.provider = provider;
-      socket.send(JSON.stringify(subMsg));
-      socket.send(JSON.stringify({ action: "subscribe_topics", topics: ["prices", "trades", "ai_decisions", "settings"] }));
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "price_tick" && msg.symbol) {
-          setPrices((prev) => ({
-            ...prev,
-            [msg.symbol]: { bid: msg.bid, ask: msg.ask, timestamp: msg.timestamp },
-          }));
-        } else if (msg.type === "trade_event") {
-          setTradeEvents((prev) => [msg, ...prev].slice(0, 50));
-        } else if (msg.type === "ai_decision") {
-          setAiDecisions((prev) => [msg.data, ...prev].slice(0, 20));
-        } else if (msg.type === "settings_change") {
-          setSettingsChanges((prev) => [msg.data, ...prev].slice(0, 20));
-        }
-      } catch {
-        // ignore malformed
+    connect();
+    const pingInterval = setInterval(() => {
+      send({ action: "ping" });
+    }, 30000);
+    return () => {
+      clearInterval(pingInterval);
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (ws.current) {
+        ws.current.onclose = null;
+        ws.current.close();
       }
     };
+  }, [connect, send]);
 
-    socket.onclose = () => setConnected(false);
-    socket.onerror = () => setConnected(false);
-
-    return () => {
-      socket.close();
-    };
-  }, [url, symbols.join(","), provider]);
-
-  return { prices, tradeEvents, aiDecisions, settingsChanges, connected, send };
+  return { prices, tradeEvents, aiDecisions, settingsChanges, connected, latencyMs, send };
 }
