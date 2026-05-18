@@ -1,7 +1,7 @@
-"""
-MUI theme configuration for deez-forex-ai trading dashboard.
-Dark theme optimized for trading — high contrast, green/red for P&L.
-"""
+/**
+ * MUI theme configuration for deez-forex-ai trading dashboard.
+ * Dark theme optimized for trading — high contrast, green/red for P&L.
+ */
 
 import { createTheme, ThemeOptions } from "@mui/material/styles";
 

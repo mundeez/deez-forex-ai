@@ -1,4 +1,4 @@
-"""
+/**
  * Redux store configuration for deez-forex-ai frontend.
  * Uses Redux Toolkit for minimal boilerplate.
  */

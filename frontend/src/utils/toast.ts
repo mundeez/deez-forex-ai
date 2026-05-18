@@ -1,7 +1,7 @@
-"""
-Toast notification helpers using sonner.
-Integrates with the Redux store for consistent UI feedback.
-"""
+/**
+ * Toast notification helpers using sonner.
+ * Integrates with the Redux store for consistent UI feedback.
+ */
 
 import { toast } from "sonner";
 
