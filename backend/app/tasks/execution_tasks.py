@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, time
 from app.celery_app import celery_app
 
 logger = logging.getLogger("app.tasks.execution")
-from app.database import AsyncSessionLocal
+from app.database import get_celery_session
 from app.services.execution.executor import ExecutionService
 from app.services.notification_service import NotificationService
 from app.services.settings_service import get_setting_bool, get_setting_float
@@ -15,7 +15,7 @@ from app import models
 @celery_app.task
 def check_open_positions():
     async def _check():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             from app.services.websocket_broadcaster import broadcast_trade_event
             from app.services.vector_store import VectorStore
             executor = ExecutionService()
@@ -132,7 +132,7 @@ def check_open_positions():
 @celery_app.task
 def close_eod_positions():
     async def _close():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             from app.services.websocket_broadcaster import broadcast_trade_event
             eod_enabled = await get_setting_bool(db, "eod_close_enabled")
             if not eod_enabled:
@@ -158,7 +158,7 @@ def close_eod_positions():
 @celery_app.task
 def close_weekend_positions():
     async def _close():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             from app.services.websocket_broadcaster import broadcast_trade_event
             weekend_enabled = await get_setting_bool(db, "weekend_close_enabled")
             if not weekend_enabled:
@@ -184,7 +184,7 @@ def close_weekend_positions():
 @celery_app.task
 def update_daily_pnl():
     async def _update():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             from app.services.websocket_broadcaster import broadcast_settings_change
             today = datetime.utcnow().date()
             start_of_day = datetime.combine(today, datetime.min.time())
@@ -256,7 +256,7 @@ def update_daily_pnl():
 @celery_app.task
 def compute_pair_performance():
     async def _compute():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             now = datetime.utcnow()
             # Look back 30 days for stats
             since = now - timedelta(days=30)

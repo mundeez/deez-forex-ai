@@ -12,7 +12,7 @@ from app.services.risk.manager import RiskManager
 from app.services.news_service import NewsService
 from app.services.notification_service import NotificationService
 from app.services.settings_service import get_setting_bool, get_setting, get_setting_float, get_setting_int
-from app.database import AsyncSessionLocal
+from app.database import get_celery_session
 from app import schemas
 from app.enums import TradeDirection, TradeMode
 from app.config import get_settings
@@ -21,13 +21,31 @@ from sqlalchemy import select, func
 settings = get_settings()
 
 
-def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
+def _clean_numpy(obj):
+    """Recursively convert numpy types to native Python types for JSON serialization."""
+    import numpy as np
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    if isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _clean_numpy(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean_numpy(v) for v in obj]
+    return obj
+
+
+async def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
     """Check if trading should be paused (EOD, weekend, etc.)."""
     now = datetime.utcnow()
 
-    eod_enabled = get_setting_bool(db, "eod_close_enabled")
+    eod_enabled = await get_setting_bool(db, "eod_close_enabled")
     if eod_enabled:
-        no_entry_before = get_setting(db, "eod_no_new_entries_before")
+        no_entry_before = await get_setting(db, "eod_no_new_entries_before")
         try:
             hour, minute = map(int, no_entry_before.split(":"))
             cutoff = time(hour, minute)
@@ -36,10 +54,10 @@ def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
         except Exception:
             logger.warning("Failed to parse EOD time setting", exc_info=True)
 
-    weekend_enabled = get_setting_bool(db, "weekend_close_enabled")
+    weekend_enabled = await get_setting_bool(db, "weekend_close_enabled")
     if weekend_enabled:
-        weekend_close_str = get_setting(db, "weekend_close_time_utc")
-        weekend_resume_str = get_setting(db, "weekend_resume_time_utc")
+        weekend_close_str = await get_setting(db, "weekend_close_time_utc")
+        weekend_resume_str = await get_setting(db, "weekend_resume_time_utc")
         try:
             wc_h, wc_m = map(int, weekend_close_str.split(":"))
             wr_h, wr_m = map(int, weekend_resume_str.split(":"))
@@ -60,7 +78,7 @@ def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
 
 async def _resolve_strategy_mode(db, aggregator: AnalysisAggregator) -> str:
     """Determine strategy mode: manual setting or auto-switch."""
-    auto_switch = get_setting_bool(db, "auto_strategy_switch_enabled")
+    auto_switch = await get_setting_bool(db, "auto_strategy_switch_enabled")
     if not auto_switch:
         mode = await get_setting(db, "strategy_mode")
         return mode if mode in ("scalping", "day_trading", "swing") else "scalping"
@@ -82,7 +100,7 @@ async def _resolve_strategy_mode(db, aggregator: AnalysisAggregator) -> str:
 @celery_app.task
 def run_full_analysis():
     async def _analyze():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             from app import models
             from app.services.websocket_broadcaster import broadcast_ai_decision, broadcast_trade_event
             aggregator = AnalysisAggregator()
@@ -95,7 +113,7 @@ def run_full_analysis():
             strategy_mode = await _resolve_strategy_mode(db, aggregator)
 
             # Check trading pause (EOD / weekend)
-            paused, pause_reason = _trading_paused(strategy_mode, db)
+            paused, pause_reason = await _trading_paused(strategy_mode, db)
             if paused:
                 return {"status": "paused", "reason": pause_reason}
 
@@ -113,7 +131,7 @@ def run_full_analysis():
             vs = VectorStore()
 
             # News-based trading halt per pair
-            news_halt_enabled = get_setting_bool(db, "news_halt_enabled")
+            news_halt_enabled = await get_setting_bool(db, "news_halt_enabled")
             news_buffer_before = await get_setting_int(db, "news_halt_buffer_before_min") or 15
             news_buffer_after = await get_setting_int(db, "news_halt_buffer_after_min") or 30
 
@@ -165,7 +183,7 @@ def run_full_analysis():
                     allowed_analyses.append(analysis)
 
             # Use batched AI prompt if enabled and multiple pairs
-            batched_enabled = get_setting_bool(db, "batched_ai_enabled")
+            batched_enabled = await get_setting_bool(db, "batched_ai_enabled")
             decisions_map = {}
 
             if batched_enabled and len(allowed_analyses) > 1:
@@ -193,9 +211,9 @@ def run_full_analysis():
                     position_size_pct=decision.position_size_pct,
                     risk_reward=decision.risk_reward,
                     rationale=decision.rationale,
-                    technical_snapshot=analysis.get("technical"),
-                    fundamental_snapshot=analysis.get("fundamental"),
-                    sentiment_snapshot=analysis.get("sentiment"),
+                    technical_snapshot=_clean_numpy(analysis.get("technical")),
+                    fundamental_snapshot=_clean_numpy(analysis.get("fundamental")),
+                    sentiment_snapshot=_clean_numpy(analysis.get("sentiment")),
                     model_used=settings.OPENROUTER_MODEL,
                     provider=settings.DATA_PROVIDER.value,
                 )
@@ -204,18 +222,21 @@ def run_full_analysis():
                 await db.refresh(db_decision)
 
                 # Store market state snapshot to Qdrant vector DB
-                point_id = f"{db_decision.id}"
-                vs.upsert_snapshot(
-                    point_id=point_id,
-                    snapshot=analysis.get("technical", {}),
-                    payload={
-                        "symbol": symbol,
-                        "decision": decision.decision,
-                        "confidence": decision.confidence,
-                        "strategy_mode": strategy_mode,
-                        "timestamp": datetime.utcnow().isoformat(),
-                    },
-                )
+                try:
+                    point_id = f"{db_decision.id}"
+                    vs.upsert_snapshot(
+                        point_id=point_id,
+                        snapshot=analysis.get("technical", {}),
+                        payload={
+                            "symbol": symbol,
+                            "decision": decision.decision,
+                            "confidence": decision.confidence,
+                            "strategy_mode": strategy_mode,
+                            "timestamp": datetime.utcnow().isoformat(),
+                        },
+                    )
+                except Exception:
+                    logger.warning("Failed to upsert Qdrant snapshot for decision %s", db_decision.id, exc_info=True)
 
                 # Broadcast AI decision to all connected clients
                 await broadcast_ai_decision({
@@ -287,7 +308,7 @@ def run_full_analysis():
 
                             trade_in = schemas.TradeCreate(
                                 symbol=symbol,
-                                direction=schemas.TradeDirection(decision.decision.lower()),
+                                direction=TradeDirection(decision.decision.lower()),
                                 entry_price=decision.entry_price,
                                 stop_loss=decision.stop_loss,
                                 take_profit=decision.take_profit,
@@ -360,7 +381,11 @@ def run_full_analysis():
                             "strategy_mode": strategy_mode,
                         })
 
-                results.append({"symbol": symbol, "decision": decision.decision, "confidence": decision.confidence})
+                results.append({
+                    "symbol": symbol,
+                    "decision": str(decision.decision),
+                    "confidence": float(decision.confidence),
+                })
 
             return results
 
@@ -370,7 +395,7 @@ def run_full_analysis():
 @celery_app.task
 def auto_select_pairs():
     async def _select():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             from app import models
             strategy_mode = await _resolve_strategy_mode(db, AnalysisAggregator())
 
@@ -403,7 +428,7 @@ def auto_select_pairs():
 @celery_app.task
 def record_hourly_performance():
     async def _record():
-        async with AsyncSessionLocal() as db:
+        async with get_celery_session()() as db:
             from app import models
             now = datetime.utcnow()
             hour = now.hour

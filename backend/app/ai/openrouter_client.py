@@ -99,13 +99,13 @@ class OpenRouterClient:
 
         return TradeDecision(
             decision=parsed.get("decision", "HOLD").upper(),
-            confidence=float(parsed.get("confidence", 0.0)),
+            confidence=float(parsed.get("confidence") or 0.0),
             timeframe=parsed.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
-            entry_price=float(parsed.get("entry_price", 0.0)),
-            stop_loss=float(parsed.get("stop_loss", 0.0)),
-            take_profit=float(parsed.get("take_profit", 0.0)),
-            position_size_pct=float(parsed.get("position_size_pct", 1.0)),
-            risk_reward=float(parsed.get("risk_reward", 1.0)),
+            entry_price=float(parsed.get("entry_price") or 0.0),
+            stop_loss=float(parsed.get("stop_loss") or 0.0),
+            take_profit=float(parsed.get("take_profit") or 0.0),
+            position_size_pct=float(parsed.get("position_size_pct") or 1.0),
+            risk_reward=float(parsed.get("risk_reward") or 1.0),
             rationale=parsed.get("rationale", "No rationale provided."),
             symbol=analysis.get("symbol", "EURUSD"),
         )
@@ -250,13 +250,13 @@ class OpenRouterClient:
                 d = decisions_list[idx]
                 results.append(TradeDecision(
                     decision=str(d.get("decision", "HOLD")).upper(),
-                    confidence=float(d.get("confidence", 0.0)),
+                    confidence=float(d.get("confidence") or 0.0),
                     timeframe=d.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
-                    entry_price=float(d.get("entry_price", 0.0)),
-                    stop_loss=float(d.get("stop_loss", 0.0)),
-                    take_profit=float(d.get("take_profit", 0.0)),
-                    position_size_pct=float(d.get("position_size_pct", 1.0)),
-                    risk_reward=float(d.get("risk_reward", 1.0)),
+                    entry_price=float(d.get("entry_price") or 0.0),
+                    stop_loss=float(d.get("stop_loss") or 0.0),
+                    take_profit=float(d.get("take_profit") or 0.0),
+                    position_size_pct=float(d.get("position_size_pct") or 1.0),
+                    risk_reward=float(d.get("risk_reward") or 1.0),
                     rationale=d.get("rationale", "No rationale provided."),
                     symbol=symbol,
                 ))

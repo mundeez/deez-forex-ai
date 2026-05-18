@@ -138,7 +138,7 @@ class RiskManager:
 
         trade_in = schemas.TradeCreate(
             symbol=decision.symbol or settings.DEFAULT_PAIR,
-            direction=schemas.TradeDirection(decision.decision.lower()),
+            direction=TradeDirection(decision.decision.lower()),
             entry_price=decision.entry_price,
             stop_loss=decision.stop_loss,
             take_profit=decision.take_profit,

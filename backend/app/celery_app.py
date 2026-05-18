@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.config import get_settings
 
 settings = get_settings()
@@ -47,12 +48,12 @@ celery_app.conf.update(
         },
         "close-eod-positions": {
             "task": "app.tasks.execution_tasks.close_eod_positions",
-            "schedule": {"hour": 21, "minute": 30, "day_of_week": "mon-fri"},
+            "schedule": crontab(hour=21, minute=30, day_of_week="mon-fri"),
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "close-weekend-positions": {
             "task": "app.tasks.execution_tasks.close_weekend_positions",
-            "schedule": {"hour": 21, "minute": 0, "day_of_week": "fri"},
+            "schedule": crontab(hour=21, minute=0, day_of_week="fri"),
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "compute-pair-performance": {

@@ -62,3 +62,4 @@ logs/
 # Generated / local
 backend/celerybeat-schedule
 frontend/.env.local
+celerybeat-schedule
