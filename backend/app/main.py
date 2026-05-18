@@ -16,7 +16,7 @@ from app.database import get_db, engine, Base, AsyncSessionLocal
 from app.config import get_settings
 from app.logging_config import setup_logging
 from app import models, schemas
-from app.enums import TradeDirection, TradeMode
+from app.enums import TradeDirection, TradeMode, DataProvider
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
 from app.services.data.metaapi_client import MetaApiClient
