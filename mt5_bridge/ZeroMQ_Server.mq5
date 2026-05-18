@@ -35,6 +35,8 @@ input int    ZMQ_REQ_PORT    = 5555;      // Command/Response port
 input int    ZMQ_PUB_PORT    = 5556;      // Tick publisher port
 input int    TIMER_MS        = 100;       // Command poll interval
 input bool   DEMO_ONLY_GUARD = true;      // Block live trades on non-demo accounts
+input int    MAGIC_NUMBER    = 123456;    // Expert magic number (make unique per instance)
+input int    MAX_MSG_SIZE    = 65536;     // Max ZMQ message size (was 4096)
 
 //--- Sockets
 long g_context   = 0;
@@ -47,7 +49,7 @@ CTrade g_trade;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   g_trade.SetExpertMagicNumber(123456);
+   g_trade.SetExpertMagicNumber(MAGIC_NUMBER);
    g_trade.SetDeviationInPoints(10);
 
    g_context = zmq_ctx_new();
@@ -139,8 +141,9 @@ void SendString(long sock, string msg)
 //+------------------------------------------------------------------+
 bool RecvString(long sock, string &out)
 {
-   uchar buf[4096];
-   int rc = zmq_recv(sock, buf, 4096, 0);
+   uchar buf[];
+   ArrayResize(buf, MAX_MSG_SIZE);
+   int rc = zmq_recv(sock, buf, MAX_MSG_SIZE, 0);
    if(rc <= 0) return false;
    out = CharArrayToString(buf, 0, rc, CP_UTF8);
    return true;
@@ -152,6 +155,12 @@ string HandleCommand(string json)
    string action = ExtractStringField(json, "action");
    string symbol = ExtractStringField(json, "symbol");
    if(symbol == "") symbol = _Symbol;
+
+   // Validate symbol exists
+   if(!SymbolSelect(symbol, true))
+      return "{\"error\":\"Invalid symbol: " + symbol + "\"}";
+
+   Print("[ZMQ] Command: ", action, " Symbol: ", symbol);
 
    if(action == "GET_PRICE")
       return HandleGetPrice(symbol);
@@ -166,6 +175,7 @@ string HandleCommand(string json)
    if(action == "CLOSE")
       return HandleClose(json);
 
+   Print("[ZMQ] Unknown action: ", action);
    return "{\"error\":\"Unknown action: " + action + "\"}";
 }
 

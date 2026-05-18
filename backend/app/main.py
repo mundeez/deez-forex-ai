@@ -16,6 +16,8 @@ from app.database import get_db, engine, Base, AsyncSessionLocal
 from app.config import get_settings
 from app.logging_config import setup_logging
 from app import models, schemas
+from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.request_id import RequestIdMiddleware
 from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.services.data.mt5_zmq_subscriber import MT5ZMQSubscriber
@@ -80,6 +82,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add request ID tracing first (so it's available to all downstream middleware)
+app.add_middleware(RequestIdMiddleware)
+
+# Add rate limiting
+app.add_middleware(RateLimitMiddleware)
 
 
 @app.middleware("http")
