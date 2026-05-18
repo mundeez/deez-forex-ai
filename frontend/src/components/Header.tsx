@@ -1,29 +1,71 @@
 "use client";
 
-import { Activity, Settings } from "lucide-react";
+import {
+  AppBar,
+  Toolbar,
+  Typography,
+  IconButton,
+  Box,
+  Chip,
+  Tooltip,
+} from "@mui/material";
+import {
+  Settings as SettingsIcon,
+  ShowChart as ShowChartIcon,
+} from "@mui/icons-material";
 import Link from "next/link";
 
-export default function Header() {
+interface HeaderProps {
+  connected?: boolean;
+}
+
+export default function Header({ connected = true }: HeaderProps) {
   return (
-    <header className="border-b border-slate-700 bg-forex-card">
-      <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Activity className="w-7 h-7 text-forex-accent" />
-          <Link href="/" className="text-xl font-bold tracking-tight hover:text-forex-accent transition">
-            deez-forex-ai
+    <AppBar position="static" elevation={0} sx={{ borderBottom: "1px solid #1e293b" }}>
+      <Toolbar sx={{ justifyContent: "space-between" }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+          <ShowChartIcon sx={{ color: "primary.main" }} />
+          <Link href="/" passHref style={{ textDecoration: "none", color: "inherit" }}>
+            <Typography variant="h6" fontWeight={700} sx={{ letterSpacing: "-0.02em", cursor: "pointer" }}>
+              deez-forex-ai
+            </Typography>
           </Link>
-        </div>
-        <div className="flex items-center gap-4 text-sm text-slate-400">
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            24/7 Live
-          </span>
-          <Link href="/settings" className="hover:text-white transition flex items-center gap-1">
-            <Settings className="w-5 h-5" />
-            <span className="hidden sm:inline">Settings</span>
-          </Link>
-        </div>
-      </div>
-    </header>
+        </Box>
+
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Chip
+            size="small"
+            label={connected ? "24/7 Live" : "Disconnected"}
+            color={connected ? "success" : "error"}
+            icon={
+              <Box
+                component="span"
+                sx={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  bgcolor: connected ? "success.main" : "error.main",
+                  animation: connected ? "pulse 2s infinite" : "none",
+                  mr: 0.5,
+                  ml: 1,
+                }}
+              />
+            }
+            sx={{
+              bgcolor: "transparent",
+              border: (theme) => `1px solid ${connected ? theme.palette.success.main : theme.palette.error.main}`,
+              color: (theme) => (connected ? theme.palette.success.main : theme.palette.error.main),
+            }}
+          />
+          <Tooltip title="Settings">
+            <Link href="/settings" passHref>
+              <IconButton size="small" sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}>
+                <SettingsIcon />
+              </IconButton>
+            </Link>
+          </Tooltip>
+        </Box>
+      </Toolbar>
+    </AppBar>
   );
 }

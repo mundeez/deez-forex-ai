@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { ReduxProvider } from "./providers";
+import { AppProviders } from "./providers";
 
 export const metadata: Metadata = {
   title: "deez-forex-ai",
@@ -15,7 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
-        <ReduxProvider>{children}</ReduxProvider>
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );
