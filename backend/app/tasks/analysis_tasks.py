@@ -387,6 +387,18 @@ def run_full_analysis():
                 if decision.decision not in ("BUY", "SELL"):
                     logger.info("[AUDIT] %s: AI=HOLD(%.2f) — no trade signal", symbol, decision.confidence)
 
+                    # When fallback strategy is rule_based, try rule-based decision as override
+                    fallback_strategy = await get_setting(db, "ai_fallback_strategy") or "hold"
+                    if fallback_strategy == "rule_based" and not manual_override:
+                        rule_decision = _generate_rule_based_decision(analysis, strategy_mode)
+                        if rule_decision.decision in ("BUY", "SELL"):
+                            logger.info(
+                                "[AUDIT] %s: AI=HOLD → RULE_OVERRIDE=%s(%.2f)",
+                                symbol, rule_decision.decision, rule_decision.confidence,
+                            )
+                            decision = rule_decision
+                            decision.rationale = f"[RULE OVERRIDE — AI returned HOLD] {decision.rationale}"
+
                 if decision.decision in ("BUY", "SELL") and not manual_override:
                     ok, reason = await risk.validate_ai_decision(db, decision)
                     if ok:

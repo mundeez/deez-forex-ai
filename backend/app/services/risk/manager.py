@@ -160,9 +160,9 @@ class RiskManager:
         tp_atr = tp_dist / atr
 
         limits = {
-            "scalping": {"sl_min": 0.5, "sl_max": 2.0, "tp_min": 1.0, "tp_max": 3.0},
-            "day_trading": {"sl_min": 1.0, "sl_max": 3.0, "tp_min": 2.0, "tp_max": 5.0},
-            "swing": {"sl_min": 2.0, "sl_max": 5.0, "tp_min": 3.0, "tp_max": 8.0},
+            "scalping": {"sl_min": 0.3, "sl_max": 2.0, "tp_min": 0.5, "tp_max": 3.0},
+            "day_trading": {"sl_min": 0.3, "sl_max": 3.0, "tp_min": 0.8, "tp_max": 5.0},
+            "swing": {"sl_min": 0.5, "sl_max": 5.0, "tp_min": 1.0, "tp_max": 8.0},
         }
         lim = limits.get(strategy_mode, limits["scalping"])
 
