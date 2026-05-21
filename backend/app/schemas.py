@@ -255,6 +255,9 @@ class AppSettingsOut(BaseModel):
     chart_refresh_ms: int
     analysis_poll_ms: int
     active_pairs: List[Dict[str, Any]]
+    ai_model: Optional[str] = None
+    ai_fallback_strategy: Optional[str] = None
+    trade_aggressiveness: Optional[str] = None
 
 
 class AppSettingsUpdate(BaseModel):
@@ -280,6 +283,9 @@ class AppSettingsUpdate(BaseModel):
     enable_sentiment: Optional[bool] = None
     chart_refresh_ms: Optional[int] = Field(None, ge=100, le=60000)
     analysis_poll_ms: Optional[int] = Field(None, ge=1000, le=300000)
+    ai_model: Optional[str] = None
+    ai_fallback_strategy: Optional[str] = None
+    trade_aggressiveness: Optional[str] = None
 
 
 class ManualTradeCreate(BaseModel):

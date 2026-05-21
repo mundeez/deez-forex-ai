@@ -157,6 +157,70 @@ async def health_check():
     return response
 
 
+@app.get("/api/v1/system/health")
+async def system_health(db: AsyncSession = Depends(get_db)):
+    """
+    Operational health endpoint for the auto-trading system.
+    Returns AI availability, last analysis status, and current configuration.
+    Reads from database so it works across celery/backend process boundaries.
+    """
+    from app.services.settings_service import get_setting, get_setting_bool
+    from datetime import datetime, timezone
+
+    # Determine AI availability by checking recent decisions in DB
+    # If the last decision is within 10 minutes, AI is considered available
+    cutoff = datetime.utcnow() - timedelta(minutes=10)
+    result = await db.execute(
+        select(func.count(models.AIDecision.id)).where(
+            models.AIDecision.timestamp >= cutoff
+        )
+    )
+    recent_decisions = result.scalar() or 0
+
+    # Get the latest decision for error/status info
+    result = await db.execute(
+        select(models.AIDecision).order_by(models.AIDecision.timestamp.desc()).limit(1)
+    )
+    latest = result.scalar_one_or_none()
+
+    # Check for recent errors: look for HOLD decisions with error markers
+    result = await db.execute(
+        select(models.AIDecision).where(
+            models.AIDecision.timestamp >= cutoff,
+            models.AIDecision.rationale.ilike("%AI UNAVAILABLE%")
+        ).order_by(models.AIDecision.timestamp.desc()).limit(1)
+    )
+    last_error_decision = result.scalar_one_or_none()
+
+    # Count open positions
+    result = await db.execute(
+        select(func.count(models.Trade.id)).where(
+            models.Trade.status == models.TradeStatus.OPEN
+        )
+    )
+    open_positions = result.scalar() or 0
+
+    # Get current config
+    ai_model = await get_setting(db, "ai_model") or settings.OPENROUTER_MODEL
+    fallback = await get_setting(db, "ai_fallback_strategy") or "hold"
+    aggressiveness = await get_setting(db, "trade_aggressiveness") or "moderate"
+    strategy_mode = await get_setting(db, "strategy_mode") or "scalping"
+    manual_override = await get_setting_bool(db, "manual_override")
+
+    return {
+        "ai_available": recent_decisions > 0 and last_error_decision is None,
+        "last_successful_analysis": latest.timestamp.isoformat() if latest and not last_error_decision else None,
+        "last_error": last_error_decision.rationale[:200] if last_error_decision else None,
+        "consecutive_ai_failures": 0,  # DB-based, not easily countable without state
+        "open_positions": open_positions,
+        "current_model": ai_model,
+        "fallback_strategy": fallback,
+        "aggressiveness": aggressiveness,
+        "strategy_mode": strategy_mode,
+        "auto_trading": not manual_override,
+    }
+
+
 async def _get_data_client(provider: schemas.DataProvider = None):
     provider = provider or settings.DATA_PROVIDER
     if provider == DataProvider.MT5_ZMQ:

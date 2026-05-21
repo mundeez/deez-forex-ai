@@ -72,7 +72,12 @@ class NewsService:
             # They use US Eastern Time (EST/EDT) - must use pytz for correct DST handling
             dt_str = f"{date_str} {time_str or '00:00'}"
             eastern = pytz.timezone("US/Eastern")
-            naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+            # Try ISO 8601 format first (e.g. "2026-05-21T09:45:00-04:00")
+            try:
+                naive_dt = datetime.fromisoformat(dt_str)
+            except ValueError:
+                # Fall back to simple format
+                naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
             localized_dt = eastern.localize(naive_dt)
             return localized_dt.astimezone(pytz.utc).replace(tzinfo=None)
         except Exception:

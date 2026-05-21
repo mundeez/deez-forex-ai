@@ -26,20 +26,36 @@ class OpenRouterClient:
         self.model = settings.OPENROUTER_MODEL
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
 
-    def _system_prompt(self, strategy_mode: str) -> str:
+    def _system_prompt(self, strategy_mode: str, aggressiveness: str = "moderate") -> str:
         base = (
             "You are an expert forex trading analyst AI. Analyze the provided market data and output "
             "a JSON object with these exact keys: decision (BUY, SELL, or HOLD), confidence (0.0-1.0), "
             "timeframe, entry_price, stop_loss, take_profit, position_size_pct (risk %), "
             "risk_reward, rationale (string). Ensure the JSON is valid and contains no extra commentary."
         )
+
+        # Aggressiveness modifiers
+        if aggressiveness == "aggressive":
+            base += (
+                "\n\nAGGRESSIVE MODE: Prefer action over inaction. When indicators show any directional "
+                "bias, lean toward BUY or SELL rather than HOLD. Accept lower confidence setups (0.40+). "
+                "Wider stops are acceptable. Higher risk per trade (up to 2%). "
+                "The goal is to capture more opportunities even with slightly lower win rate."
+            )
+        elif aggressiveness == "conservative":
+            base += (
+                "\n\nCONSERVATIVE MODE: Only trade high-conviction setups. Require strong multi-timeframe "
+                "alignment before recommending BUY or SELL. Default to HOLD unless the setup is excellent. "
+                "Tight stops, smaller position sizes (0.5-1%). Prioritize capital preservation."
+            )
+
         if strategy_mode == "scalping":
             return (
                 base + "\n\nSTRATEGY: SCALPING. Rules:\n"
                 "1. Only trade when VWAP and EMA alignment confirm direction on 1m/5m.\n"
                 "2. Stop loss must be tight: 1.0-1.5x ATR (max 10 pips).\n"
                 "3. Take profit: 1.5-2.0x ATR (8-15 pips). Risk:Reward should be ~1.0-1.5.\n"
-                "4. Avoid trades when ADX < 20 (weak trend / chop).\n"
+                "4. Avoid trades when ADX < 15 (very weak trend / chop).\n"
                 "5. If Bollinger squeeze detected, expect breakout — enter on momentum confirmation.\n"
                 "6. Position size: 0.5-1.0% risk per trade.\n"
                 "7. HOLD if no clear setup within 3-5 pips of entry zone.\n"
@@ -67,7 +83,8 @@ class OpenRouterClient:
                 "6. Ignore noise — only high-confidence setups."
             )
 
-    async def get_trade_decision(self, analysis: Dict[str, Any], strategy_mode: str = "scalping") -> TradeDecision:
+    async def get_trade_decision(self, analysis: Dict[str, Any], strategy_mode: str = "scalping", model_override: str = None, aggressiveness: str = "moderate") -> TradeDecision:
+        model = model_override or self.model
         if not self.api_key:
             return self._fallback_decision(analysis, strategy_mode)
 
@@ -79,11 +96,11 @@ class OpenRouterClient:
             "X-Title": "deez-forex-ai",
         }
         payload = {
-            "model": self.model,
+            "model": model,
             "temperature": 0.15,
             "max_tokens": 384,  # Reduced from 512 — structured JSON needs far less
             "messages": [
-                {"role": "system", "content": self._system_prompt(strategy_mode)},
+                {"role": "system", "content": self._system_prompt(strategy_mode, aggressiveness)},
                 {"role": "user", "content": prompt},
             ],
             "response_format": {"type": "json_object"},
@@ -206,13 +223,14 @@ class OpenRouterClient:
         prompt += "JSON: decision, confidence, entry, SL, TP, rationale."
         return prompt
 
-    async def get_batched_trade_decisions(self, analyses: List[Dict[str, Any]], strategy_mode: str = "scalping") -> List[TradeDecision]:
+    async def get_batched_trade_decisions(self, analyses: List[Dict[str, Any]], strategy_mode: str = "scalping", model_override: str = None, aggressiveness: str = "moderate") -> List[TradeDecision]:
         """Batch multiple pair analyses into a single AI prompt for efficiency."""
+        model = model_override or self.model
         if not self.api_key or len(analyses) == 0:
             return [self._fallback_decision(a, strategy_mode) for a in analyses]
 
         if len(analyses) == 1:
-            return [await self.get_trade_decision(analyses[0], strategy_mode)]
+            return [await self.get_trade_decision(analyses[0], strategy_mode, model_override=model, aggressiveness=aggressiveness)]
 
         prompt = self._build_batched_prompt(analyses, strategy_mode)
         headers = {
@@ -222,11 +240,11 @@ class OpenRouterClient:
             "X-Title": "deez-forex-ai",
         }
         payload = {
-            "model": self.model,
+            "model": model,
             "temperature": 0.15,
             "max_tokens": 512,  # Reduced from 1024 — batched JSON still compact
             "messages": [
-                {"role": "system", "content": self._system_prompt(strategy_mode) + "\n\nIMPORTANT: You are analyzing MULTIPLE currency pairs. Return a JSON array where each element is a decision object for the corresponding pair in the same order provided."},
+                {"role": "system", "content": self._system_prompt(strategy_mode, aggressiveness) + "\n\nIMPORTANT: You are analyzing MULTIPLE currency pairs. Return a JSON array where each element is a decision object for the corresponding pair in the same order provided."},
                 {"role": "user", "content": prompt},
             ],
             "response_format": {"type": "json_object"},

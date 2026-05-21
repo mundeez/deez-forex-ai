@@ -13,6 +13,37 @@ const AVAILABLE_PAIRS = [
   "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "GBPJPY", "XAUUSD"
 ];
 
+const AI_MODELS: Record<string, { label: string; description: string }> = {
+  "nvidia/nemotron-3-super-120b-a12b:free": {
+    label: "NVIDIA Nemotron (Free)",
+    description: "Zero cost. NVIDIA's 120B parameter model. Strong reasoning, good JSON output. Currently the default.",
+  },
+  "deepseek/deepseek-v4-flash:free": {
+    label: "DeepSeek V4 Flash (Free)",
+    description: "Zero cost. DeepSeek's latest fast model. Excellent numerical reasoning. May be rate-limited at peak times.",
+  },
+  "google/gemma-4-26b-a4b-it:free": {
+    label: "Gemma 4 26B (Free)",
+    description: "Zero cost. Google's latest open model. Good general reasoning. May be rate-limited.",
+  },
+  "google/gemini-2.5-flash": {
+    label: "Gemini 2.5 Flash",
+    description: "~$0.15/M tokens. Best JSON mode on OpenRouter. Very fast, reliable. Requires funded key.",
+  },
+  "deepseek/deepseek-chat": {
+    label: "DeepSeek V3",
+    description: "~$0.28/M tokens. Excellent numerical reasoning. Extremely cheap. Requires funded key.",
+  },
+  "openai/gpt-4o-mini": {
+    label: "GPT-4o Mini",
+    description: "~$0.15/M tokens. Very reliable JSON output. Requires funded key.",
+  },
+  "anthropic/claude-sonnet-4.5": {
+    label: "Claude Sonnet 4.5",
+    description: "Excellent reasoning but expensive. Previously the default. Requires funded OpenRouter account.",
+  },
+};
+
 export default function SettingsPage() {
   const router = useRouter();
   const [settings, setSettings] = useState<SettingsData>({});
@@ -621,13 +652,78 @@ export default function SettingsPage() {
                     <div>
                       <label className="text-sm text-slate-300 block mb-2">AI Model</label>
                       <select
-                        value={settings.ai_model || "claude"}
+                        value={settings.ai_model || "nvidia/nemotron-3-super-120b-a12b:free"}
                         onChange={(e) => updateField("ai_model", e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm cursor-pointer"
+                        title={AI_MODELS[settings.ai_model]?.description || ""}
                       >
-                        <option value="claude">Claude (Anthropic)</option>
-                        <option value="gpt-4o">GPT-4o (OpenAI)</option>
+                        {Object.entries(AI_MODELS).map(([id, { label }]) => (
+                          <option key={id} value={id} title={AI_MODELS[id]?.description}>
+                            {label}
+                          </option>
+                        ))}
                       </select>
+                      {/* Tooltip description for currently selected model */}
+                      {settings.ai_model && AI_MODELS[settings.ai_model] && (
+                        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+                          {AI_MODELS[settings.ai_model].description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Fallback Strategy */}
+                  <div className="border-t border-slate-700 pt-4">
+                    <h3 className="text-lg font-semibold mb-4 text-slate-200">AI Failure Handling</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-2">Fallback Strategy</label>
+                        <select
+                          value={settings.ai_fallback_strategy || "hold"}
+                          onChange={(e) => updateField("ai_fallback_strategy", e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        >
+                          <option value="hold">Hold All (Safe)</option>
+                          <option value="rule_based">Rule-Based Technical</option>
+                          <option value="pause_and_alert">Pause & Alert</option>
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1.5">
+                          {settings.ai_fallback_strategy === "rule_based"
+                            ? "Use EMA crossover + ADX + RSI rules when AI is down. May produce lower quality signals."
+                            : settings.ai_fallback_strategy === "pause_and_alert"
+                            ? "Stop all trading and send alert when AI is unavailable. Safest option."
+                            : "Return HOLD for all pairs. No trades will be placed until AI recovers."}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-2">Trade Aggressiveness</label>
+                        <div className="flex gap-2">
+                          {["conservative", "moderate", "aggressive"].map((level) => (
+                            <button
+                              key={level}
+                              onClick={() => updateField("trade_aggressiveness", level)}
+                              className={`px-4 py-2 rounded-lg text-sm font-semibold transition capitalize ${
+                                (settings.trade_aggressiveness || "moderate") === level
+                                  ? level === "aggressive"
+                                    ? "bg-red-600 text-white"
+                                    : level === "conservative"
+                                    ? "bg-emerald-600 text-white"
+                                    : "bg-forex-accent text-white"
+                                  : "bg-slate-800 text-slate-400 hover:bg-slate-700"
+                              }`}
+                            >
+                              {level}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1.5">
+                          {(settings.trade_aggressiveness || "moderate") === "aggressive"
+                            ? "Prefers action over inaction. Accepts lower confidence setups (0.40+). Wider stops. Higher trade frequency."
+                            : (settings.trade_aggressiveness || "moderate") === "conservative"
+                            ? "Only trades high-conviction setups. Requires strong multi-timeframe alignment. Prioritizes capital preservation."
+                            : "Balanced approach. Trades when indicators align with reasonable confidence (0.55+). Default setting."}
+                        </p>
+                      </div>
                     </div>
                   </div>
 

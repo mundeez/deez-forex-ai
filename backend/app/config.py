@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     META_API_TOKEN: str = ""
     META_API_ACCOUNT_ID: str = ""
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "anthropic/claude-sonnet-4.5"
+    OPENROUTER_MODEL: str = "nvidia/nemotron-3-super-120b-a12b:free"
     NEWS_API_KEY: str = ""
     FRED_API_KEY: str = ""
 

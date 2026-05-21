@@ -56,6 +56,16 @@ class NotificationService:
         await self._load_settings(db)
         await self._send_all(f"{title}\n{body}", title=title)
 
+    async def send_system_alert(self, db, title: str, message: str, severity: str = "warning"):
+        """Send a system-level alert (AI down, API failures, etc.)."""
+        await self._load_settings(db)
+        severity_emoji = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️"}.get(severity, "⚠️")
+        msg = (
+            f"{severity_emoji} [{severity.upper()}] {title}\n"
+            f"{message}"
+        )
+        await self._send_all(msg, title=f"[{severity.upper()}] {title}")
+
     async def _send_all(self, text: str, title: str = "Deez Forex AI Alert"):
         tasks = []
         if self.discord_webhook:

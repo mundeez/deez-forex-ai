@@ -97,6 +97,86 @@ async def _resolve_strategy_mode(db, aggregator: AnalysisAggregator) -> str:
     return "swing"
 
 
+# Health tracking for system monitoring
+_health_state = {
+    "ai_available": True,
+    "last_successful_analysis": None,
+    "last_error": None,
+    "consecutive_ai_failures": 0,
+}
+
+
+def get_health_state() -> dict:
+    return dict(_health_state)
+
+
+def _generate_rule_based_decision(analysis: Dict[str, Any], strategy_mode: str) -> Any:
+    """Generate a trade decision using technical rules only (no AI).
+    Used as fallback when AI is unavailable and fallback_strategy == 'rule_based'.
+    """
+    from app.ai.openrouter_client import TradeDecision
+    tech = analysis.get("technical", {})
+    tfs = tech.get("timeframes", {})
+    symbol = analysis.get("symbol", "EURUSD")
+
+    # Find the primary timeframe for this strategy
+    if strategy_mode == "scalping":
+        primary_tf = tfs.get("1m", {}) or tfs.get("5m", {})
+    elif strategy_mode == "day_trading":
+        primary_tf = tfs.get("15m", {}) or tfs.get("5m", {})
+    else:
+        primary_tf = tfs.get("1h", {}) or tfs.get("4h", {})
+
+    ind = primary_tf.get("indicators", {})
+    signal = primary_tf.get("signal", "neutral")
+    confidence = primary_tf.get("confidence", 0.3)
+    ema9 = ind.get("ema_9", 0)
+    ema21 = ind.get("ema_21", 0)
+    adx = ind.get("adx_14", 0)
+    rsi = ind.get("rsi_14", 50)
+    atr = ind.get("atr_14", 0)
+    close = primary_tf.get("close") or ind.get("close", 1.0)
+    support = primary_tf.get("support", close * 0.995)
+    resistance = primary_tf.get("resistance", close * 1.005)
+
+    # Rule-based decision logic
+    decision = "HOLD"
+    entry = close
+    sl = 0.0
+    tp = 0.0
+    rationale = ""
+
+    if adx >= 20 and ema9 > 0 and ema21 > 0:
+        if ema9 > ema21 and signal == "bullish" and rsi < 70:
+            decision = "BUY"
+            sl = max(support, close - atr * 1.5)
+            tp = min(resistance, close + atr * 2.5)
+            rationale = f"Rule-based BUY: EMA9({ema9:.5f})>EMA21({ema21:.5f}), ADX={adx:.0f}, RSI={rsi:.0f}, ATR={atr:.5f}"
+        elif ema9 < ema21 and signal == "bearish" and rsi > 30:
+            decision = "SELL"
+            sl = min(resistance, close + atr * 1.5)
+            tp = max(support, close - atr * 2.5)
+            rationale = f"Rule-based SELL: EMA9({ema9:.5f})<EMA21({ema21:.5f}), ADX={adx:.0f}, RSI={rsi:.0f}, ATR={atr:.5f}"
+    else:
+        rationale = f"Rule-based HOLD: ADX={adx:.0f} (<20 no trend), EMA alignment inconclusive"
+
+    if not rationale:
+        rationale = f"Rule-based {decision}: signal={signal}, confidence={confidence:.0%}"
+
+    return TradeDecision(
+        decision=decision,
+        confidence=confidence,
+        timeframe="M5" if strategy_mode == "scalping" else "H1",
+        entry_price=round(entry, 5),
+        stop_loss=round(sl, 5) if sl else round(entry * 0.998, 5),
+        take_profit=round(tp, 5) if tp else round(entry * 1.002, 5),
+        position_size_pct=1.0,
+        risk_reward=round(abs(tp - entry) / max(abs(entry - sl), 0.00001), 2) if sl and tp else 1.0,
+        rationale=rationale,
+        symbol=symbol,
+    )
+
+
 @celery_app.task
 def run_full_analysis():
     async def _analyze():
@@ -184,16 +264,65 @@ def run_full_analysis():
 
             # Use batched AI prompt if enabled and multiple pairs
             batched_enabled = await get_setting_bool(db, "batched_ai_enabled")
+            ai_model = await get_setting(db, "ai_model") or settings.OPENROUTER_MODEL
+            aggressiveness = await get_setting(db, "trade_aggressiveness") or "moderate"
             decisions_map = {}
+            ai_error_occurred = False
+            ai_error_message = ""
 
-            if batched_enabled and len(allowed_analyses) > 1:
-                batched_decisions = await ai.get_batched_trade_decisions(allowed_analyses, strategy_mode=strategy_mode)
-                for analysis, decision in zip(allowed_analyses, batched_decisions):
-                    decisions_map[analysis["symbol"]] = decision
-            else:
+            try:
+                if batched_enabled and len(allowed_analyses) > 1:
+                    batched_decisions = await ai.get_batched_trade_decisions(
+                        allowed_analyses, strategy_mode=strategy_mode,
+                        model_override=ai_model, aggressiveness=aggressiveness,
+                    )
+                    for analysis, decision in zip(allowed_analyses, batched_decisions):
+                        decisions_map[analysis["symbol"]] = decision
+                else:
+                    for analysis in allowed_analyses:
+                        decision = await ai.get_trade_decision(
+                            analysis, strategy_mode=strategy_mode,
+                            model_override=ai_model, aggressiveness=aggressiveness,
+                        )
+                        decisions_map[analysis["symbol"]] = decision
+            except Exception as e:
+                logger.error("AI decision failed: %s", e, exc_info=True)
+                ai_error_occurred = True
+                ai_error_message = str(e)
+                # Fallback: generate HOLD decisions for all allowed pairs
+                fallback_strategy = await get_setting(db, "ai_fallback_strategy") or "hold"
                 for analysis in allowed_analyses:
-                    decision = await ai.get_trade_decision(analysis, strategy_mode=strategy_mode)
-                    decisions_map[analysis["symbol"]] = decision
+                    symbol = analysis["symbol"]
+                    if fallback_strategy == "rule_based":
+                        decision = _generate_rule_based_decision(analysis, strategy_mode)
+                    else:
+                        decision = ai._fallback_decision(analysis, strategy_mode)
+                    decision.rationale = f"[AI UNAVAILABLE: {ai_error_message[:120]}] {decision.rationale}"
+                    decisions_map[symbol] = decision
+
+            # Update health state
+            _health_state["ai_available"] = not ai_error_occurred
+            _health_state["last_error"] = ai_error_message if ai_error_occurred else None
+            if not ai_error_occurred:
+                _health_state["last_successful_analysis"] = datetime.utcnow().isoformat()
+                _health_state["consecutive_ai_failures"] = 0
+            else:
+                _health_state["consecutive_ai_failures"] += 1
+
+            # Notify on consecutive AI failures
+            if _health_state["consecutive_ai_failures"] >= 3:
+                try:
+                    await notifier.send_system_alert(
+                        db,
+                        title="AI Service Unavailable",
+                        message=f"OpenRouter API has failed {_health_state['consecutive_ai_failures']} consecutive times. "
+                                f"Last error: {ai_error_message[:200]}. "
+                                f"Fallback strategy: {fallback_strategy if ai_error_occurred else 'N/A'}. "
+                                f"Check OpenRouter credits at https://openrouter.ai/keys",
+                        severity="critical",
+                    )
+                except Exception:
+                    logger.warning("Failed to send system alert notification", exc_info=True)
 
             # Process decisions
             for analysis in allowed_analyses:
@@ -254,6 +383,9 @@ def run_full_analysis():
                     "manual_override": manual_override,
                     "strategy_mode": strategy_mode,
                 })
+
+                if decision.decision not in ("BUY", "SELL"):
+                    logger.info("[AUDIT] %s: AI=HOLD(%.2f) — no trade signal", symbol, decision.confidence)
 
                 if decision.decision in ("BUY", "SELL") and not manual_override:
                     ok, reason = await risk.validate_ai_decision(db, decision)
@@ -350,12 +482,25 @@ def run_full_analysis():
                                 )
                             except Exception:
                                 logger.warning("Failed to send trade opened notification", exc_info=True)
+
+                            # Audit log: trade executed
+                            logger.info(
+                                "[AUDIT] %s: AI=%s(%.2f) → Risk=OK → SL/TP=OK → Spread=OK → Corr=OK → DD=OK → EXECUTED(%.3f lots, %s)",
+                                symbol, decision.decision, decision.confidence,
+                                trade.position_size, strategy_mode,
+                            )
                         else:
                             decision.decision = "HOLD"
                             decision.rationale += f" [RISK BLOCKED: {reason}]"
                             db_decision.decision = "HOLD"
                             db_decision.rationale = decision.rationale
                             await db.commit()
+
+                            # Audit log: blocked by risk checks
+                            logger.info(
+                                "[AUDIT] %s: AI=%s(%.2f) → Risk=OK → BLOCKED: %s",
+                                symbol, decision.decision, decision.confidence, reason,
+                            )
                             await broadcast_ai_decision({
                                 "id": db_decision.id,
                                 "symbol": symbol,
@@ -371,6 +516,12 @@ def run_full_analysis():
                         db_decision.decision = "HOLD"
                         db_decision.rationale = decision.rationale
                         await db.commit()
+
+                        # Audit log: blocked by initial risk validation
+                        logger.info(
+                            "[AUDIT] %s: AI=%s(%.2f) → BLOCKED: %s",
+                            symbol, decision.decision, decision.confidence, reason,
+                        )
                         await broadcast_ai_decision({
                             "id": db_decision.id,
                             "symbol": symbol,
