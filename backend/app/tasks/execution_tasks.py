@@ -5,7 +5,7 @@ from app.celery_app import celery_app
 
 logger = logging.getLogger("app.tasks.execution")
 from app.database import get_celery_session
-from app.services.execution.executor import ExecutionService
+from app.services.execution.executor import ExecutionService, compute_live_unrealized
 from app.services.notification_service import NotificationService
 from app.services.settings_service import get_setting_bool, get_setting_float
 from sqlalchemy import select, func
@@ -198,12 +198,7 @@ def update_daily_pnl():
             )
             realized = result.scalar() or 0.0
 
-            result = await db.execute(
-                select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-                    models.Trade.status == models.TradeStatus.OPEN,
-                )
-            )
-            unrealized = result.scalar() or 0.0
+            unrealized = await compute_live_unrealized(db)
 
             equity = equity_balance + realized + unrealized
 

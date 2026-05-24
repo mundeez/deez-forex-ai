@@ -31,6 +31,15 @@ export default function Home() {
 
   useEffect(() => {
     setWsUrl(getWsUrl());
+    // Hydrate provider from backend settings so it persists across reloads
+    fetch(`${API_URL}/api/v1/settings`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.data_provider) {
+          setProvider(data.data_provider);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const { prices, aiDecisions, connected } = useWebSocket(wsUrl, activePairs, provider);

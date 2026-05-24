@@ -10,6 +10,7 @@ _settings_cache: dict[str, Tuple[str, datetime]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 
 DEFAULTS = {
+    "data_provider": get_settings().DATA_PROVIDER.value,
     "max_risk_per_trade_pct": "2.0",
     "max_risk_per_trade_abs": "",
     "max_daily_loss_pct": "5.0",
@@ -135,9 +136,14 @@ async def build_settings_response(db: AsyncSession) -> dict:
     all_db = await get_all_settings(db)
     result = await db.execute(select(models.ActivePair).order_by(models.ActivePair.priority))
     pairs = result.scalars().all()
+    # data_provider: prefer DB setting, fall back to env default
+    db_provider = all_db.get("data_provider", "")
+    if db_provider not in ("metaapi", "mt5_zmq"):
+        db_provider = env.DATA_PROVIDER.value
+
     return {
         "default_pair": env.DEFAULT_PAIR,
-        "data_provider": env.DATA_PROVIDER.value,
+        "data_provider": db_provider,
         "strategy_mode": all_db.get("strategy_mode", "scalping"),
         "max_risk_per_trade_pct": float(all_db.get("max_risk_per_trade_pct", "2.0")),
         "max_risk_per_trade_abs": float(all_db.get("max_risk_per_trade_abs", "0")) if all_db.get("max_risk_per_trade_abs") else None,

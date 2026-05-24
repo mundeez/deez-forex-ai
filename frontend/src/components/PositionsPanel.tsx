@@ -36,7 +36,7 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
     fetchSettings();
     const interval = setInterval(() => {
       fetchPositions();
-    }, 10000);
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 

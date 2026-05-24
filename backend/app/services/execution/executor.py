@@ -15,6 +15,60 @@ settings = get_settings()
 logger = logging.getLogger("app.services.execution")
 
 
+async def compute_live_unrealized(db: AsyncSession) -> float:
+    """Calculate live unrealized P&L for all open trades using current market prices."""
+    from app.services.data.metaapi_client import MetaApiClient
+    from app.services.data.mt5_zmq_client import MT5ZMQClient
+
+    result = await db.execute(
+        select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN)
+    )
+    open_trades = result.scalars().all()
+    if not open_trades:
+        return 0.0
+
+    # Batch fetch prices for all open trade symbols
+    symbols = list({t.symbol for t in open_trades})
+    metaapi = MetaApiClient()
+    mt5_zmq = MT5ZMQClient()
+    client = mt5_zmq if settings.DATA_PROVIDER == DataProvider.MT5_ZMQ else metaapi
+    other = metaapi if client == mt5_zmq else mt5_zmq
+
+    import asyncio
+    coros = [client.get_current_price(s) for s in symbols]
+    results = await asyncio.gather(*coros, return_exceptions=True)
+    prices_map = {}
+    for sym, res in zip(symbols, results):
+        if isinstance(res, Exception):
+            logger.warning("Primary price fetch failed for unrealized P&L %s: %s", sym, res)
+        else:
+            prices_map[sym] = res
+
+    # Fallback for missing symbols
+    missing = [s for s in symbols if s not in prices_map]
+    if missing:
+        fallback_coros = [other.get_current_price(s) for s in missing]
+        fallback_results = await asyncio.gather(*fallback_coros, return_exceptions=True)
+        for sym, res in zip(missing, fallback_results):
+            if not isinstance(res, Exception):
+                prices_map[sym] = res
+
+    total_unrealized = 0.0
+    for trade in open_trades:
+        price_data = prices_map.get(trade.symbol)
+        if not price_data:
+            continue
+        current = price_data.get("bid") if trade.direction == models.TradeDirection.SELL.value else price_data.get("ask")
+        if not current or not trade.entry_price:
+            continue
+        if trade.direction == models.TradeDirection.BUY.value:
+            pnl = (current - trade.entry_price) * (trade.position_size or 0.01) * 100000
+        else:
+            pnl = (trade.entry_price - current) * (trade.position_size or 0.01) * 100000
+        total_unrealized += pnl
+    return total_unrealized
+
+
 class ExecutionService:
     def __init__(self):
         self.metaapi = MetaApiClient()

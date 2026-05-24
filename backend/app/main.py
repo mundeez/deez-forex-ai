@@ -22,9 +22,9 @@ from app.middleware.request_id import RequestIdMiddleware
 from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.services.data.mt5_zmq_subscriber import MT5ZMQSubscriber
-from app.services.execution.executor import ExecutionService
+from app.services.execution.executor import ExecutionService, compute_live_unrealized
 from app.services.risk.manager import RiskManager
-from app.services.settings_service import build_settings_response, set_setting, get_setting_bool, get_setting
+from app.services.settings_service import build_settings_response, set_setting, get_setting_bool, get_setting, get_setting_float
 from app.ai.openrouter_client import OpenRouterClient
 from app.analysis.aggregator import AnalysisAggregator
 from app.analysis.technical import TechnicalAnalyzer
@@ -563,12 +563,9 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
     )
     total_pnl = total_pnl_result.scalar() or 0.0
 
-    unrealized_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(models.Trade.status == models.TradeStatus.OPEN)
-    )
-    unrealized = unrealized_result.scalar() or 0.0
-
-    equity = 10000.0 + total_pnl + unrealized
+    unrealized = await compute_live_unrealized(db)
+    equity_balance = await get_setting_float(db, "equity_balance")
+    equity = equity_balance + total_pnl + unrealized
     win_rate = (wins / total_closed * 100) if total_closed > 0 else None
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
     max_dd_result = await db.execute(
@@ -657,12 +654,9 @@ async def get_trade_stats(db: AsyncSession = Depends(get_db)):
     )
     daily_pnl = daily_pnl_result.scalar() or 0.0
 
-    unrealized_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(models.Trade.status == models.TradeStatus.OPEN)
-    )
-    unrealized = unrealized_result.scalar() or 0.0
-
-    equity = 10000.0 + total_pnl + unrealized
+    unrealized = await compute_live_unrealized(db)
+    equity_balance = await get_setting_float(db, "equity_balance")
+    equity = equity_balance + total_pnl + unrealized
     win_rate = (wins / total_closed * 100) if total_closed > 0 else None
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
 
@@ -676,6 +670,33 @@ async def get_trade_stats(db: AsyncSession = Depends(get_db)):
         "losing_trades": losses,
         "win_rate": round(win_rate, 2) if win_rate is not None else None,
         "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
+    }
+
+
+@app.get("/api/v1/portfolio/daily")
+async def get_daily_pnl_history(
+    days: int = 30,
+    db: AsyncSession = Depends(get_db)
+):
+    """Return daily P&L history from the DailyPnl table."""
+    since = datetime.utcnow() - timedelta(days=days)
+    result = await db.execute(
+        select(models.DailyPnl)
+        .where(models.DailyPnl.date >= since)
+        .order_by(desc(models.DailyPnl.date))
+    )
+    records = result.scalars().all()
+    return {
+        "records": [
+            {
+                "date": r.date.isoformat(),
+                "symbol": r.symbol,
+                "realized_pnl": round(r.realized_pnl, 2),
+                "unrealized_pnl": round(r.unrealized_pnl, 2),
+                "equity": round(r.equity, 2) if r.equity else None,
+            }
+            for r in records
+        ]
     }
 
 

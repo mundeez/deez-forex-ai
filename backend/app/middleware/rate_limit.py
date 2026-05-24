@@ -20,7 +20,7 @@ DEFAULT_LIMIT = 100  # 100 requests per minute default
 LIMITS: list[Tuple[int, str]] = [
     (10, "/api/v1/settings"),      # Settings changes: 10/min
     (5, "/api/v1/trades"),         # Trade execution: 5/min
-    (5, "/api/v1/positions"),      # Position close: 5/min
+    (30, "/api/v1/positions"),     # Positions read: 30/min
     (5, "/api/v1/ai/analyze"),     # AI analysis trigger: 5/min
     (30, "/api/v1/market"),        # Market data: 30/min
 ]

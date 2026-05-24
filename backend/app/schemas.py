@@ -261,6 +261,7 @@ class AppSettingsOut(BaseModel):
 
 
 class AppSettingsUpdate(BaseModel):
+    data_provider: Optional[str] = None
     strategy_mode: Optional[str] = None
     max_risk_per_trade_pct: Optional[float] = Field(None, ge=0.1, le=50.0)
     max_risk_per_trade_abs: Optional[float] = Field(None, ge=0.0)
