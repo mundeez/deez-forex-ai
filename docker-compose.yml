@@ -65,7 +65,7 @@ services:
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "28000:8000"
@@ -99,7 +99,7 @@ services:
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -131,7 +131,7 @@ services:
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       postgres:

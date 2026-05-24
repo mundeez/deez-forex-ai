@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { API_URL } from "@/utils/api";
 import Header from "@/components/Header";
 import ChartPanel from "@/components/ChartPanel";
 import MarketInfoBar from "@/components/MarketInfoBar";
