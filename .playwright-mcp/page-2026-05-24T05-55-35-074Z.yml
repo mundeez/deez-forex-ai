@@ -1,0 +1,79 @@
+- generic [ref=e2]:
+  - combobox "Select language" [ref=e4] [cursor=pointer]:
+    - option "English" [selected]
+    - option "Bemba"
+    - option "Nyanja"
+    - option "Tonga"
+    - option "Lozi"
+    - option "Kaonde"
+    - option "Lunda"
+    - option "Luvale"
+  - main [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]:
+          - heading "Election Dashboard" [level=1] [ref=e9]
+          - paragraph [ref=e10]: Cross-tenant view
+        - generic [ref=e11]:
+          - combobox [ref=e12]
+          - button "Download" [ref=e14] [cursor=pointer]
+          - button "Refresh" [ref=e15] [cursor=pointer]
+          - button "Logout" [ref=e16] [cursor=pointer]
+      - generic [ref=e18]:
+        - generic [ref=e19]:
+          - generic [ref=e20]: Province
+          - combobox [ref=e21]:
+            - option "All" [selected]
+        - generic [ref=e22]:
+          - generic [ref=e23]: District
+          - combobox [ref=e24]:
+            - option "All" [selected]
+        - generic [ref=e25]:
+          - generic [ref=e26]: Constituency
+          - combobox [ref=e27]:
+            - option "All" [selected]
+        - generic [ref=e28]:
+          - generic [ref=e29]: Ward
+          - combobox [ref=e30]:
+            - option "All" [selected]
+        - generic [ref=e31]:
+          - generic [ref=e32]: Polling Station
+          - combobox [ref=e33]:
+            - option "All" [selected]
+        - button "Reset" [ref=e34] [cursor=pointer]
+      - generic [ref=e36]:
+        - generic [ref=e37]:
+          - paragraph [ref=e38]: Reporting Rate
+          - paragraph [ref=e39]: 0.0%
+          - paragraph [ref=e40]: 0 / 0 Stations
+        - generic [ref=e41]:
+          - paragraph [ref=e42]: Total Votes
+          - paragraph [ref=e43]: "0"
+          - paragraph [ref=e44]: dashboard.votesCast
+        - generic [ref=e45]:
+          - paragraph [ref=e46]: Voter Turnout
+          - paragraph [ref=e47]: 0.0%
+          - paragraph [ref=e48]: 0 Registered Voters
+        - generic [ref=e49]:
+          - paragraph [ref=e50]: Verified
+          - paragraph [ref=e51]: "0"
+          - paragraph [ref=e52]: Results
+        - generic [ref=e53]:
+          - paragraph [ref=e54]: Locked
+          - paragraph [ref=e55]: "0"
+          - paragraph [ref=e56]: Results
+        - generic [ref=e57]:
+          - paragraph [ref=e58]: Pending
+          - paragraph [ref=e59]: "0"
+          - paragraph [ref=e60]: Results
+      - generic [ref=e64]:
+        - generic [ref=e66]:
+          - generic [ref=e67]: 📭
+          - paragraph [ref=e68]: No results found.
+        - generic [ref=e70]:
+          - generic [ref=e71]: 📭
+          - paragraph [ref=e72]: No items.
+      - heading "Finalized Results" [level=2] [ref=e77]
+      - generic [ref=e78]:
+        - generic [ref=e79]: 📭
+        - paragraph [ref=e80]: No finalized results yet.

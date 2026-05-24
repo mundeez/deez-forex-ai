@@ -1,0 +1,372 @@
+- generic [ref=e2]:
+  - combobox "Select language" [ref=e4] [cursor=pointer]:
+    - option "English" [selected]
+    - option "Bemba"
+    - option "Nyanja"
+    - option "Tonga"
+    - option "Lozi"
+    - option "Kaonde"
+    - option "Lunda"
+    - option "Luvale"
+  - main [ref=e21]:
+    - generic [ref=e22]:
+      - heading "Supad Admin Console" [level=1] [ref=e23]
+      - paragraph [ref=e24]: Live operational telemetry for global administration and tenant lifecycle management.
+      - generic [ref=e25]:
+        - button "Refresh" [ref=e26] [cursor=pointer]
+        - button "Logout" [ref=e27] [cursor=pointer]
+      - generic [ref=e28]:
+        - article [ref=e29]:
+          - paragraph [ref=e30]: Backend Health
+          - paragraph [ref=e31]: ok
+        - article [ref=e32]:
+          - paragraph [ref=e33]: Total Requests
+          - paragraph [ref=e34]: 3,010
+        - article [ref=e35]:
+          - paragraph [ref=e36]: 401 Total Requests
+          - paragraph [ref=e37]: "35"
+        - article [ref=e38]:
+          - paragraph [ref=e39]: 5xx Total Requests
+          - paragraph [ref=e40]: "1"
+        - article [ref=e41]:
+          - paragraph [ref=e42]: Mean Latency
+          - paragraph [ref=e43]: 0.8 ms
+        - article [ref=e44]:
+          - paragraph [ref=e45]: Tenants
+          - paragraph [ref=e46]: "3"
+        - article [ref=e47]:
+          - paragraph [ref=e48]: Active Tenants
+          - paragraph [ref=e49]: "3"
+        - article [ref=e50]:
+          - paragraph [ref=e51]: Tenant Admin Users
+          - paragraph [ref=e52]: "2"
+      - generic [ref=e53]:
+        - heading "Top Request Paths" [level=2] [ref=e54]
+        - paragraph [ref=e55]: "Derived from `paravotab_http_requests_total` on `/api/metrics`."
+        - table [ref=e57]:
+          - rowgroup [ref=e58]:
+            - row "Method Path Status Count" [ref=e59]:
+              - columnheader "Method" [ref=e60]
+              - columnheader "Path" [ref=e61]
+              - columnheader "Status" [ref=e62]
+              - columnheader "Count" [ref=e63]
+          - rowgroup [ref=e64]:
+            - row "GET /healthz 200 2,914" [ref=e65]:
+              - cell "GET" [ref=e66]
+              - cell "/healthz" [ref=e67]
+              - cell "200" [ref=e68]
+              - cell "2,914" [ref=e69]
+            - row "GET /v1/supad/tenants 200 8" [ref=e70]:
+              - cell "GET" [ref=e71]
+              - cell "/v1/supad/tenants" [ref=e72]
+              - cell "200" [ref=e73]
+              - cell "8" [ref=e74]
+            - row "GET /metrics 200 5" [ref=e75]:
+              - cell "GET" [ref=e76]
+              - cell "/metrics" [ref=e77]
+              - cell "200" [ref=e78]
+              - cell "5" [ref=e79]
+            - row "GET /v1/supad/tenants/kulika/dashboard/geography-tree 401 4" [ref=e80]:
+              - cell "GET" [ref=e81]
+              - cell "/v1/supad/tenants/kulika/dashboard/geography-tree" [ref=e82]
+              - cell "401" [ref=e83]
+              - cell "4" [ref=e84]
+            - row "GET /v1/supad/tenants/kulika/dashboard/map-data 401 4" [ref=e85]:
+              - cell "GET" [ref=e86]
+              - cell "/v1/supad/tenants/kulika/dashboard/map-data" [ref=e87]
+              - cell "401" [ref=e88]
+              - cell "4" [ref=e89]
+            - row "GET /v1/supad/tenants/kulika/dashboard/trends 401 4" [ref=e90]:
+              - cell "GET" [ref=e91]
+              - cell "/v1/supad/tenants/kulika/dashboard/trends" [ref=e92]
+              - cell "401" [ref=e93]
+              - cell "4" [ref=e94]
+            - row "GET /v1/supad/tenants 401 4" [ref=e95]:
+              - cell "GET" [ref=e96]
+              - cell "/v1/supad/tenants" [ref=e97]
+              - cell "401" [ref=e98]
+              - cell "4" [ref=e99]
+            - row "POST /route 404 4" [ref=e100]:
+              - cell "POST" [ref=e101]
+              - cell "/route" [ref=e102]
+              - cell "404" [ref=e103]
+              - cell "4" [ref=e104]
+        - paragraph [ref=e105]: "Snapshot captured: 5/24/2026, 5:50:19 AM"
+      - generic [ref=e106]:
+        - heading "Tenant Lifecycle Management" [level=2] [ref=e107]
+        - generic [ref=e108]:
+          - textbox "Tenant Slug" [ref=e109]
+          - textbox "Tenant Name" [ref=e110]
+          - textbox "Admin Email" [ref=e111]
+          - textbox "Background Color" [ref=e112]: "#0b1020"
+          - textbox "Accent Color" [ref=e113]: "#60a5fa"
+        - button "Create Tenant" [ref=e114] [cursor=pointer]
+        - table [ref=e116]:
+          - rowgroup [ref=e117]:
+            - row "Tenant Status Users Updated At Action" [ref=e118]:
+              - columnheader "Tenant" [ref=e119]
+              - columnheader "Status" [ref=e120]
+              - columnheader "Users" [ref=e121]
+              - columnheader "Updated At" [ref=e122]
+              - columnheader "Action" [ref=e123]
+          - rowgroup [ref=e124]:
+            - row "Kulika Fela Party kulika kulika.paravotab.deeztechnology.solutions active 1 5/5/2026, 11:19:00 AM Activate Suspend" [ref=e125]:
+              - cell "Kulika Fela Party kulika kulika.paravotab.deeztechnology.solutions" [ref=e126]:
+                - paragraph [ref=e127]: Kulika Fela Party
+                - paragraph [ref=e128]: kulika
+                - paragraph [ref=e129]: kulika.paravotab.deeztechnology.solutions
+              - cell "active" [ref=e130]
+              - cell "1" [ref=e131]
+              - cell "5/5/2026, 11:19:00 AM" [ref=e132]
+              - cell "Activate Suspend" [ref=e133]:
+                - generic [ref=e134]:
+                  - button "Activate" [ref=e135] [cursor=pointer]
+                  - button "Suspend" [ref=e136] [cursor=pointer]
+            - row "Postgres Persist Tenant persistpg persistpg.paravotab.deeztechnology.solutions active 1 3/20/2026, 5:26:05 AM Activate Suspend" [ref=e137]:
+              - cell "Postgres Persist Tenant persistpg persistpg.paravotab.deeztechnology.solutions" [ref=e138]:
+                - paragraph [ref=e139]: Postgres Persist Tenant
+                - paragraph [ref=e140]: persistpg
+                - paragraph [ref=e141]: persistpg.paravotab.deeztechnology.solutions
+              - cell "active" [ref=e142]
+              - cell "1" [ref=e143]
+              - cell "3/20/2026, 5:26:05 AM" [ref=e144]
+              - cell "Activate Suspend" [ref=e145]:
+                - generic [ref=e146]:
+                  - button "Activate" [ref=e147] [cursor=pointer]
+                  - button "Suspend" [ref=e148] [cursor=pointer]
+            - row "System / Global system system.paravotab.deeztechnology.solutions active 0 5/16/2026, 6:57:29 AM Activate Suspend" [ref=e149]:
+              - cell "System / Global system system.paravotab.deeztechnology.solutions" [ref=e150]:
+                - paragraph [ref=e151]: System / Global
+                - paragraph [ref=e152]: system
+                - paragraph [ref=e153]: system.paravotab.deeztechnology.solutions
+              - cell "active" [ref=e154]
+              - cell "0" [ref=e155]
+              - cell "5/16/2026, 6:57:29 AM" [ref=e156]
+              - cell "Activate Suspend" [ref=e157]:
+                - generic [ref=e158]:
+                  - button "Activate" [ref=e159] [cursor=pointer]
+                  - button "Suspend" [ref=e160] [cursor=pointer]
+      - generic [ref=e161]:
+        - heading "Global User Oversight" [level=2] [ref=e162]
+        - paragraph [ref=e163]: Supad can activate/suspend users across all tenants.
+        - table [ref=e165]:
+          - rowgroup [ref=e166]:
+            - row "User Tenant Role Status Action" [ref=e167]:
+              - columnheader "User" [ref=e168]
+              - columnheader "Tenant" [ref=e169]
+              - columnheader "Role" [ref=e170]
+              - columnheader "Status" [ref=e171]
+              - columnheader "Action" [ref=e172]
+          - rowgroup [ref=e173]:
+            - row "kulika@deeztechnology.solutions user-416a4bd80665 kulika data-entry active Activate Suspend" [ref=e174]:
+              - cell "kulika@deeztechnology.solutions user-416a4bd80665" [ref=e175]:
+                - paragraph [ref=e176]: kulika@deeztechnology.solutions
+                - paragraph [ref=e177]: user-416a4bd80665
+              - cell "kulika" [ref=e178]
+              - cell "data-entry" [ref=e179]
+              - cell "active" [ref=e180]
+              - cell "Activate Suspend" [ref=e181]:
+                - generic [ref=e182]:
+                  - button "Activate" [ref=e183] [cursor=pointer]
+                  - button "Suspend" [ref=e184] [cursor=pointer]
+            - row "lika_usera@email.com user-f57f53d66658 kulika auditor active Activate Suspend" [ref=e185]:
+              - cell "lika_usera@email.com user-f57f53d66658" [ref=e186]:
+                - paragraph [ref=e187]: lika_usera@email.com
+                - paragraph [ref=e188]: user-f57f53d66658
+              - cell "kulika" [ref=e189]
+              - cell "auditor" [ref=e190]
+              - cell "active" [ref=e191]
+              - cell "Activate Suspend" [ref=e192]:
+                - generic [ref=e193]:
+                  - button "Activate" [ref=e194] [cursor=pointer]
+                  - button "Suspend" [ref=e195] [cursor=pointer]
+            - row "lika_usero user-c5970c78f667 kulika observer active Activate Suspend" [ref=e196]:
+              - cell "lika_usero user-c5970c78f667" [ref=e197]:
+                - paragraph [ref=e198]: lika_usero
+                - paragraph [ref=e199]: user-c5970c78f667
+              - cell "kulika" [ref=e200]
+              - cell "observer" [ref=e201]
+              - cell "active" [ref=e202]
+              - cell "Activate Suspend" [ref=e203]:
+                - generic [ref=e204]:
+                  - button "Activate" [ref=e205] [cursor=pointer]
+                  - button "Suspend" [ref=e206] [cursor=pointer]
+            - row "lika_userv@email.com user-4a43fa859bf7 kulika verifier active Activate Suspend" [ref=e207]:
+              - cell "lika_userv@email.com user-4a43fa859bf7" [ref=e208]:
+                - paragraph [ref=e209]: lika_userv@email.com
+                - paragraph [ref=e210]: user-4a43fa859bf7
+              - cell "kulika" [ref=e211]
+              - cell "verifier" [ref=e212]
+              - cell "active" [ref=e213]
+              - cell "Activate Suspend" [ref=e214]:
+                - generic [ref=e215]:
+                  - button "Activate" [ref=e216] [cursor=pointer]
+                  - button "Suspend" [ref=e217] [cursor=pointer]
+            - row "lika_user1@email.com user-64804440d6ee kulika data-entry active Activate Suspend" [ref=e218]:
+              - cell "lika_user1@email.com user-64804440d6ee" [ref=e219]:
+                - paragraph [ref=e220]: lika_user1@email.com
+                - paragraph [ref=e221]: user-64804440d6ee
+              - cell "kulika" [ref=e222]
+              - cell "data-entry" [ref=e223]
+              - cell "active" [ref=e224]
+              - cell "Activate Suspend" [ref=e225]:
+                - generic [ref=e226]:
+                  - button "Activate" [ref=e227] [cursor=pointer]
+                  - button "Suspend" [ref=e228] [cursor=pointer]
+            - row "mundeez@gmail.com user-kulika-admin tenant-kulika tenant-admin active Activate Suspend" [ref=e229]:
+              - cell "mundeez@gmail.com user-kulika-admin" [ref=e230]:
+                - paragraph [ref=e231]: mundeez@gmail.com
+                - paragraph [ref=e232]: user-kulika-admin
+              - cell "tenant-kulika" [ref=e233]
+              - cell "tenant-admin" [ref=e234]
+              - cell "active" [ref=e235]
+              - cell "Activate Suspend" [ref=e236]:
+                - generic [ref=e237]:
+                  - button "Activate" [ref=e238] [cursor=pointer]
+                  - button "Suspend" [ref=e239] [cursor=pointer]
+            - row "admin@persistpg.party user-persistpg-admin tenant-persistpg tenant-admin active Activate Suspend" [ref=e240]:
+              - cell "admin@persistpg.party user-persistpg-admin" [ref=e241]:
+                - paragraph [ref=e242]: admin@persistpg.party
+                - paragraph [ref=e243]: user-persistpg-admin
+              - cell "tenant-persistpg" [ref=e244]
+              - cell "tenant-admin" [ref=e245]
+              - cell "active" [ref=e246]
+              - cell "Activate Suspend" [ref=e247]:
+                - generic [ref=e248]:
+                  - button "Activate" [ref=e249] [cursor=pointer]
+                  - button "Suspend" [ref=e250] [cursor=pointer]
+      - generic [ref=e251]:
+        - heading "Cross-Tenant Audit Viewer" [level=2] [ref=e252]
+        - generic [ref=e253]:
+          - textbox "Filter by tenant_id" [ref=e254]
+          - textbox "Filter by actor ID" [ref=e255]
+          - textbox "Filter by action" [ref=e256]
+        - table [ref=e258]:
+          - rowgroup [ref=e259]:
+            - row "When Tenant Actor Action Entity Hash" [ref=e260]:
+              - columnheader "When" [ref=e261]
+              - columnheader "Tenant" [ref=e262]
+              - columnheader "Actor" [ref=e263]
+              - columnheader "Action" [ref=e264]
+              - columnheader "Entity" [ref=e265]
+              - columnheader "Hash" [ref=e266]
+          - rowgroup [ref=e267]:
+            - 'row "5/23/2026, 12:46:53 PM tenant-kulika user-supad-test export election_data: a0f9b1f3cdc7903ed473716d1be5ccb470b114958af8d344f2e0d641c3aabc07" [ref=e268]':
+              - cell "5/23/2026, 12:46:53 PM" [ref=e269]
+              - cell "tenant-kulika" [ref=e270]
+              - cell "user-supad-test" [ref=e271]
+              - cell "export" [ref=e272]
+              - cell "election_data:" [ref=e273]
+              - cell "a0f9b1f3cdc7903ed473716d1be5ccb470b114958af8d344f2e0d641c3aabc07" [ref=e274]
+            - row "5/17/2026, 11:24:50 AM kulika demo-user tenant.user.update_scope tenant_user:user-416a4bd80665 80be0836be42529e021d121a9effeab269f868e516e129a7640fc6f119f5fdbb" [ref=e275]:
+              - cell "5/17/2026, 11:24:50 AM" [ref=e276]
+              - cell "kulika" [ref=e277]
+              - cell "demo-user" [ref=e278]
+              - cell "tenant.user.update_scope" [ref=e279]
+              - cell "tenant_user:user-416a4bd80665" [ref=e280]
+              - cell "80be0836be42529e021d121a9effeab269f868e516e129a7640fc6f119f5fdbb" [ref=e281]
+            - row "5/17/2026, 11:24:35 AM kulika demo-user tenant.user.create tenant_user:user-416a4bd80665 9f43b370c8a3ec185652cf26921e8b22a064def7a5ec714f5746e3bf16785e7f" [ref=e282]:
+              - cell "5/17/2026, 11:24:35 AM" [ref=e283]
+              - cell "kulika" [ref=e284]
+              - cell "demo-user" [ref=e285]
+              - cell "tenant.user.create" [ref=e286]
+              - cell "tenant_user:user-416a4bd80665" [ref=e287]
+              - cell "9f43b370c8a3ec185652cf26921e8b22a064def7a5ec714f5746e3bf16785e7f" [ref=e288]
+            - row "5/16/2026, 8:30:07 PM kulika demo-user supad.user.update tenant_user:user-64804440d6ee af2a05e50fde76fb416e2fc1382f3967d4d26de520cb347abc6f4b890d8d1389" [ref=e289]:
+              - cell "5/16/2026, 8:30:07 PM" [ref=e290]
+              - cell "kulika" [ref=e291]
+              - cell "demo-user" [ref=e292]
+              - cell "supad.user.update" [ref=e293]
+              - cell "tenant_user:user-64804440d6ee" [ref=e294]
+              - cell "af2a05e50fde76fb416e2fc1382f3967d4d26de520cb347abc6f4b890d8d1389" [ref=e295]
+            - row "5/16/2026, 8:29:59 PM kulika demo-user supad.user.update tenant_user:user-64804440d6ee 1389ab4db5f2423d3cbaceeeb1b8c7c901bc57cf41cfa127a05d723e059a15d9" [ref=e296]:
+              - cell "5/16/2026, 8:29:59 PM" [ref=e297]
+              - cell "kulika" [ref=e298]
+              - cell "demo-user" [ref=e299]
+              - cell "supad.user.update" [ref=e300]
+              - cell "tenant_user:user-64804440d6ee" [ref=e301]
+              - cell "1389ab4db5f2423d3cbaceeeb1b8c7c901bc57cf41cfa127a05d723e059a15d9" [ref=e302]
+            - row "5/16/2026, 2:48:53 PM kulika demo-user tenant.user.create tenant_user:user-f57f53d66658 fca621bc8a4939043a71bcddadb6f243277022ff944ccf8c75eb4ff9298a3422" [ref=e303]:
+              - cell "5/16/2026, 2:48:53 PM" [ref=e304]
+              - cell "kulika" [ref=e305]
+              - cell "demo-user" [ref=e306]
+              - cell "tenant.user.create" [ref=e307]
+              - cell "tenant_user:user-f57f53d66658" [ref=e308]
+              - cell "fca621bc8a4939043a71bcddadb6f243277022ff944ccf8c75eb4ff9298a3422" [ref=e309]
+            - row "5/16/2026, 2:48:23 PM kulika demo-user tenant.user.create tenant_user:user-c5970c78f667 2f2dc4f60d43e1f69c7b4dc85ee1c719b4b1f044147ffa6a15d6d82ce62fec27" [ref=e310]:
+              - cell "5/16/2026, 2:48:23 PM" [ref=e311]
+              - cell "kulika" [ref=e312]
+              - cell "demo-user" [ref=e313]
+              - cell "tenant.user.create" [ref=e314]
+              - cell "tenant_user:user-c5970c78f667" [ref=e315]
+              - cell "2f2dc4f60d43e1f69c7b4dc85ee1c719b4b1f044147ffa6a15d6d82ce62fec27" [ref=e316]
+            - row "5/16/2026, 2:47:56 PM kulika demo-user tenant.user.create tenant_user:user-4a43fa859bf7 eee7e9bd2fd377b2703a3f7a568019969a6bf935c5615636001f4ed2fa9ccd31" [ref=e317]:
+              - cell "5/16/2026, 2:47:56 PM" [ref=e318]
+              - cell "kulika" [ref=e319]
+              - cell "demo-user" [ref=e320]
+              - cell "tenant.user.create" [ref=e321]
+              - cell "tenant_user:user-4a43fa859bf7" [ref=e322]
+              - cell "eee7e9bd2fd377b2703a3f7a568019969a6bf935c5615636001f4ed2fa9ccd31" [ref=e323]
+            - row "5/16/2026, 2:47:21 PM kulika demo-user tenant.user.create tenant_user:user-64804440d6ee 8587605e69781db44b91e1a34ba441f6c745cff8228216b5dcd70b920acbde7a" [ref=e324]:
+              - cell "5/16/2026, 2:47:21 PM" [ref=e325]
+              - cell "kulika" [ref=e326]
+              - cell "demo-user" [ref=e327]
+              - cell "tenant.user.create" [ref=e328]
+              - cell "tenant_user:user-64804440d6ee" [ref=e329]
+              - cell "8587605e69781db44b91e1a34ba441f6c745cff8228216b5dcd70b920acbde7a" [ref=e330]
+            - row "5/15/2026, 8:44:35 PM demo-tenant demo-user result.create result:res-1 91d1bae6ed0219aa625f21902e20d7e68b94fb2f6e96f15e7bfd709e2d500085" [ref=e331]:
+              - cell "5/15/2026, 8:44:35 PM" [ref=e332]
+              - cell "demo-tenant" [ref=e333]
+              - cell "demo-user" [ref=e334]
+              - cell "result.create" [ref=e335]
+              - cell "result:res-1" [ref=e336]
+              - cell "91d1bae6ed0219aa625f21902e20d7e68b94fb2f6e96f15e7bfd709e2d500085" [ref=e337]
+            - row "5/5/2026, 11:19:00 AM supad demo-user supad.tenant.create tenant:tenant-kulika 0ed99267003269d02d9542dcaff3864941c5b7266e1a7dbf4ae3168982f4712f" [ref=e338]:
+              - cell "5/5/2026, 11:19:00 AM" [ref=e339]
+              - cell "supad" [ref=e340]
+              - cell "demo-user" [ref=e341]
+              - cell "supad.tenant.create" [ref=e342]
+              - cell "tenant:tenant-kulika" [ref=e343]
+              - cell "0ed99267003269d02d9542dcaff3864941c5b7266e1a7dbf4ae3168982f4712f" [ref=e344]
+            - row "3/20/2026, 5:26:05 AM supad demo-user supad.tenant.create tenant:tenant-persistpg 68ed78a0a148da33ded28b9c0825855785bb56852ddd1e5f93dbfab00c4e13c1" [ref=e345]:
+              - cell "3/20/2026, 5:26:05 AM" [ref=e346]
+              - cell "supad" [ref=e347]
+              - cell "demo-user" [ref=e348]
+              - cell "supad.tenant.create" [ref=e349]
+              - cell "tenant:tenant-persistpg" [ref=e350]
+              - cell "68ed78a0a148da33ded28b9c0825855785bb56852ddd1e5f93dbfab00c4e13c1" [ref=e351]
+            - row "3/20/2026, 5:24:03 AM supad demo-user supad.tenant.create tenant:tenant-persistdemo f24b0b9b6827c8e450187f4a7c1f7a479dc6e9c50f7ab3abbec78f28eae858a9" [ref=e352]:
+              - cell "3/20/2026, 5:24:03 AM" [ref=e353]
+              - cell "supad" [ref=e354]
+              - cell "demo-user" [ref=e355]
+              - cell "supad.tenant.create" [ref=e356]
+              - cell "tenant:tenant-persistdemo" [ref=e357]
+              - cell "f24b0b9b6827c8e450187f4a7c1f7a479dc6e9c50f7ab3abbec78f28eae858a9" [ref=e358]
+            - row "3/19/2026, 6:43:46 PM supad demo-user supad.tenant.update tenant:tenant-demo 3d2ece1d2bca7a0a7da05ed3d9091fc3787821e782e4f899707747dcec5bbb04" [ref=e359]:
+              - cell "3/19/2026, 6:43:46 PM" [ref=e360]
+              - cell "supad" [ref=e361]
+              - cell "demo-user" [ref=e362]
+              - cell "supad.tenant.update" [ref=e363]
+              - cell "tenant:tenant-demo" [ref=e364]
+              - cell "3d2ece1d2bca7a0a7da05ed3d9091fc3787821e782e4f899707747dcec5bbb04" [ref=e365]
+            - row "3/19/2026, 6:43:45 PM supad demo-user supad.tenant.create tenant:tenant-opsdemo 49968c76f0da84c73067fa3475d1f47cd067354308510aca1fd681b4b9349bf8" [ref=e366]:
+              - cell "3/19/2026, 6:43:45 PM" [ref=e367]
+              - cell "supad" [ref=e368]
+              - cell "demo-user" [ref=e369]
+              - cell "supad.tenant.create" [ref=e370]
+              - cell "tenant:tenant-opsdemo" [ref=e371]
+              - cell "49968c76f0da84c73067fa3475d1f47cd067354308510aca1fd681b4b9349bf8" [ref=e372]
+            - row "3/19/2026, 6:41:10 PM supad demo-user supad.tenant.create tenant:tenant-demo 9db35fa8020aee297b6cce0ca8f0811942ae424cb7ed8a1f628e77825f22103f" [ref=e373]:
+              - cell "3/19/2026, 6:41:10 PM" [ref=e374]
+              - cell "supad" [ref=e375]
+              - cell "demo-user" [ref=e376]
+              - cell "supad.tenant.create" [ref=e377]
+              - cell "tenant:tenant-demo" [ref=e378]
+              - cell "9db35fa8020aee297b6cce0ca8f0811942ae424cb7ed8a1f628e77825f22103f" [ref=e379]
+            - row "3/19/2026, 6:09:34 PM supad demo-user supad.tenant.create tenant:tenant-upnd 9e08f0eeed36aaeea46764d8f1decf8efedd2a726f68507cf1cf2837f4fc2a49" [ref=e380]:
+              - cell "3/19/2026, 6:09:34 PM" [ref=e381]
+              - cell "supad" [ref=e382]
+              - cell "demo-user" [ref=e383]
+              - cell "supad.tenant.create" [ref=e384]
+              - cell "tenant:tenant-upnd" [ref=e385]
+              - cell "9e08f0eeed36aaeea46764d8f1decf8efedd2a726f68507cf1cf2837f4fc2a49" [ref=e386]

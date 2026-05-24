@@ -1,0 +1,24 @@
+- generic [ref=e2]:
+  - combobox "Select language" [ref=e4] [cursor=pointer]:
+    - option "English" [selected]
+    - option "Bemba"
+    - option "Nyanja"
+    - option "Tonga"
+    - option "Lozi"
+    - option "Kaonde"
+    - option "Lunda"
+    - option "Luvale"
+  - main [ref=e5]:
+    - generic [ref=e6]:
+      - paragraph [ref=e7]: ParaVoTab
+      - heading "Supad Login" [level=1] [ref=e8]
+      - generic [ref=e9]:
+        - generic [ref=e10]:
+          - generic [ref=e11]: Email
+          - textbox "Email" [ref=e12]
+        - generic [ref=e13]:
+          - generic [ref=e14]: Password
+          - textbox "Password" [ref=e15]
+        - button "Sign In" [ref=e16] [cursor=pointer]
+        - button "Forgot Password?" [ref=e18] [cursor=pointer]
+        - button "Continue (Demo)" [ref=e20] [cursor=pointer]

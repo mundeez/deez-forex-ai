@@ -1,0 +1,101 @@
+- generic [ref=e2]:
+  - combobox "Select language" [ref=e4] [cursor=pointer]:
+    - option "English" [selected]
+    - option "Bemba"
+    - option "Nyanja"
+    - option "Tonga"
+    - option "Lozi"
+    - option "Kaonde"
+    - option "Lunda"
+    - option "Luvale"
+  - main [ref=e5]:
+    - generic [ref=e6]:
+      - heading "Supad Admin Console" [level=1] [ref=e7]
+      - paragraph [ref=e8]: Live operational telemetry for global administration and tenant lifecycle management.
+      - generic [ref=e9]:
+        - button "Refresh" [ref=e10] [cursor=pointer]
+        - button "Logout" [ref=e11] [cursor=pointer]
+      - paragraph [ref=e12]: Loading dashboard...
+      - generic [ref=e13]:
+        - article [ref=e14]:
+          - paragraph [ref=e15]: Backend Health
+          - paragraph [ref=e16]: unknown
+        - article [ref=e17]:
+          - paragraph [ref=e18]: Total Requests
+          - paragraph [ref=e19]: "0"
+        - article [ref=e20]:
+          - paragraph [ref=e21]: 401 Total Requests
+          - paragraph [ref=e22]: "0"
+        - article [ref=e23]:
+          - paragraph [ref=e24]: 5xx Total Requests
+          - paragraph [ref=e25]: "0"
+        - article [ref=e26]:
+          - paragraph [ref=e27]: Mean Latency
+          - paragraph [ref=e28]: 0.0 ms
+        - article [ref=e29]:
+          - paragraph [ref=e30]: Tenants
+          - paragraph [ref=e31]: "0"
+        - article [ref=e32]:
+          - paragraph [ref=e33]: Active Tenants
+          - paragraph [ref=e34]: "0"
+        - article [ref=e35]:
+          - paragraph [ref=e36]: Tenant Admin Users
+          - paragraph [ref=e37]: "0"
+      - generic [ref=e38]:
+        - heading "Top Request Paths" [level=2] [ref=e39]
+        - paragraph [ref=e40]: "Derived from `paravotab_http_requests_total` on `/api/metrics`."
+        - table [ref=e42]:
+          - rowgroup [ref=e43]:
+            - row "Method Path Status Count" [ref=e44]:
+              - columnheader "Method" [ref=e45]
+              - columnheader "Path" [ref=e46]
+              - columnheader "Status" [ref=e47]
+              - columnheader "Count" [ref=e48]
+          - rowgroup
+        - paragraph [ref=e49]: "Snapshot captured: n/a"
+      - generic [ref=e50]:
+        - heading "Tenant Lifecycle Management" [level=2] [ref=e51]
+        - generic [ref=e52]:
+          - textbox "Tenant Slug" [ref=e53]
+          - textbox "Tenant Name" [ref=e54]
+          - textbox "Admin Email" [ref=e55]
+          - textbox "Background Color" [ref=e56]: "#0b1020"
+          - textbox "Accent Color" [ref=e57]: "#60a5fa"
+        - button "Create Tenant" [ref=e58] [cursor=pointer]
+        - table [ref=e60]:
+          - rowgroup [ref=e61]:
+            - row "Tenant Status Users Updated At Action" [ref=e62]:
+              - columnheader "Tenant" [ref=e63]
+              - columnheader "Status" [ref=e64]
+              - columnheader "Users" [ref=e65]
+              - columnheader "Updated At" [ref=e66]
+              - columnheader "Action" [ref=e67]
+          - rowgroup
+      - generic [ref=e68]:
+        - heading "Global User Oversight" [level=2] [ref=e69]
+        - paragraph [ref=e70]: Supad can activate/suspend users across all tenants.
+        - table [ref=e72]:
+          - rowgroup [ref=e73]:
+            - row "User Tenant Role Status Action" [ref=e74]:
+              - columnheader "User" [ref=e75]
+              - columnheader "Tenant" [ref=e76]
+              - columnheader "Role" [ref=e77]
+              - columnheader "Status" [ref=e78]
+              - columnheader "Action" [ref=e79]
+          - rowgroup
+      - generic [ref=e80]:
+        - heading "Cross-Tenant Audit Viewer" [level=2] [ref=e81]
+        - generic [ref=e82]:
+          - textbox "Filter by tenant_id" [ref=e83]
+          - textbox "Filter by actor ID" [ref=e84]
+          - textbox "Filter by action" [ref=e85]
+        - table [ref=e87]:
+          - rowgroup [ref=e88]:
+            - row "When Tenant Actor Action Entity Hash" [ref=e89]:
+              - columnheader "When" [ref=e90]
+              - columnheader "Tenant" [ref=e91]
+              - columnheader "Actor" [ref=e92]
+              - columnheader "Action" [ref=e93]
+              - columnheader "Entity" [ref=e94]
+              - columnheader "Hash" [ref=e95]
+          - rowgroup
