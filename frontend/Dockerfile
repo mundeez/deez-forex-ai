@@ -1,18 +1,20 @@
 # =============================================================================
 # deez-forex-ai Frontend Dockerfile
-# Development mode with volume mounts for hot reloading
+# Single-stage build that supports both production and development.
+# Production uses CMD ["npm", "start"]; dev overrides to "npx next dev".
 # =============================================================================
 
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies (including devDependencies for build)
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 
-# Copy source
+# Copy source and build
 COPY . .
+RUN npm run build
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -20,4 +22,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 EXPOSE 3000
 
-CMD ["npm", "run", "dev"]
+CMD ["npm", "start"]
