@@ -12,8 +12,9 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-# Copy source and build
+# Copy source, strip any local dev env files, and build
 COPY . .
+RUN rm -f .env.local .env.*.local
 RUN npm run build
 
 # Health check
