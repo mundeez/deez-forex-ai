@@ -1,7 +1,7 @@
 from typing import Any, Optional, Tuple
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app import models
 from app.config import get_settings
 
@@ -119,6 +119,12 @@ async def set_setting(db: AsyncSession, key: str, value: Any) -> None:
     else:
         row.value = str_val
     await db.commit()
+    # If equity balance changes, reset account snapshots so drawdown
+    # is recalculated from the new baseline instead of carrying an
+    # old peak_equity based on a previous balance.
+    if key == "equity_balance":
+        await db.execute(delete(models.AccountSnapshot))
+        await db.commit()
     # Invalidate cache for this key so next read gets fresh value
     _settings_cache.pop(key, None)
 

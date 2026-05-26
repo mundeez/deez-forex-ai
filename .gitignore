@@ -63,3 +63,6 @@ logs/
 backend/celerybeat-schedule
 frontend/.env.local
 celerybeat-schedule
+
+# Test virtual environments
+backend/.test-venv/
