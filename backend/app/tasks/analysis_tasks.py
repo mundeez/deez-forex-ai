@@ -173,8 +173,38 @@ def _generate_rule_based_decision(analysis: Dict[str, Any], strategy_mode: str) 
         position_size_pct=1.0,
         risk_reward=round(abs(tp - entry) / max(abs(entry - sl), 0.00001), 2) if sl and tp else 1.0,
         rationale=rationale,
+        model_used="rule_based",
         symbol=symbol,
     )
+
+
+async def _memory_guard(db, vs, analysis, decision):
+    """Soft entry guard using Qdrant retrieval of historically similar setups.
+
+    Returns (ok, reason, context_note). Vetoes the entry only when enough
+    same-direction past setups with recorded outcomes were poor; otherwise
+    returns a short note for the decision rationale.
+    """
+    if decision.decision not in ("BUY", "SELL"):
+        return True, "", ""
+    if not await get_setting_bool(db, "memory_guard_enabled"):
+        return True, "", ""
+    try:
+        similar = vs.search_similar(analysis.get("technical", {}), limit=20)
+    except Exception:
+        logger.warning("Memory guard: Qdrant search failed", exc_info=True)
+        return True, "", ""
+    same = [s for s in similar if s.get("decision") == decision.decision and s.get("outcome_pnl") is not None]
+    if len(same) < 5:
+        return True, "", ""
+    wins = sum(1 for s in same if (s.get("outcome_pnl") or 0) > 0)
+    win_rate = wins / len(same)
+    avg_pnl = sum((s.get("outcome_pnl") or 0) for s in same) / len(same)
+    ctx = f"Memory: {len(same)} similar {decision.decision} setups -> {win_rate:.0%} win, avg ${avg_pnl:.2f}"
+    min_wr = await get_setting_float(db, "memory_guard_min_winrate") or 0.35
+    if win_rate < min_wr and avg_pnl < 0:
+        return False, f"Memory guard veto: similar {decision.decision} setups historically poor ({win_rate:.0%} win, avg ${avg_pnl:.2f})", ctx
+    return True, "", ctx
 
 
 @celery_app.task
@@ -244,7 +274,7 @@ def run_full_analysis():
                         decision="HOLD",
                         confidence=0.0,
                         rationale=news_reason,
-                        model_used=settings.OPENROUTER_MODEL,
+                        model_used="",
                         provider=settings.DATA_PROVIDER.value,
                     )
                     db.add(db_decision)
@@ -266,39 +296,117 @@ def run_full_analysis():
             batched_enabled = await get_setting_bool(db, "batched_ai_enabled")
             ai_model = await get_setting(db, "ai_model") or settings.OPENROUTER_MODEL
             aggressiveness = await get_setting(db, "trade_aggressiveness") or "moderate"
+
+            # Build the model router (round-robin across free models + failover)
+            from app.ai.model_router import ModelRouter, parse_pool
+            rotation_enabled = await get_setting_bool(db, "ai_model_rotation_enabled")
+            paid_fallback_enabled = await get_setting_bool(db, "ai_paid_fallback_enabled")
+            paid_fallback = (await get_setting(db, "ai_paid_fallback_model")) if paid_fallback_enabled else None
+            router = ModelRouter(
+                free_pool=parse_pool(await get_setting(db, "ai_model_pool")),
+                paid_fallback=paid_fallback,
+                cooldown_sec=await get_setting_int(db, "ai_model_cooldown_sec") or 120,
+                rotation_enabled=rotation_enabled,
+            )
             decisions_map = {}
             ai_error_occurred = False
             ai_error_message = ""
 
-            try:
-                if batched_enabled and len(allowed_analyses) > 1:
-                    batched_decisions = await ai.get_batched_trade_decisions(
-                        allowed_analyses, strategy_mode=strategy_mode,
-                        model_override=ai_model, aggressiveness=aggressiveness,
-                    )
-                    for analysis, decision in zip(allowed_analyses, batched_decisions):
-                        decisions_map[analysis["symbol"]] = decision
-                else:
+            # ------------------------------------------------------------------
+            # v2 multi-agent team engine (behind feature flag)
+            # ------------------------------------------------------------------
+            engine_version = await get_setting(db, "decision_engine_version") or "v1"
+            v2_results = {}  # symbol -> v2 dict (for DB storage)
+
+            if engine_version == "v2":
+                from app.ai.team.orchestrator import TeamDecisionEngine
+                from app.ai.suites import resolve_models
+                suite = await get_setting(db, "model_suite") or "free"
+                overrides = {
+                    "technical": await get_setting(db, "model_technical"),
+                    "fundamental": await get_setting(db, "model_fundamental"),
+                    "sentiment": await get_setting(db, "model_sentiment"),
+                    "macro": await get_setting(db, "model_macro"),
+                    "lead": await get_setting(db, "model_lead"),
+                    "verifier": await get_setting(db, "model_verifier"),
+                }
+                models_map = resolve_models(suite, overrides)
+                team = TeamDecisionEngine(
+                    technical_model=models_map.get("technical"),
+                    fundamental_model=models_map.get("fundamental"),
+                    sentiment_model=models_map.get("sentiment"),
+                    macro_model=models_map.get("macro"),
+                    lead_model=models_map.get("lead"),
+                    verifier_model=models_map.get("verifier"),
+                    verifier_enabled=await get_setting_bool(db, "verifier_enabled"),
+                    verifier_can_veto=await get_setting_bool(db, "verifier_can_veto"),
+                    analyst_parallelism=await get_setting_bool(db, "analyst_parallelism"),
+                )
+                try:
                     for analysis in allowed_analyses:
-                        decision = await ai.get_trade_decision(
-                            analysis, strategy_mode=strategy_mode,
-                            model_override=ai_model, aggressiveness=aggressiveness,
+                        symbol = analysis["symbol"]
+                        v2_result = await team.decide(symbol, strategy_mode, analysis)
+                        v2_results[symbol] = v2_result
+                        # Wrap v2 dict in a TradeDecision for downstream compatibility
+                        from app.ai.openrouter_client import TradeDecision
+                        decisions_map[symbol] = TradeDecision(
+                            decision=v2_result["decision"],
+                            confidence=v2_result["confidence"],
+                            timeframe=v2_result["timeframe"],
+                            entry_price=v2_result.get("entry_price", 0.0),
+                            stop_loss=v2_result.get("stop_loss", 0.0),
+                            take_profit=v2_result.get("take_profit", 0.0),
+                            position_size_pct=v2_result["position_size_pct"],
+                            risk_reward=v2_result["risk_reward"],
+                            rationale=v2_result["rationale"],
+                            symbol=symbol,
+                            model_used=v2_result.get("lead_model", ""),
                         )
-                        decisions_map[analysis["symbol"]] = decision
-            except Exception as e:
-                logger.error("AI decision failed: %s", e, exc_info=True)
-                ai_error_occurred = True
-                ai_error_message = str(e)
-                # Fallback: generate HOLD decisions for all allowed pairs
-                fallback_strategy = await get_setting(db, "ai_fallback_strategy") or "hold"
-                for analysis in allowed_analyses:
-                    symbol = analysis["symbol"]
-                    if fallback_strategy == "rule_based":
-                        decision = _generate_rule_based_decision(analysis, strategy_mode)
+                except Exception as e:
+                    logger.error("v2 TeamDecisionEngine failed: %s", e, exc_info=True)
+                    ai_error_occurred = True
+                    ai_error_message = str(e)
+                    fallback_strategy = await get_setting(db, "ai_fallback_strategy") or "hold"
+                    for analysis in allowed_analyses:
+                        symbol = analysis["symbol"]
+                        if fallback_strategy == "rule_based":
+                            decision = _generate_rule_based_decision(analysis, strategy_mode)
+                        else:
+                            decision = ai._fallback_decision(analysis, strategy_mode)
+                        decision.rationale = f"[v2 TEAM UNAVAILABLE: {ai_error_message[:120]}] {decision.rationale}"
+                        decisions_map[symbol] = decision
+            else:
+                # v1 single-LLM path (unchanged)
+                try:
+                    if batched_enabled and len(allowed_analyses) > 1:
+                        batched_decisions = await ai.get_batched_trade_decisions(
+                            allowed_analyses, strategy_mode=strategy_mode,
+                            model_override=ai_model, aggressiveness=aggressiveness,
+                            router=router,
+                        )
+                        for analysis, decision in zip(allowed_analyses, batched_decisions):
+                            decisions_map[analysis["symbol"]] = decision
                     else:
-                        decision = ai._fallback_decision(analysis, strategy_mode)
-                    decision.rationale = f"[AI UNAVAILABLE: {ai_error_message[:120]}] {decision.rationale}"
-                    decisions_map[symbol] = decision
+                        for analysis in allowed_analyses:
+                            decision = await ai.get_trade_decision(
+                                analysis, strategy_mode=strategy_mode,
+                                model_override=ai_model, aggressiveness=aggressiveness,
+                                router=router,
+                            )
+                            decisions_map[analysis["symbol"]] = decision
+                except Exception as e:
+                    logger.error("AI decision failed: %s", e, exc_info=True)
+                    ai_error_occurred = True
+                    ai_error_message = str(e)
+                    fallback_strategy = await get_setting(db, "ai_fallback_strategy") or "hold"
+                    for analysis in allowed_analyses:
+                        symbol = analysis["symbol"]
+                        if fallback_strategy == "rule_based":
+                            decision = _generate_rule_based_decision(analysis, strategy_mode)
+                        else:
+                            decision = ai._fallback_decision(analysis, strategy_mode)
+                        decision.rationale = f"[AI UNAVAILABLE: {ai_error_message[:120]}] {decision.rationale}"
+                        decisions_map[symbol] = decision
 
             # Update health state
             _health_state["ai_available"] = not ai_error_occurred
@@ -343,8 +451,19 @@ def run_full_analysis():
                     technical_snapshot=_clean_numpy(analysis.get("technical")),
                     fundamental_snapshot=_clean_numpy(analysis.get("fundamental")),
                     sentiment_snapshot=_clean_numpy(analysis.get("sentiment")),
-                    model_used=settings.OPENROUTER_MODEL,
+                    model_used=getattr(decision, "model_used", "") or ai_model,
                     provider=settings.DATA_PROVIDER.value,
+                    engine_version=engine_version,
+                    # v2 fields
+                    analyst_opinions=_clean_numpy(v2_results.get(symbol, {}).get("analyst_opinions")),
+                    lead_model=v2_results.get(symbol, {}).get("lead_model"),
+                    verifier_model=v2_results.get(symbol, {}).get("verifier_model"),
+                    verifier_verdict=v2_results.get(symbol, {}).get("verifier_verdict"),
+                    regime=_clean_numpy({
+                        "strategy_mode": strategy_mode,
+                        "session": analysis.get("session"),
+                    }),
+                    daily_bias=_clean_numpy(v2_results.get(symbol, {}).get("daily_bias")),
                 )
                 db.add(db_decision)
                 await db.commit()
@@ -430,6 +549,15 @@ def run_full_analysis():
                             if not ok4:
                                 ok = False
                                 reason = reason4
+
+                        # Historical memory guard (Qdrant retrieval of similar setups)
+                        if ok:
+                            mem_ok, mem_reason, mem_ctx = await _memory_guard(db, vs, analysis, decision)
+                            if mem_ctx:
+                                decision.rationale = f"{decision.rationale} | {mem_ctx}"
+                            if not mem_ok:
+                                ok = False
+                                reason = mem_reason
 
                         if ok:
                             equity = await risk._get_equity(db)

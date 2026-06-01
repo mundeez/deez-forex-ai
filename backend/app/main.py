@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func, text
+from sqlalchemy import select, desc, func, text, case
 import redis.asyncio as aioredis
 
 from app.database import get_db, engine, Base, AsyncSessionLocal
@@ -700,6 +700,99 @@ async def get_daily_pnl_history(
     }
 
 
+@app.get("/api/v1/ai/models")
+async def get_ai_models(db: AsyncSession = Depends(get_db)):
+    """Model rotation status: pool, per-model cooldowns, availability, recent usage."""
+    from app.ai.model_router import ModelRouter, parse_pool, DEFAULT_FREE_POOL
+    rotation_enabled = await get_setting_bool(db, "ai_model_rotation_enabled")
+    paid_enabled = await get_setting_bool(db, "ai_paid_fallback_enabled")
+    paid_fallback = (await get_setting(db, "ai_paid_fallback_model")) if paid_enabled else None
+    router = ModelRouter(
+        free_pool=parse_pool(await get_setting(db, "ai_model_pool")),
+        paid_fallback=paid_fallback,
+        cooldown_sec=int(await get_setting(db, "ai_model_cooldown_sec") or 120),
+        rotation_enabled=rotation_enabled,
+    )
+    status = await router.status()
+    # Actual model usage over the last 24h — confirms rotation is happening.
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    result = await db.execute(
+        select(models.AIDecision.model_used, func.count(models.AIDecision.id))
+        .where(models.AIDecision.timestamp >= cutoff)
+        .group_by(models.AIDecision.model_used)
+    )
+    status["recent_usage_24h"] = {(m or "(none)"): int(n) for m, n in result.all()}
+    status["catalog_default_free"] = DEFAULT_FREE_POOL
+    return status
+
+
+@app.get("/api/v1/ai/suites")
+async def get_ai_suites():
+    """Return all available model suites with latency-tier annotations."""
+    from app.ai.suites import suite_info
+    return {"suites": suite_info()}
+
+
+@app.get("/api/v1/ai/suite")
+async def get_active_suite(db: AsyncSession = Depends(get_db)):
+    """Return the currently active suite + per-function models."""
+    from app.ai.suites import resolve_models
+    suite = await get_setting(db, "model_suite") or "free"
+    overrides = {
+        "technical": await get_setting(db, "model_technical"),
+        "fundamental": await get_setting(db, "model_fundamental"),
+        "sentiment": await get_setting(db, "model_sentiment"),
+        "macro": await get_setting(db, "model_macro"),
+        "lead": await get_setting(db, "model_lead"),
+        "verifier": await get_setting(db, "model_verifier"),
+    }
+    models = resolve_models(suite, overrides)
+    return {
+        "suite": suite,
+        "models": models,
+        "engine_version": await get_setting(db, "decision_engine_version") or "v1",
+    }
+
+
+@app.get("/api/v1/analytics/breakdown")
+async def get_analytics_breakdown(db: AsyncSession = Depends(get_db)):
+    """Closed-trade performance segmented by close_reason, session, direction, symbol, model."""
+    win = case((models.Trade.pnl > 0, 1), else_=0)
+
+    async def seg(label_col, joined=False):
+        q = select(
+            label_col.label("k"),
+            func.count(models.Trade.id),
+            func.coalesce(func.sum(win), 0),
+            func.coalesce(func.sum(models.Trade.pnl), 0.0),
+            func.coalesce(func.avg(models.Trade.pnl), 0.0),
+        ).where(models.Trade.status == models.TradeStatus.CLOSED)
+        if joined:
+            q = q.join(models.AIDecision, models.Trade.ai_decision_id == models.AIDecision.id)
+        q = q.group_by(label_col).order_by(func.coalesce(func.sum(models.Trade.pnl), 0.0).desc())
+        rows = (await db.execute(q)).all()
+        out = []
+        for k, n, wins, pnl, avg in rows:
+            key = k.value if hasattr(k, "value") else k
+            out.append({
+                "key": key,
+                "trades": int(n or 0),
+                "wins": int(wins or 0),
+                "win_pct": round(100.0 * (wins or 0) / n, 1) if n else 0.0,
+                "total_pnl": round(float(pnl or 0), 2),
+                "avg_pnl": round(float(avg or 0), 4),
+            })
+        return out
+
+    return {
+        "by_close_reason": await seg(models.Trade.close_reason),
+        "by_session_open": await seg(models.Trade.session_at_open),
+        "by_direction": await seg(models.Trade.direction),
+        "by_symbol": await seg(models.Trade.symbol),
+        "by_model": await seg(models.AIDecision.model_used, joined=True),
+    }
+
+
 @app.get("/api/v1/ai/decisions")
 async def get_ai_decisions(
     limit: int = 20,
@@ -741,7 +834,7 @@ async def trigger_ai_analysis(
         technical_snapshot=analysis.get("technical"),
         fundamental_snapshot=analysis.get("fundamental"),
         sentiment_snapshot=analysis.get("sentiment"),
-        model_used=settings.OPENROUTER_MODEL,
+        model_used=getattr(decision, "model_used", "") or settings.OPENROUTER_MODEL,
         provider=(provider or settings.DATA_PROVIDER).value,
     )
     db.add(db_decision)
@@ -819,6 +912,96 @@ async def get_fundamental_analysis(symbol: str = settings.DEFAULT_PAIR, db: Asyn
         logger = logging.getLogger("app.main")
         logger.error("Fundamental analysis failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(status_code=503, detail="Fundamental analysis unavailable")
+
+
+@app.post("/api/v1/backtest/download")
+async def download_historical_data(
+    symbol: str = settings.DEFAULT_PAIR,
+    days: int = 30,
+    timeframe: str = "1m",
+    db: AsyncSession = Depends(get_db),
+):
+    """Download Dukascopy tick data for a symbol and store locally."""
+    from app.services.data.dukascopy.client import DukascopyClient
+    end = datetime.utcnow()
+    start = end - timedelta(days=days)
+    client = DukascopyClient()
+    candles = await client.download_range(symbol, start, end, timeframe)
+    if candles.empty:
+        raise HTTPException(status_code=404, detail="No data available from Dukascopy for this range")
+    count = await client.store_candles(symbol, timeframe, candles, db)
+    return {"symbol": symbol, "timeframe": timeframe, "candles_stored": count, "period": f"{start.date()} to {end.date()}"}
+
+
+@app.get("/api/v1/data/health")
+async def get_data_health(db: AsyncSession = Depends(get_db)):
+    """Health check for data providers: MT5 ZMQ, MetaAPI, and paper fallback status."""
+    from app.services.data.mt5_zmq_client import MT5ZMQClient
+    from app.services.data.metaapi_client import MetaApiClient
+
+    mt5 = MT5ZMQClient()
+    metaapi = MetaApiClient()
+
+    mt5_healthy = False
+    mt5_error = None
+    try:
+        price = await mt5.get_current_price("EURUSD")
+        mt5_healthy = price.get("bid") is not None
+    except Exception as exc:
+        mt5_error = str(exc)
+
+    metaapi_healthy = False
+    metaapi_error = None
+    try:
+        price = await metaapi.get_current_price("EURUSD")
+        metaapi_healthy = price.get("bid") is not None
+    except Exception as exc:
+        metaapi_error = str(exc)
+
+    mt5_default = await get_setting_bool(db, "mt5_feed_default")
+    paper_fallback_allowed = await get_setting_bool(db, "allow_paper_fallback")
+
+    return {
+        "mt5_zmq": {"healthy": mt5_healthy, "error": mt5_error},
+        "metaapi": {"healthy": metaapi_healthy, "error": metaapi_error},
+        "mt5_feed_default": mt5_default,
+        "paper_fallback_allowed": paper_fallback_allowed,
+        "recommended_provider": "mt5_zmq" if mt5_healthy else ("metaapi" if metaapi_healthy else "paper_mock"),
+    }
+
+
+@app.post("/api/v1/backtest/run")
+async def run_backtest(
+    symbol: str = settings.DEFAULT_PAIR,
+    days: int = 90,
+    timeframe: str = "1h",
+    use_v2: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """Run a backtest using local historical data (or MetaAPI fallback)."""
+    from app.backtest.engine import BacktestEngine
+    engine = BacktestEngine()
+    end = datetime.utcnow()
+    start = end - timedelta(days=days)
+    result = await engine.run(symbol=symbol, start=start, end=end, timeframe=timeframe, use_v2=use_v2)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/v1/backtest/optimize")
+async def optimize_strategy(
+    symbol: str = settings.DEFAULT_PAIR,
+    strategy_mode: str = "scalping",
+    train_days: int = 90,
+    test_days: int = 30,
+    db: AsyncSession = Depends(get_db),
+):
+    """Run walk-forward parameter optimization for a symbol."""
+    from app.backtest.optimizer import StrategyOptimizer
+    opt = StrategyOptimizer()
+    result = await opt.optimize_symbol(symbol, strategy_mode=strategy_mode, train_days=train_days, test_days=test_days)
+    return result
 
 
 @app.get("/api/v1/analysis/sentiment")

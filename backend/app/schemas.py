@@ -258,6 +258,32 @@ class AppSettingsOut(BaseModel):
     ai_model: Optional[str] = None
     ai_fallback_strategy: Optional[str] = None
     trade_aggressiveness: Optional[str] = None
+    ai_model_rotation_enabled: Optional[bool] = None
+    ai_model_pool: Optional[str] = None
+    ai_paid_fallback_enabled: Optional[bool] = None
+    ai_paid_fallback_model: Optional[str] = None
+    ai_model_cooldown_sec: Optional[int] = None
+    memory_guard_enabled: Optional[bool] = None
+    memory_guard_min_winrate: Optional[float] = None
+    # v2 AI Team Engine
+    decision_engine_version: Optional[str] = "v1"
+    model_suite: Optional[str] = "free"
+    model_technical: Optional[str] = None
+    model_fundamental: Optional[str] = None
+    model_sentiment: Optional[str] = None
+    model_macro: Optional[str] = None
+    model_lead: Optional[str] = None
+    model_verifier: Optional[str] = None
+    verifier_enabled: Optional[bool] = None
+    verifier_can_veto: Optional[bool] = None
+    min_analyst_agreement: Optional[float] = None
+    analyst_parallelism: Optional[bool] = None
+    daily_bias_enabled: Optional[bool] = None
+    exit_reeval_enabled: Optional[bool] = None
+    model_perf_weighting_enabled: Optional[bool] = None
+    mt5_feed_default: Optional[bool] = None
+    paper_uses_live_feed: Optional[bool] = None
+    allow_paper_fallback: Optional[bool] = None
 
 
 class AppSettingsUpdate(BaseModel):
@@ -287,6 +313,32 @@ class AppSettingsUpdate(BaseModel):
     ai_model: Optional[str] = None
     ai_fallback_strategy: Optional[str] = None
     trade_aggressiveness: Optional[str] = None
+    ai_model_rotation_enabled: Optional[bool] = None
+    ai_model_pool: Optional[str] = None
+    ai_paid_fallback_enabled: Optional[bool] = None
+    ai_paid_fallback_model: Optional[str] = None
+    ai_model_cooldown_sec: Optional[int] = Field(None, ge=10, le=3600)
+    memory_guard_enabled: Optional[bool] = None
+    memory_guard_min_winrate: Optional[float] = Field(None, ge=0.0, le=1.0)
+    # v2 AI Team Engine
+    decision_engine_version: Optional[str] = None
+    model_suite: Optional[str] = None
+    model_technical: Optional[str] = None
+    model_fundamental: Optional[str] = None
+    model_sentiment: Optional[str] = None
+    model_macro: Optional[str] = None
+    model_lead: Optional[str] = None
+    model_verifier: Optional[str] = None
+    verifier_enabled: Optional[bool] = None
+    verifier_can_veto: Optional[bool] = None
+    min_analyst_agreement: Optional[float] = Field(None, ge=0.0, le=1.0)
+    analyst_parallelism: Optional[bool] = None
+    daily_bias_enabled: Optional[bool] = None
+    exit_reeval_enabled: Optional[bool] = None
+    model_perf_weighting_enabled: Optional[bool] = None
+    mt5_feed_default: Optional[bool] = None
+    paper_uses_live_feed: Optional[bool] = None
+    allow_paper_fallback: Optional[bool] = None
 
 
 class ManualTradeCreate(BaseModel):

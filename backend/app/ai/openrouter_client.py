@@ -1,10 +1,29 @@
+import asyncio
 import json
+import logging
 import httpx
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 from pydantic import BaseModel
 from app.config import get_settings
+from app.ai.model_router import ModelRouter, RATE_LIMIT_STATUSES, SERVER_ERROR_STATUSES
 
 settings = get_settings()
+logger = logging.getLogger("app.ai.openrouter")
+
+
+def normalize_decision(value: Any) -> str:
+    """Coerce any model output into exactly BUY / SELL / HOLD.
+
+    Free models occasionally emit malformed values like ": HOLD", ":SELL" or
+    bare punctuation. We extract the first recognised token and default to HOLD.
+    """
+    if value is None:
+        return "HOLD"
+    v = str(value).upper()
+    for token in ("BUY", "SELL", "HOLD"):
+        if token in v:
+            return token
+    return "HOLD"
 
 
 class TradeDecision(BaseModel):
@@ -18,6 +37,7 @@ class TradeDecision(BaseModel):
     risk_reward: float = 1.0
     rationale: str = ""
     symbol: str = "EURUSD"
+    model_used: str = ""
 
 
 class OpenRouterClient:
@@ -83,20 +103,33 @@ class OpenRouterClient:
                 "6. Ignore noise — only high-confidence setups."
             )
 
-    async def get_trade_decision(self, analysis: Dict[str, Any], strategy_mode: str = "scalping", model_override: str = None, aggressiveness: str = "moderate") -> TradeDecision:
-        model = model_override or self.model
-        if not self.api_key:
-            return self._fallback_decision(analysis, strategy_mode)
-
-        prompt = self._build_prompt(analysis, strategy_mode)
-        headers = {
+    def _request_headers(self) -> Dict[str, str]:
+        return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://deez-forex-ai.local",
             "X-Title": "deez-forex-ai",
         }
+
+    async def _resolve_candidates(self, router: Optional[ModelRouter], model_override: Optional[str]) -> List[str]:
+        """Ordered list of models to attempt for a single request."""
+        if router is not None:
+            return await router.get_candidates(primary=model_override or self.model)
+        return [model_override or self.model]
+
+    async def get_trade_decision(
+        self,
+        analysis: Dict[str, Any],
+        strategy_mode: str = "scalping",
+        model_override: str = None,
+        aggressiveness: str = "moderate",
+        router: Optional[ModelRouter] = None,
+    ) -> TradeDecision:
+        if not self.api_key:
+            return self._fallback_decision(analysis, strategy_mode)
+
+        prompt = self._build_prompt(analysis, strategy_mode)
         payload = {
-            "model": model,
             "temperature": 0.15,
             "max_tokens": 384,  # Reduced from 512 — structured JSON needs far less
             "messages": [
@@ -106,16 +139,14 @@ class OpenRouterClient:
             "response_format": {"type": "json_object"},
         }
 
-        data = await self._post_with_retry(headers, payload)
+        candidates = await self._resolve_candidates(router, model_override)
+        data, used_model = await self._post_with_failover(self._request_headers(), payload, candidates, router)
 
         content = data["choices"][0]["message"]["content"]
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            parsed = self._extract_json(content)
+        parsed = self._parse_object(content)
 
         return TradeDecision(
-            decision=parsed.get("decision", "HOLD").upper(),
+            decision=normalize_decision(parsed.get("decision")),
             confidence=float(parsed.get("confidence") or 0.0),
             timeframe=parsed.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
             entry_price=float(parsed.get("entry_price") or 0.0),
@@ -125,40 +156,55 @@ class OpenRouterClient:
             risk_reward=float(parsed.get("risk_reward") or 1.0),
             rationale=parsed.get("rationale", "No rationale provided."),
             symbol=analysis.get("symbol", "EURUSD"),
+            model_used=used_model,
         )
 
-    async def _post_with_retry(self, headers: Dict[str, str], payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Post to OpenRouter with exponential backoff retry."""
-        import logging
-        logger = logging.getLogger("app.ai.openrouter")
-        max_retries = 3
-        base_delay = 2.0
-        for attempt in range(max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(self.base_url, headers=headers, json=payload)
-                    resp.raise_for_status()
-                    return resp.json()
-            except httpx.HTTPStatusError as e:
-                # Retry on 429 (rate limit), 502, 503, 504 (server errors)
-                if e.response.status_code in (429, 502, 503, 504) and attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning("OpenRouter returned %s, retrying in %.1fs (attempt %d/%d)",
-                                   e.response.status_code, delay, attempt + 1, max_retries)
-                    import asyncio
-                    await asyncio.sleep(delay)
-                else:
-                    raise
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning("OpenRouter connection error: %s, retrying in %.1fs (attempt %d/%d)",
-                                   e, delay, attempt + 1, max_retries)
-                    import asyncio
-                    await asyncio.sleep(delay)
-                else:
-                    raise
-        raise RuntimeError("Max retries exceeded for OpenRouter API")
+    async def _post_with_failover(
+        self,
+        headers: Dict[str, str],
+        base_payload: Dict[str, Any],
+        candidates: List[str],
+        router: Optional[ModelRouter] = None,
+    ) -> Tuple[Dict[str, Any], str]:
+        """POST to OpenRouter, failing over across candidate models.
+
+        Rate-limit / quota errors (402/403/429) put the model on cooldown (when a
+        router is supplied) and immediately move to the next candidate. Transient
+        server / network errors get one short retry on the same model before
+        failing over. Returns the parsed JSON response and the model that served it.
+        """
+        last_exc: Optional[Exception] = None
+        for model in candidates:
+            payload = {**base_payload, "model": model}
+            for attempt in range(2):  # up to 2 tries per model for transient errors
+                try:
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        resp = await client.post(self.base_url, headers=headers, json=payload)
+                        resp.raise_for_status()
+                        return resp.json(), model
+                except httpx.HTTPStatusError as e:
+                    last_exc = e
+                    status = e.response.status_code
+                    if status in RATE_LIMIT_STATUSES:
+                        if router is not None:
+                            await router.mark_cooldown(model)
+                        logger.warning("Model %s rate-limited (%s); failing over to next model", model, status)
+                        break  # don't retry this model — move to next candidate
+                    if status in SERVER_ERROR_STATUSES and attempt == 0:
+                        await asyncio.sleep(1.5)
+                        continue
+                    logger.warning("Model %s returned %s; failing over", model, status)
+                    break
+                except (httpx.TimeoutException, httpx.ConnectError) as e:
+                    last_exc = e
+                    if attempt == 0:
+                        await asyncio.sleep(1.5)
+                        continue
+                    logger.warning("Model %s connection error: %s; failing over", model, e)
+                    break
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("No OpenRouter model candidates available")
 
     def _compress_timeframe(self, tf_data: Dict[str, Any]) -> str:
         """Compress timeframe analysis to ~30 tokens instead of 500+."""
@@ -223,24 +269,26 @@ class OpenRouterClient:
         prompt += "JSON: decision, confidence, entry, SL, TP, rationale."
         return prompt
 
-    async def get_batched_trade_decisions(self, analyses: List[Dict[str, Any]], strategy_mode: str = "scalping", model_override: str = None, aggressiveness: str = "moderate") -> List[TradeDecision]:
+    async def get_batched_trade_decisions(
+        self,
+        analyses: List[Dict[str, Any]],
+        strategy_mode: str = "scalping",
+        model_override: str = None,
+        aggressiveness: str = "moderate",
+        router: Optional[ModelRouter] = None,
+    ) -> List[TradeDecision]:
         """Batch multiple pair analyses into a single AI prompt for efficiency."""
-        model = model_override or self.model
         if not self.api_key or len(analyses) == 0:
             return [self._fallback_decision(a, strategy_mode) for a in analyses]
 
         if len(analyses) == 1:
-            return [await self.get_trade_decision(analyses[0], strategy_mode, model_override=model, aggressiveness=aggressiveness)]
+            return [await self.get_trade_decision(
+                analyses[0], strategy_mode, model_override=model_override,
+                aggressiveness=aggressiveness, router=router,
+            )]
 
         prompt = self._build_batched_prompt(analyses, strategy_mode)
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://deez-forex-ai.local",
-            "X-Title": "deez-forex-ai",
-        }
         payload = {
-            "model": model,
             "temperature": 0.15,
             "max_tokens": 512,  # Reduced from 1024 — batched JSON still compact
             "messages": [
@@ -250,24 +298,19 @@ class OpenRouterClient:
             "response_format": {"type": "json_object"},
         }
 
-        data = await self._post_with_retry(headers, payload)
+        candidates = await self._resolve_candidates(router, model_override)
+        data, used_model = await self._post_with_failover(self._request_headers(), payload, candidates, router)
 
         content = data["choices"][0]["message"]["content"]
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            parsed = self._extract_json(content)
-
-        # Handle both array and object-with-array formats
-        decisions_list = parsed if isinstance(parsed, list) else parsed.get("decisions", parsed.get("results", []))
+        decisions_list = self._parse_array(content)
 
         results = []
         for idx, analysis in enumerate(analyses):
             symbol = analysis.get("symbol", "EURUSD")
-            if idx < len(decisions_list):
+            if idx < len(decisions_list) and isinstance(decisions_list[idx], dict):
                 d = decisions_list[idx]
                 results.append(TradeDecision(
-                    decision=str(d.get("decision", "HOLD")).upper(),
+                    decision=normalize_decision(d.get("decision")),
                     confidence=float(d.get("confidence") or 0.0),
                     timeframe=d.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
                     entry_price=float(d.get("entry_price") or 0.0),
@@ -277,9 +320,12 @@ class OpenRouterClient:
                     risk_reward=float(d.get("risk_reward") or 1.0),
                     rationale=d.get("rationale", "No rationale provided."),
                     symbol=symbol,
+                    model_used=used_model,
                 ))
             else:
-                results.append(self._fallback_decision(analysis, strategy_mode))
+                fb = self._fallback_decision(analysis, strategy_mode)
+                fb.model_used = used_model
+                results.append(fb)
         return results
 
     def _build_batched_prompt(self, analyses: List[Dict[str, Any]], strategy_mode: str) -> str:
@@ -294,7 +340,7 @@ class OpenRouterClient:
             tf_blocks = []
             for tf_name, tf_data in tfs.items():
                 compressed = self._compress_timeframe(tf_data)
-                tf_blocks.append(f"  {tf_name.upper()}: {compressed}")
+                tf_blocks.append(f"    {tf_name.upper()}: {compressed}")
 
             block = (
                 f"[{idx + 1}] {symbol}: tech={tech.get('overall_signal', 'neutral')}\n"
@@ -319,15 +365,58 @@ class OpenRouterClient:
             + "\n".join(blocks)
         )
 
-    def _extract_json(self, text: str) -> Dict[str, Any]:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1:
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        s = (text or "").strip()
+        if s.startswith("```"):
+            s = s.strip("`")
+            nl = s.find("\n")
+            if nl != -1 and s[:nl].strip().lower() in ("json", ""):
+                s = s[nl + 1:]
+        return s.strip()
+
+    def _extract_json(self, text: str) -> Any:
+        """Best-effort JSON extraction from a possibly noisy model response.
+
+        Handles markdown code fences and leading/trailing prose. Tries to parse
+        the outermost array first, then the outermost object.
+        """
+        s = self._strip_code_fences(text)
+        if not s:
+            return {}
+        a_start, a_end = s.find("["), s.rfind("]")
+        o_start, o_end = s.find("{"), s.rfind("}")
+        attempts = []
+        if a_start != -1 and a_end > a_start:
+            attempts.append(s[a_start:a_end + 1])
+        if o_start != -1 and o_end > o_start:
+            attempts.append(s[o_start:o_end + 1])
+        for chunk in attempts:
             try:
-                return json.loads(text[start:end+1])
+                return json.loads(chunk)
             except json.JSONDecodeError:
-                pass
+                continue
         return {}
+
+    def _parse_object(self, content: str) -> Dict[str, Any]:
+        """Parse a single-decision response into a dict (never raises)."""
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            parsed = self._extract_json(content)
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed and isinstance(parsed[0], dict) else {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _parse_array(self, content: str) -> List[Any]:
+        """Parse a batched response into a list of decision dicts (never raises)."""
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            parsed = self._extract_json(content)
+        if isinstance(parsed, dict):
+            parsed = parsed.get("decisions", parsed.get("results", []))
+        return parsed if isinstance(parsed, list) else []
 
     def _fallback_decision(self, analysis: Dict[str, Any], strategy_mode: str = "scalping") -> TradeDecision:
         import random
@@ -379,4 +468,5 @@ class OpenRouterClient:
             risk_reward=rr,
             rationale=f"[FALLBACK] OpenRouter API key not configured. Using {strategy_mode} technical signal only.",
             symbol=analysis.get("symbol", "EURUSD"),
+            model_used="fallback",
         )

@@ -29,3 +29,8 @@ class StrategyMode(str, enum.Enum):
     SCALPING = "scalping"
     DAY_TRADING = "day_trading"
     SWING = "swing"
+
+
+class EngineVersion(str, enum.Enum):
+    V1 = "v1"
+    V2 = "v2"

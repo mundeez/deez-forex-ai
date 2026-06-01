@@ -61,5 +61,20 @@ celery_app.conf.update(
             "schedule": 3600.0,  # Every hour
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
+        "compute-daily-bias": {
+            "task": "app.tasks.execution_tasks.compute_daily_bias",
+            "schedule": 14400.0,  # Every 4 hours
+            "options": {"time_limit": 180, "soft_time_limit": 120},
+        },
+        "refresh-model-performance": {
+            "task": "app.tasks.execution_tasks.refresh_model_performance",
+            "schedule": 3600.0,  # Every hour
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
+        "reevaluate-open-positions": {
+            "task": "app.tasks.execution_tasks.reevaluate_open_positions",
+            "schedule": 180.0,  # Every 3 minutes
+            "options": {"time_limit": 60, "soft_time_limit": 45},
+        },
     }
 )

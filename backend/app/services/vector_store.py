@@ -28,7 +28,8 @@ class VectorStore:
 
     def _encode_snapshot(self, snapshot: Dict[str, Any]) -> List[float]:
         """Convert a technical snapshot into a fixed-size float vector."""
-        tech = snapshot.get("technical", {})
+        # Accept either a full analysis dict or a bare technical dict.
+        tech = snapshot.get("technical", snapshot) if isinstance(snapshot, dict) else {}
         tfs = tech.get("timeframes", {})
         # Use the smallest timeframe available
         tf_name = next(iter(tfs.keys()), "1h")

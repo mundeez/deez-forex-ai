@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 
@@ -10,6 +10,8 @@ from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.config import get_settings
 from app.services.settings_service import get_setting_int, get_setting_bool, get_setting_float
+from app.services.instruments import pnl_usd, pips
+from app.services.sessions import classify_session
 
 settings = get_settings()
 logger = logging.getLogger("app.services.execution")
@@ -61,10 +63,8 @@ async def compute_live_unrealized(db: AsyncSession) -> float:
         current = price_data.get("bid") if trade.direction == models.TradeDirection.SELL.value else price_data.get("ask")
         if not current or not trade.entry_price:
             continue
-        if trade.direction == models.TradeDirection.BUY.value:
-            pnl = (current - trade.entry_price) * (trade.position_size or 0.01) * 100000
-        else:
-            pnl = (trade.entry_price - current) * (trade.position_size or 0.01) * 100000
+        is_buy = trade.direction == models.TradeDirection.BUY.value
+        pnl = pnl_usd(trade.symbol, is_buy, trade.entry_price, current, trade.position_size or 0.01)
         total_unrealized += pnl
     return total_unrealized
 
@@ -79,6 +79,34 @@ class ExecutionService:
         if provider == DataProvider.MT5_ZMQ:
             return self.mt5_zmq
         return self.metaapi
+
+    async def _get_live_price(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch live price: MT5 first, then MetaAPI, then None."""
+        try:
+            price = await self.mt5_zmq.get_current_price(symbol)
+            if price.get("bid") is not None:
+                return price
+        except Exception:
+            pass
+        try:
+            price = await self.metaapi.get_current_price(symbol)
+            if price.get("bid") is not None:
+                return price
+        except Exception:
+            pass
+        return None
+
+    def _apply_paper_slippage(self, price: float, direction: str, symbol: str) -> float:
+        """Simulate realistic slippage for paper trades."""
+        import random
+        from app.services.instruments import pip_size
+        pip = pip_size(symbol)
+        # Slippage: 0-2 pips against the trade direction
+        slip_pips = random.uniform(0, 2.0)
+        slip_price = slip_pips * pip
+        if direction == "buy":
+            return price + slip_price  # worse fill for buyer
+        return price - slip_price  # worse fill for seller
 
     async def execute_trade(self, db: AsyncSession, trade_in: schemas.TradeCreate, position_size: float = None, strategy_mode: str = "scalping", trailing_distance: float = None) -> models.Trade:
         now = datetime.utcnow()
@@ -98,6 +126,7 @@ class ExecutionService:
             risk_pct=trade_in.risk_pct,
             ai_decision_id=trade_in.ai_decision_id,
             open_time=now,
+            session_at_open=classify_session(now),
             rationale=trade_in.rationale,
             provider=trade_in.provider.value,
             trailing_stop_distance=trailing_distance,
@@ -120,6 +149,15 @@ class ExecutionService:
         else:
             trade.mode = models.TradeMode.PAPER
             trade.meta_order_id = f"paper-{now.strftime('%Y%m%d%H%M%S')}-{trade_in.symbol}"
+            # Realistic paper fill: use live MT5 price + slippage
+            live_price = await self._get_live_price(trade_in.symbol)
+            if live_price:
+                is_buy = trade_in.direction == TradeDirection.BUY
+                raw_price = live_price.get("ask") if is_buy else live_price.get("bid")
+                if raw_price:
+                    trade.entry_price = self._apply_paper_slippage(
+                        raw_price, trade_in.direction.value, trade_in.symbol
+                    )
 
         db.add(trade)
         await db.commit()
@@ -144,17 +182,47 @@ class ExecutionService:
         trade.exit_price = exit_price
         trade.status = models.TradeStatus.CLOSED
         trade.close_time = datetime.utcnow()
+        trade.close_reason = close_reason
         if trade.rationale:
             trade.rationale += f" | Close reason: {close_reason}"
         else:
             trade.rationale = f"Close reason: {close_reason}"
 
-        if trade.direction == models.TradeDirection.BUY.value:
-            trade.pnl = (exit_price - trade.entry_price) * (trade.position_size or 0.01) * 100000
-            trade.pnl_pct = ((exit_price - trade.entry_price) / trade.entry_price) * 100 if trade.entry_price else 0
+        is_buy = trade.direction == models.TradeDirection.BUY.value
+        size = trade.position_size or 0.01
+        entry = trade.entry_price or exit_price
+
+        # Realistic paper exit: if exit_price came from SL/TP, try to use live price + slippage
+        if trade.mode == models.TradeMode.PAPER.value:
+            live_price = await self._get_live_price(trade.symbol)
+            if live_price:
+                # For BUY: exit at bid; for SELL: exit at ask
+                raw_exit = live_price.get("bid") if is_buy else live_price.get("ask")
+                if raw_exit:
+                    exit_price = self._apply_paper_slippage(
+                        raw_exit, "sell" if is_buy else "buy", trade.symbol
+                    )
+
+        trade.pnl = pnl_usd(trade.symbol, is_buy, trade.entry_price, exit_price, size)
+        diff = (exit_price - entry) if is_buy else (entry - exit_price)
+        trade.pnl_pct = (diff / entry) * 100 if entry else 0
+
+        # Exit-timing analytics: holding time, session, MFE/MAE, peak PnL.
+        if trade.open_time and trade.close_time:
+            trade.actual_holding_min = (trade.close_time - trade.open_time).total_seconds() / 60.0
+        trade.session_at_close = classify_session(trade.close_time)
+        if trade.session_at_open is None:
+            trade.session_at_open = classify_session(trade.open_time)
+        hi, lo = trade.highest_price_seen, trade.lowest_price_seen
+        if is_buy:
+            fav = hi if hi is not None else max(entry, exit_price)
+            adv = lo if lo is not None else min(entry, exit_price)
         else:
-            trade.pnl = (trade.entry_price - exit_price) * (trade.position_size or 0.01) * 100000
-            trade.pnl_pct = ((trade.entry_price - exit_price) / trade.entry_price) * 100 if trade.entry_price else 0
+            fav = lo if lo is not None else min(entry, exit_price)
+            adv = hi if hi is not None else max(entry, exit_price)
+        trade.mfe_pips = pips(trade.symbol, (fav - entry) if is_buy else (entry - fav))
+        trade.mae_pips = pips(trade.symbol, (entry - adv) if is_buy else (adv - entry))
+        trade.peak_pnl = pnl_usd(trade.symbol, is_buy, entry, fav, size)
 
         if trade.meta_order_id and trade.mode == models.TradeMode.LIVE.value:
             client = self._get_client(schemas.DataProvider(trade.provider))
@@ -205,6 +273,11 @@ class ExecutionService:
                 continue
 
             price = sym_ask if trade.direction == models.TradeDirection.BUY.value else sym_bid
+            # Track price-path extremes on every open trade (for MFE/MAE at close)
+            if trade.highest_price_seen is None or price > trade.highest_price_seen:
+                trade.highest_price_seen = price
+            if trade.lowest_price_seen is None or price < trade.lowest_price_seen:
+                trade.lowest_price_seen = price
             if (trade.direction == models.TradeDirection.BUY.value and price <= trade.stop_loss) or \
                (trade.direction == models.TradeDirection.SELL.value and price >= trade.stop_loss):
                 closed_trade = await self.close_trade(db, trade.id, price, "stop_loss")
@@ -213,6 +286,8 @@ class ExecutionService:
                  (trade.direction == models.TradeDirection.SELL.value and price <= trade.take_profit):
                 closed_trade = await self.close_trade(db, trade.id, price, "take_profit")
                 closed.append(closed_trade)
+        # Persist price-path extremes for trades that stayed open this cycle
+        await db.commit()
         return closed
 
     async def check_and_close_time_based_positions(self, db: AsyncSession):

@@ -1,7 +1,7 @@
 import os
 from pydantic_settings import BaseSettings
 from functools import lru_cache
-from app.enums import DataProvider, StrategyMode
+from app.enums import DataProvider, StrategyMode, EngineVersion
 
 
 class Settings(BaseSettings):
@@ -26,6 +26,23 @@ class Settings(BaseSettings):
     DEFAULT_PAIR: str = "EURUSD"
     DATA_PROVIDER: DataProvider = DataProvider.METAAPI
     STRATEGY_MODE: StrategyMode = StrategyMode.SCALPING
+    DECISION_ENGINE_VERSION: EngineVersion = EngineVersion.V1
+
+    # v2 AI Team Settings (env-level defaults)
+    MODEL_SUITE: str = "free"  # free | production | extreme | custom
+    MODEL_TECHNICAL: str = "openai/gpt-oss-120b:free"
+    MODEL_FUNDAMENTAL: str = "meta-llama/llama-3.3-70b-instruct:free"
+    MODEL_SENTIMENT: str = "qwen/qwen3-next-80b-a3b-instruct:free"
+    MODEL_MACRO: str = "deepseek/deepseek-r1:free"
+    MODEL_LEAD: str = "openai/gpt-oss-120b:free"
+    MODEL_VERIFIER: str = "deepseek/deepseek-r1:free"
+
+    # v2 Feature Flags (env-level defaults)
+    VERIFIER_ENABLED: bool = True
+    VERIFIER_CAN_VETO: bool = True
+    DAILY_BIAS_ENABLED: bool = True
+    EXIT_REEVAL_ENABLED: bool = False  # alert-only until validated
+    MODEL_PERF_WEIGHTING_ENABLED: bool = False
 
     # MT5 ZeroMQ Bridge
     MT5_ZMQ_HOST: str = "host.docker.internal"

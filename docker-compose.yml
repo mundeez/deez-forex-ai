@@ -84,6 +84,12 @@ services:
       dockerfile: Dockerfile
     container_name: deez-forex-celery
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination '*@*' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-deez_forex}
       REDIS_URL: redis://redis:6379/0
@@ -116,6 +122,12 @@ services:
       dockerfile: Dockerfile
     container_name: deez-forex-beat
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination '*@*' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-deez_forex}
       REDIS_URL: redis://redis:6379/0

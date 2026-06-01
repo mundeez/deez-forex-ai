@@ -175,3 +175,30 @@ class TestTradesEndpoints:
         response = await async_client.get("/api/v1/ai/decisions?limit=5")
         assert response.status_code == 200
         assert isinstance(response.json(), list)
+
+
+class TestAIModelsEndpoint:
+    @pytest.mark.asyncio
+    async def test_get_ai_models(self, async_client):
+        response = await async_client.get("/api/v1/ai/models")
+        assert response.status_code == 200
+        data = response.json()
+        assert "rotation_enabled" in data
+        assert "free_pool" in data
+        assert "cooldown_sec" in data
+        assert "cooling_down" in data
+        assert "available" in data
+        assert "recent_usage_24h" in data
+
+
+class TestAnalyticsBreakdownEndpoint:
+    @pytest.mark.asyncio
+    async def test_get_analytics_breakdown(self, async_client):
+        response = await async_client.get("/api/v1/analytics/breakdown")
+        assert response.status_code == 200
+        data = response.json()
+        assert "by_close_reason" in data
+        assert "by_session_open" in data
+        assert "by_direction" in data
+        assert "by_symbol" in data
+        assert "by_model" in data
