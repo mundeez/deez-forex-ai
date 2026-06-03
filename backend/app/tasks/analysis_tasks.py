@@ -16,6 +16,7 @@ from app.database import get_celery_session
 from app import schemas
 from app.enums import TradeDirection, TradeMode
 from app.config import get_settings
+from app.utils.time import utc_now
 from sqlalchemy import select, func
 
 settings = get_settings()
@@ -41,7 +42,7 @@ def _clean_numpy(obj):
 
 async def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
     """Check if trading should be paused (EOD, weekend, etc.)."""
-    now = datetime.utcnow()
+    now = utc_now()
 
     eod_enabled = await get_setting_bool(db, "eod_close_enabled")
     if eod_enabled:
@@ -84,7 +85,7 @@ async def _resolve_strategy_mode(db, aggregator: AnalysisAggregator) -> str:
         return mode if mode in ("scalping", "day_trading", "swing") else "scalping"
 
     # Auto-switch logic based on volatility and session
-    now = datetime.utcnow()
+    now = utc_now()
     hour = now.hour
 
     # Default to day_trading for London/NY overlap (high volatility)
@@ -412,7 +413,7 @@ def run_full_analysis():
             _health_state["ai_available"] = not ai_error_occurred
             _health_state["last_error"] = ai_error_message if ai_error_occurred else None
             if not ai_error_occurred:
-                _health_state["last_successful_analysis"] = datetime.utcnow().isoformat()
+                _health_state["last_successful_analysis"] = utc_now().isoformat()
                 _health_state["consecutive_ai_failures"] = 0
             else:
                 _health_state["consecutive_ai_failures"] += 1
@@ -480,7 +481,7 @@ def run_full_analysis():
                             "decision": decision.decision,
                             "confidence": decision.confidence,
                             "strategy_mode": strategy_mode,
-                            "timestamp": datetime.utcnow().isoformat(),
+                            "timestamp": utc_now().isoformat(),
                         },
                     )
                 except Exception:
@@ -721,7 +722,7 @@ def record_hourly_performance():
     async def _record():
         async with get_celery_session()() as db:
             from app import models
-            now = datetime.utcnow()
+            now = utc_now()
             hour = now.hour
             strategy_mode = await get_setting(db, "strategy_mode") or "scalping"
 

@@ -22,7 +22,7 @@ def classify_session(dt_utc: Optional[datetime]) -> Optional[str]:
 
     Returns ``None`` when ``dt_utc`` is ``None`` so callers can chain safely.
     Inputs are interpreted as UTC even if naive (matches the rest of the
-    codebase which uses ``datetime.utcnow()``).
+    codebase which uses ``utc_now()`` from app.utils.time).
     """
     if dt_utc is None:
         return None

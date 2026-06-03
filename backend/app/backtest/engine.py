@@ -11,6 +11,7 @@ import pandas as pd
 from sqlalchemy import select, func
 from app import models, schemas
 from app.config import get_settings
+from app.utils.time import utc_now
 from app.database import get_celery_session
 from app.enums import TradeDirection, TradeMode
 
@@ -68,9 +69,9 @@ class BacktestEngine:
         params: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         if start is None:
-            start = datetime.utcnow() - timedelta(days=365)
+            start = utc_now() - timedelta(days=365)
         if end is None:
-            end = datetime.utcnow()
+            end = utc_now()
 
         df = await self.load_data(symbol, start, end, timeframe)
         if df.empty:

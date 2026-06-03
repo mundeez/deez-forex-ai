@@ -5,6 +5,7 @@ import httpx
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 from app.config import get_settings
+from app.utils.time import utc_now
 
 settings = get_settings()
 logger = logging.getLogger("app.services.news")
@@ -42,7 +43,7 @@ class NewsService:
     async def _fetch_calendar(self) -> List[Dict[str, Any]]:
         """Fetch this week's economic calendar from free source."""
         if self._cache and self._cache_time:
-            if datetime.utcnow() - self._cache_time < timedelta(minutes=self.cache_ttl_minutes):
+            if utc_now() - self._cache_time < timedelta(minutes=self.cache_ttl_minutes):
                 return self._cache
 
         try:
@@ -52,7 +53,7 @@ class NewsService:
                 data = resp.json()
                 if isinstance(data, list):
                     self._cache = data
-                    self._cache_time = datetime.utcnow()
+                    self._cache_time = utc_now()
                     return data
         except Exception:
             logger.warning("Failed to fetch economic calendar", exc_info=True)
@@ -118,7 +119,7 @@ class NewsService:
     ) -> Tuple[bool, str]:
         """Check if trading should be halted due to upcoming high-impact news."""
         events = await self._fetch_calendar()
-        now = datetime.utcnow()
+        now = utc_now()
 
         for event in events:
             if not self._is_high_impact(event):
@@ -142,7 +143,7 @@ class NewsService:
     async def get_upcoming_events(self, symbol: str, hours_ahead: int = 24) -> List[Dict[str, Any]]:
         """Get upcoming high-impact events for a symbol."""
         events = await self._fetch_calendar()
-        now = datetime.utcnow()
+        now = utc_now()
         cutoff = now + timedelta(hours=hours_ahead)
         results = []
         for event in events:

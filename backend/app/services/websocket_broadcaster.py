@@ -2,6 +2,7 @@ import json
 import logging
 import redis.asyncio as aioredis
 from app.config import get_settings
+from app.utils.time import utc_now
 
 settings = get_settings()
 logger = logging.getLogger("app.services.websocket")
@@ -34,7 +35,7 @@ async def broadcast_price_tick(symbol: str, bid: float, ask: float, timestamp: s
         "symbol": symbol,
         "bid": bid,
         "ask": ask,
-        "timestamp": timestamp or datetime.utcnow().isoformat(),
+        "timestamp": timestamp or utc_now().isoformat(),
     })
 
 

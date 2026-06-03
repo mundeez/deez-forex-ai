@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app import models
 from app.services.settings_service import get_setting
+from app.utils.time import utc_now
 
 
 class SuggestionEngine:
@@ -14,7 +15,7 @@ class SuggestionEngine:
 
     async def score_pair_now(self, symbol: str, strategy_mode: str = "scalping") -> Dict[str, Any]:
         """Compute a real-time profitability score for a pair right now."""
-        now = datetime.utcnow()
+        now = utc_now()
         hour_utc = now.hour
 
         # 1. Historical win rate for this pair + hour
@@ -71,7 +72,7 @@ class SuggestionEngine:
 
     async def today_timeline(self, strategy_mode: str = "scalping") -> List[Dict[str, Any]]:
         """Return hour-by-hour forecast for the next 24h."""
-        now = datetime.utcnow()
+        now = utc_now()
         hours = []
         available = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "GBPJPY", "XAUUSD"]
 
@@ -173,7 +174,7 @@ class SuggestionEngine:
         }
 
     async def _get_recent_trades(self, symbol: str, strategy_mode: str, hours: int = 24) -> List[models.Trade]:
-        since = datetime.utcnow() - timedelta(hours=hours)
+        since = utc_now() - timedelta(hours=hours)
         result = await self.db.execute(
             select(models.Trade).where(
                 models.Trade.symbol == symbol,

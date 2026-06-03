@@ -4,6 +4,41 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v0.7.2] — 2026-06-02
+
+### Trade Closure Hotfix — Critical Bug Fixes
+
+This release fixes **5 critical bugs** that prevented open trades from closing, causing positions to remain open for 38+ hours and turning profitable trades into losses.
+
+#### 🚨 Fixed
+- **Critical: Time-based trade close crashes every minute** — `datetime.utcnow()` (naive) subtracted from `trade.open_time` (timezone-aware) caused `TypeError`, crashing the `check_open_positions` Celery task. All 49 open trades were never evaluated for time-based exit.
+- **Critical: SL/TP checked against wrong spread side** — BUY trades checked SL/TP against ask (should be bid), SELL trades checked against bid (should be ask). This made stops artificially harder to hit.
+- **Critical: `close_time` assigned naive datetime to timezone-aware column** — `trade.close_time = datetime.utcnow()` could cause commit failures depending on driver behavior.
+- **Reevaluation PnL always zero** — `trade.pnl_usd(...)` was called as a model method but `pnl_usd` is a module function in `app.services.instruments`. Profit-lock and stale-trade rules never triggered.
+- **Reevaluation trade direction comparison failed** — `trade.direction.value == "buy"` compared string to enum, always false for some enum implementations.
+
+#### 🔧 Changed
+- **Unified UTC datetime helper** — New `app/utils/time.py` with `utc_now()` returns timezone-aware datetimes. Replaced all ~40 `datetime.utcnow()` calls across 13 files to prevent future naive/aware mismatches.
+
+#### 📋 Files Changed
+- `backend/app/utils/time.py` — New centralized helper
+- `backend/app/services/execution/executor.py` — datetime fixes, spread-side SL/TP fix
+- `backend/app/tasks/execution_tasks.py` — datetime fixes, pnl_usd fix, direction comparison fix
+- `backend/app/tasks/analysis_tasks.py` — datetime fixes
+- `backend/app/main.py` — datetime fixes
+- `backend/app/backtest/engine.py` — datetime fixes
+- `backend/app/backtest/optimizer.py` — datetime fixes
+- `backend/app/ai/team/daily_bias.py` — datetime fixes
+- `backend/app/services/settings_service.py` — datetime fixes
+- `backend/app/services/news_service.py` — datetime fixes
+- `backend/app/services/websocket_broadcaster.py` — datetime fixes
+- `backend/app/analysis/fundamental.py` — datetime fixes
+- `backend/app/suggestion_engine/engine.py` — datetime fixes
+- `backend/app/services/sessions.py` — docstring update
+- `backend/app/tests/test_close_reason.py` — timezone-aware test fixtures, 2 new tests
+
+---
+
 ## [v0.7.0] — 2026-05-21
 
 ### AI Resilience & Auto-Trade Recovery

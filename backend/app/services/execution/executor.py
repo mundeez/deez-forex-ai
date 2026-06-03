@@ -10,6 +10,7 @@ from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.config import get_settings
 from app.services.settings_service import get_setting_int, get_setting_bool, get_setting_float
+from app.utils.time import utc_now, ensure_aware
 from app.services.instruments import pnl_usd, pips
 from app.services.sessions import classify_session
 
@@ -109,7 +110,7 @@ class ExecutionService:
         return price - slip_price  # worse fill for seller
 
     async def execute_trade(self, db: AsyncSession, trade_in: schemas.TradeCreate, position_size: float = None, strategy_mode: str = "scalping", trailing_distance: float = None) -> models.Trade:
-        now = datetime.utcnow()
+        now = utc_now()
         client = self._get_client(trade_in.provider)
         size = position_size or trade_in.position_size or 0.01
         trade = models.Trade(
@@ -181,7 +182,7 @@ class ExecutionService:
 
         trade.exit_price = exit_price
         trade.status = models.TradeStatus.CLOSED
-        trade.close_time = datetime.utcnow()
+        trade.close_time = utc_now()
         trade.close_reason = close_reason
         if trade.rationale:
             trade.rationale += f" | Close reason: {close_reason}"
@@ -209,7 +210,7 @@ class ExecutionService:
 
         # Exit-timing analytics: holding time, session, MFE/MAE, peak PnL.
         if trade.open_time and trade.close_time:
-            trade.actual_holding_min = (trade.close_time - trade.open_time).total_seconds() / 60.0
+            trade.actual_holding_min = (ensure_aware(trade.close_time) - ensure_aware(trade.open_time)).total_seconds() / 60.0
         trade.session_at_close = classify_session(trade.close_time)
         if trade.session_at_open is None:
             trade.session_at_open = classify_session(trade.open_time)
@@ -272,7 +273,7 @@ class ExecutionService:
             if not sym_bid or not sym_ask:
                 continue
 
-            price = sym_ask if trade.direction == models.TradeDirection.BUY.value else sym_bid
+            price = sym_bid if trade.direction == models.TradeDirection.BUY.value else sym_ask
             # Track price-path extremes on every open trade (for MFE/MAE at close)
             if trade.highest_price_seen is None or price > trade.highest_price_seen:
                 trade.highest_price_seen = price
@@ -299,7 +300,7 @@ class ExecutionService:
         if not open_trades:
             return []
         client = self._get_client()
-        now = datetime.utcnow()
+        now = utc_now()
 
         # Batch fetch all prices in parallel
         symbols = [t.symbol for t in open_trades]

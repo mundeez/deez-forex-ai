@@ -3,6 +3,7 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from app.config import get_settings
+from app.utils.time import utc_now
 
 settings = get_settings()
 logger = logging.getLogger("app.analysis.fundamental")
@@ -47,7 +48,7 @@ class FundamentalAnalyzer:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 events = resp.json()
-            now = datetime.utcnow()
+            now = utc_now()
             relevant = []
             for e in events:
                 dt_str = e.get("date", "")
@@ -76,7 +77,7 @@ class FundamentalAnalyzer:
             {
                 "title": "US Non-Farm Payrolls",
                 "country": "US",
-                "date": (datetime.utcnow() + timedelta(days=1)).isoformat(),
+                "date": (utc_now() + timedelta(days=1)).isoformat(),
                 "impact": "high",
                 "forecast": "185K",
                 "previous": "175K",

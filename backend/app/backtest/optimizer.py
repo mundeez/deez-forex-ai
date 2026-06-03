@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 
 from app.backtest.engine import BacktestEngine
 from app.config import get_settings
+from app.utils.time import utc_now
 from app.database import get_celery_session
 from app import models
 
@@ -56,7 +57,7 @@ class StrategyOptimizer:
         Train on [now-train_days-test_days, now-test_days],
         test on [now-test_days, now].
         """
-        now = datetime.utcnow()
+        now = utc_now()
         train_end = now - timedelta(days=test_days)
         train_start = train_end - timedelta(days=train_days)
         test_start = train_end

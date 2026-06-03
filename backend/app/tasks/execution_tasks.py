@@ -8,6 +8,7 @@ from app.database import get_celery_session
 from app.services.execution.executor import ExecutionService, compute_live_unrealized
 from app.services.notification_service import NotificationService
 from app.services.settings_service import get_setting_bool, get_setting_float
+from app.utils.time import utc_now, ensure_aware
 from sqlalchemy import select, func
 from app import models
 
@@ -186,7 +187,7 @@ def update_daily_pnl():
     async def _update():
         async with get_celery_session()() as db:
             from app.services.websocket_broadcaster import broadcast_settings_change
-            today = datetime.utcnow().date()
+            today = utc_now().date()
             start_of_day = datetime.combine(today, datetime.min.time())
             equity_balance = await get_setting_float(db, "equity_balance")
 
@@ -203,7 +204,7 @@ def update_daily_pnl():
             equity = equity_balance + realized + unrealized
 
             db_pnl = models.DailyPnl(
-                date=datetime.utcnow(),
+                date=utc_now(),
                 symbol="PORTFOLIO",
                 realized_pnl=realized,
                 unrealized_pnl=unrealized,
@@ -252,7 +253,7 @@ def update_daily_pnl():
 def compute_pair_performance():
     async def _compute():
         async with get_celery_session()() as db:
-            now = datetime.utcnow()
+            now = utc_now()
             # Look back 30 days for stats
             since = now - timedelta(days=30)
             symbols = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "GBPJPY", "XAUUSD"]
@@ -360,7 +361,7 @@ def compute_daily_bias():
                     # Persist to DB
                     db_bias = models.DailyBias(
                         symbol=symbol,
-                        date=datetime.utcnow().date(),
+                        date=utc_now().date(),
                         bias=bias["bias"],
                         confidence=bias["confidence"],
                         rationale=bias["rationale"],
@@ -388,9 +389,9 @@ def refresh_model_performance():
                 return {"skipped": "model_perf_weighting_disabled"}
 
             windows = {
-                "7d": datetime.utcnow() - timedelta(days=7),
-                "30d": datetime.utcnow() - timedelta(days=30),
-                "90d": datetime.utcnow() - timedelta(days=90),
+                "7d": utc_now() - timedelta(days=7),
+                "30d": utc_now() - timedelta(days=30),
+                "90d": utc_now() - timedelta(days=90),
             }
 
             # Join trades with ai_decisions to get model_used + engine_version
@@ -501,9 +502,10 @@ def reevaluate_open_positions():
                     current_ask = price_data.get("ask", 0.0)
                     current = current_bid if trade.direction.value == "sell" else current_ask
 
-                    is_buy = trade.direction.value == "buy"
+                    is_buy = trade.direction == models.TradeDirection.BUY
                     entry = trade.entry_price or current
-                    pnl = trade.pnl_usd(trade.symbol, is_buy, entry, current, trade.position_size or 0.01) if hasattr(trade, 'pnl_usd') else 0.0
+                    from app.services.instruments import pnl_usd as _pnl_usd
+                    pnl = _pnl_usd(trade.symbol, is_buy, entry, current, trade.position_size or 0.01)
 
                     # Compute MFE/MAE if price path is recorded
                     mfe_pips = trade.mfe_pips or 0.0
@@ -529,7 +531,7 @@ def reevaluate_open_positions():
 
                     # Rule 2: Stale trade — holding too long with no profit
                     if trade.open_time:
-                        holding_min = (datetime.utcnow() - trade.open_time).total_seconds() / 60.0
+                        holding_min = (utc_now() - ensure_aware(trade.open_time)).total_seconds() / 60.0
                         max_duration = await get_setting_float(db, "max_trade_duration_min") or 120.0
                         if holding_min > max_duration * 1.5 and (trade.pnl or 0) <= 0:
                             executor = ExecutionService()

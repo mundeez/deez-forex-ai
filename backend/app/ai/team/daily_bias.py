@@ -8,8 +8,10 @@ Recommended model: DeepSeek-R1 (free or paid) for chain-of-thought reasoning.
 """
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+
+from app.utils.time import utc_now
 
 import redis.asyncio as aioredis
 
@@ -46,7 +48,7 @@ class DailyBiasEngine:
     ) -> Dict[str, Any]:
         prompt = (
             f"Symbol: {symbol}\n"
-            f"Date: {datetime.utcnow().strftime('%Y-%m-%d')}\n\n"
+            f"Date: {utc_now().strftime('%Y-%m-%d')}\n\n"
             f"Macro Snapshot:\n{json.dumps(macro_snapshot, indent=2)[:2000]}\n\n"
             f"Overnight News Summary:\n{news_summary[:1500]}\n\n"
             "Generate the daily bias."
@@ -78,7 +80,7 @@ class DailyBiasEngine:
                 "key_levels": [],
                 "risk_events": [],
                 "model_used": self.model,
-                "computed_at": datetime.utcnow().isoformat(),
+                "computed_at": utc_now().isoformat(),
             }
 
         return {
@@ -88,7 +90,7 @@ class DailyBiasEngine:
             "key_levels": parsed.get("key_levels", []),
             "risk_events": parsed.get("risk_events", []),
             "model_used": used_model,
-            "computed_at": datetime.utcnow().isoformat(),
+            "computed_at": utc_now().isoformat(),
         }
 
     async def cache(self, symbol: str, bias: Dict[str, Any], ttl_sec: int = 28800) -> None:

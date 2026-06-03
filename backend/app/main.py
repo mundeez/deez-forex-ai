@@ -14,6 +14,7 @@ import redis.asyncio as aioredis
 
 from app.database import get_db, engine, Base, AsyncSessionLocal
 from app.config import get_settings
+from app.utils.time import utc_now
 from app.logging_config import setup_logging
 from app import models, schemas
 from app.enums import TradeDirection, TradeMode, DataProvider
@@ -169,7 +170,7 @@ async def system_health(db: AsyncSession = Depends(get_db)):
 
     # Determine AI availability by checking recent decisions in DB
     # If the last decision is within 10 minutes, AI is considered available
-    cutoff = datetime.utcnow() - timedelta(minutes=10)
+    cutoff = utc_now() - timedelta(minutes=10)
     result = await db.execute(
         select(func.count(models.AIDecision.id)).where(
             models.AIDecision.timestamp >= cutoff
@@ -330,7 +331,7 @@ async def get_market_summary(
             day_change_pct = round(((curr - prev_close) / prev_close) * 100, 4) if prev_close else 0
         spread = (price.get("ask") - price.get("bid")) if price.get("ask") and price.get("bid") else None
 
-        now_utc = datetime.utcnow()
+        now_utc = utc_now()
         session_status = []
         if 0 <= now_utc.hour < 9:
             session_status.append("Tokyo")
@@ -644,7 +645,7 @@ async def get_trade_stats(db: AsyncSession = Depends(get_db)):
     )
     total_pnl = total_pnl_result.scalar() or 0.0
 
-    today = datetime.utcnow().date()
+    today = utc_now().date()
     start_of_day = datetime.combine(today, datetime.min.time())
     daily_pnl_result = await db.execute(
         select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
@@ -679,7 +680,7 @@ async def get_daily_pnl_history(
     db: AsyncSession = Depends(get_db)
 ):
     """Return daily P&L history from the DailyPnl table."""
-    since = datetime.utcnow() - timedelta(days=days)
+    since = utc_now() - timedelta(days=days)
     result = await db.execute(
         select(models.DailyPnl)
         .where(models.DailyPnl.date >= since)
@@ -715,7 +716,7 @@ async def get_ai_models(db: AsyncSession = Depends(get_db)):
     )
     status = await router.status()
     # Actual model usage over the last 24h — confirms rotation is happening.
-    cutoff = datetime.utcnow() - timedelta(hours=24)
+    cutoff = utc_now() - timedelta(hours=24)
     result = await db.execute(
         select(models.AIDecision.model_used, func.count(models.AIDecision.id))
         .where(models.AIDecision.timestamp >= cutoff)
@@ -923,7 +924,7 @@ async def download_historical_data(
 ):
     """Download Dukascopy tick data for a symbol and store locally."""
     from app.services.data.dukascopy.client import DukascopyClient
-    end = datetime.utcnow()
+    end = utc_now()
     start = end - timedelta(days=days)
     client = DukascopyClient()
     candles = await client.download_range(symbol, start, end, timeframe)
@@ -981,7 +982,7 @@ async def run_backtest(
     """Run a backtest using local historical data (or MetaAPI fallback)."""
     from app.backtest.engine import BacktestEngine
     engine = BacktestEngine()
-    end = datetime.utcnow()
+    end = utc_now()
     start = end - timedelta(days=days)
     result = await engine.run(symbol=symbol, start=start, end=end, timeframe=timeframe, use_v2=use_v2)
     if "error" in result:
@@ -1300,7 +1301,7 @@ async def broadcast_price_tick(symbol: str, bid: float, ask: float, timestamp: s
         "symbol": symbol,
         "bid": bid,
         "ask": ask,
-        "timestamp": timestamp or datetime.utcnow().isoformat(),
+        "timestamp": timestamp or utc_now().isoformat(),
     }
     await manager.broadcast_to_subscribers("prices", message)
     from app.services.websocket_broadcaster import broadcast_via_redis, CHANNEL_PRICES

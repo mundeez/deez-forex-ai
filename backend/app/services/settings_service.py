@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app import models
 from app.config import get_settings
+from app.utils.time import utc_now
 
 # In-memory settings cache: key -> (value, cached_at)
 _settings_cache: dict[str, Tuple[str, datetime]] = {}
@@ -101,7 +102,7 @@ async def _get_or_create(db: AsyncSession, key: str) -> models.SettingsTable:
 
 
 async def get_setting(db: AsyncSession, key: str) -> str:
-    now = datetime.utcnow()
+    now = utc_now()
     # Check in-memory cache first
     if key in _settings_cache:
         cached_value, cached_at = _settings_cache[key]
