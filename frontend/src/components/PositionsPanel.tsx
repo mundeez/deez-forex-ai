@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield, Timer } from "lucide-react";
+import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield, Timer, Calendar } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { formatDateTime } from "@/utils/date";
 
 interface Position {
   id: number;
@@ -139,6 +140,10 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
               </div>
 
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-xs text-slate-400">
+                <div className="flex items-center gap-1">
+                  <Calendar className="w-3 h-3" />
+                  <span>{formatDateTime(p.open_time)}</span>
+                </div>
                 <div className="flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   <span>{formatDuration(p.duration_minutes)}</span>

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { History, TrendingUp, TrendingDown } from "lucide-react";
+import { History, TrendingUp, TrendingDown, Calendar } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { formatDateTime } from "@/utils/date";
 
 interface Trade {
   id: number;
@@ -59,6 +60,10 @@ export default function TradeHistoryPanel({ limit = 10 }: { limit?: number }) {
                 {t.direction}
               </span>
               <span className="text-xs text-slate-500">{t.mode}</span>
+              <span className="text-[10px] text-slate-500 flex items-center gap-0.5">
+                <Calendar className="w-3 h-3" />
+                {formatDateTime(t.close_time)}
+              </span>
             </div>
             <div className={`font-mono font-semibold ${t.pnl >= 0 ? "text-forex-bullish" : "text-forex-bearish"}`}>
               {t.pnl >= 0 ? "+" : ""}
