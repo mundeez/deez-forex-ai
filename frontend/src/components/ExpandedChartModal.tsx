@@ -2,17 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, Time } from "lightweight-charts";
-import { Maximize2 } from "lucide-react";
+import { X, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import { API_URL } from "@/utils/api";
-import ExpandedChartModal from "./ExpandedChartModal";
 
-interface ChartPanelProps {
+interface ExpandedChartModalProps {
   symbol: string;
   timeframe: string;
   livePrice?: { bid: number; ask: number; timestamp?: string };
+  onClose: () => void;
 }
 
-export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelProps) {
+export default function ExpandedChartModal({ symbol, timeframe, livePrice, onClose }: ExpandedChartModalProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -22,7 +22,7 @@ export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelP
   const bbUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const bbLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
   const [candles, setCandles] = useState<any[]>([]);
-  const [showExpanded, setShowExpanded] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchCandles();
@@ -31,15 +31,18 @@ export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelP
   }, [symbol, timeframe]);
 
   async function fetchCandles() {
+    setLoading(true);
     try {
       const res = await fetch(
-        `${API_URL}/api/v1/market/historical?symbol=${symbol}&timeframe=${timeframe}&limit=300`
+        `${API_URL}/api/v1/market/historical?symbol=${symbol}&timeframe=${timeframe}&limit=1000`
       );
       if (!res.ok) return;
       const data = await res.json();
       setCandles(data.candles || []);
     } catch (e) {
       console.error("candles fetch error", e);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -63,7 +66,7 @@ export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelP
       rightPriceScale: { borderColor: "#334155" },
       timeScale: { borderColor: "#334155" },
       width: chartContainerRef.current.clientWidth,
-      height: 400,
+      height: chartContainerRef.current.clientHeight,
     });
     chartRef.current = chart;
 
@@ -92,9 +95,10 @@ export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelP
     const handleResize = () => {
       if (!chartContainerRef.current || !chartRef.current) return;
       const width = chartContainerRef.current.clientWidth;
-      if (width > 0) {
+      const height = chartContainerRef.current.clientHeight;
+      if (width > 0 && height > 0) {
         try {
-          chartRef.current.applyOptions({ width });
+          chartRef.current.applyOptions({ width, height });
         } catch {
           /* chart may be disposed */
         }
@@ -238,7 +242,7 @@ export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelP
     }
   }, [candles]);
 
-  // Live price tick update - update last candle
+  // Live price tick update
   useEffect(() => {
     if (!livePrice || !seriesRef.current || candles.length === 0) return;
     const lastCandle = candles[candles.length - 1];
@@ -254,35 +258,99 @@ export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelP
         close: price,
       });
     } catch {
-      // ignore
+      /* ignore */
     }
-  }, [livePrice]);
+  }, [livePrice, candles]);
 
   return (
-    <div className="bg-forex-card rounded-xl border border-slate-700 p-4">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm font-semibold text-slate-200">{symbol} Chart</h2>
+    <div className="fixed inset-0 z-50 flex flex-col bg-black/80 backdrop-blur-sm">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 bg-forex-card border-b border-slate-700">
         <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">{timeframe}</span>
+          <Maximize2 className="w-4 h-4 text-forex-accent" />
+          <h2 className="text-sm font-semibold">
+            {symbol} — {timeframe} Expanded Chart
+          </h2>
+          {loading && (
+            <span className="text-xs text-slate-400 flex items-center gap-1">
+              <span className="inline-block w-3 h-3 border-2 border-forex-accent border-t-transparent rounded-full animate-spin" />
+              Loading...
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowExpanded(true)}
-            className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white transition"
-            title="Expand chart"
+            onClick={() => {
+              const ts = chartRef.current?.timeScale();
+              if (!ts) return;
+              const visible = ts.getVisibleLogicalRange();
+              if (!visible) return;
+              const mid = (visible.from + visible.to) / 2;
+              const range = visible.to - visible.from;
+              ts.setVisibleLogicalRange({ from: mid - range * 0.5, to: mid + range * 0.5 });
+            }}
+            className="p-1.5 rounded hover:bg-slate-700 text-slate-300 transition"
+            title="Zoom In"
           >
-            <Maximize2 className="w-3 h-3" />
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => {
+              const ts = chartRef.current?.timeScale();
+              if (!ts) return;
+              const visible = ts.getVisibleLogicalRange();
+              if (!visible) return;
+              const mid = (visible.from + visible.to) / 2;
+              const range = visible.to - visible.from;
+              ts.setVisibleLogicalRange({ from: mid - range * 1.5, to: mid + range * 1.5 });
+            }}
+            className="p-1.5 rounded hover:bg-slate-700 text-slate-300 transition"
+            title="Zoom Out"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded hover:bg-slate-700 text-slate-300 transition"
+          >
+            <X className="w-4 h-4" />
           </button>
         </div>
       </div>
-      <div ref={chartContainerRef} className="w-full" />
 
-      {showExpanded && (
-        <ExpandedChartModal
-          symbol={symbol}
-          timeframe={timeframe}
-          livePrice={livePrice}
-          onClose={() => setShowExpanded(false)}
-        />
-      )}
+      {/* Chart */}
+      <div className="flex-1 relative">
+        <div ref={chartContainerRef} className="absolute inset-0" />
+      </div>
+
+      {/* Footer Info */}
+      <div className="px-4 py-2 bg-forex-card border-t border-slate-700 text-xs text-slate-400 flex items-center gap-4">
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          Bullish
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-red-500" />
+          Bearish
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-4 h-0.5 bg-amber-500" />
+          EMA 9
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-4 h-0.5 bg-blue-500" />
+          EMA 21
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-4 h-0.5 bg-purple-500" />
+          EMA 50
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-4 h-0.5 bg-slate-400 border-b border-dashed" />
+          Bollinger
+        </span>
+        <span className="ml-auto">{candles.length} candles loaded</span>
+      </div>
     </div>
   );
 }
