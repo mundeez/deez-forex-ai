@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity, TrendingUpIcon } from "lucide-react";
+import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity, RotateCcw, AlertTriangle } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { formatDateTime } from "@/utils/date";
 
 interface EquityPoint {
   date: string;
@@ -12,6 +13,8 @@ interface EquityPoint {
 export default function ProfitMetricsPanel() {
   const [stats, setStats] = useState<any>(null);
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
 
   useEffect(() => {
     fetchStats();
@@ -45,18 +48,53 @@ export default function ProfitMetricsPanel() {
     }
   }
 
+  async function handleReset() {
+    setResetLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/v1/portfolio/reset`, { method: "POST" });
+      if (res.ok) {
+        await fetchStats();
+        await fetchEquityHistory();
+      }
+    } catch (e) {
+      console.error("portfolio reset error", e);
+    } finally {
+      setResetLoading(false);
+      setShowConfirm(false);
+    }
+  }
+
   // Generate sparkline points from stats if available
   const sparklinePoints = stats?.equity_history || [];
   const sparklineMax = sparklinePoints.length > 0 ? Math.max(...sparklinePoints.map((p: any) => p.equity)) : 0;
   const sparklineMin = sparklinePoints.length > 0 ? Math.min(...sparklinePoints.map((p: any) => p.equity)) : 0;
   const sparklineRange = sparklineMax - sparklineMin || 1;
 
+  const hasReset = !!stats?.portfolio_reset_at;
+
   return (
     <div className="bg-forex-card rounded-xl border border-slate-700 p-4">
-      <div className="flex items-center gap-2 mb-4">
-        <BarChart3 className="w-5 h-5 text-forex-accent" />
-        <h2 className="text-lg font-semibold">Portfolio</h2>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-5 h-5 text-forex-accent" />
+          <h2 className="text-lg font-semibold">Portfolio</h2>
+        </div>
+        <button
+          onClick={() => setShowConfirm(true)}
+          className="text-xs flex items-center gap-1 px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition"
+          title="Reset portfolio statistics"
+        >
+          <RotateCcw className="w-3 h-3" />
+          Reset
+        </button>
       </div>
+
+      {hasReset && (
+        <div className="mb-3 text-[10px] text-slate-400 bg-slate-800/40 rounded px-2 py-1 flex items-center gap-1">
+          <Activity className="w-3 h-3 text-forex-accent" />
+          Tracking since {formatDateTime(stats.portfolio_reset_at)}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className="bg-slate-800/50 p-3 rounded-lg">
@@ -136,6 +174,45 @@ export default function ProfitMetricsPanel() {
             <p className="font-semibold">
               {stats?.winning_trades || 0}/{stats?.losing_trades || 0}
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Confirmation Modal */}
+      {showConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setShowConfirm(false)}
+        >
+          <div
+            className="bg-forex-card border border-slate-700 rounded-xl w-full max-w-sm mx-4 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-3 text-amber-400">
+              <AlertTriangle className="w-5 h-5" />
+              <h3 className="font-semibold text-lg">Reset Portfolio?</h3>
+            </div>
+            <p className="text-sm text-slate-300 mb-4">
+              This will reset all portfolio statistics. Only trades closed after the reset will count toward win rate, profit factor, and equity calculations.
+            </p>
+            <p className="text-xs text-slate-400 mb-4">
+              This action cannot be undone.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="px-3 py-1.5 rounded text-sm text-slate-300 hover:bg-slate-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReset}
+                disabled={resetLoading}
+                className="px-3 py-1.5 rounded text-sm bg-amber-900/50 text-amber-300 border border-amber-800 hover:bg-amber-900/70 transition disabled:opacity-50"
+              >
+                {resetLoading ? "Resetting..." : "Confirm Reset"}
+              </button>
+            </div>
           </div>
         </div>
       )}

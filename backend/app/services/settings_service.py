@@ -87,6 +87,7 @@ DEFAULTS = {
     "mt5_feed_default": "true",
     "paper_uses_live_feed": "true",
     "allow_paper_fallback": "false",
+    "portfolio_reset_at": "",
 }
 
 
@@ -247,4 +248,5 @@ async def build_settings_response(db: AsyncSession) -> dict:
         "mt5_feed_default": all_db.get("mt5_feed_default", "true").lower() == "true",
         "paper_uses_live_feed": all_db.get("paper_uses_live_feed", "true").lower() == "true",
         "allow_paper_fallback": all_db.get("allow_paper_fallback", "false").lower() == "true",
+        "portfolio_reset_at": all_db.get("portfolio_reset_at", ""),
     }

@@ -284,6 +284,7 @@ class AppSettingsOut(BaseModel):
     mt5_feed_default: Optional[bool] = None
     paper_uses_live_feed: Optional[bool] = None
     allow_paper_fallback: Optional[bool] = None
+    portfolio_reset_at: Optional[str] = None
 
 
 class AppSettingsUpdate(BaseModel):
@@ -339,6 +340,7 @@ class AppSettingsUpdate(BaseModel):
     mt5_feed_default: Optional[bool] = None
     paper_uses_live_feed: Optional[bool] = None
     allow_paper_fallback: Optional[bool] = None
+    portfolio_reset_at: Optional[str] = None
 
 
 class ManualTradeCreate(BaseModel):

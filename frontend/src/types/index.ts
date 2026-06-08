@@ -147,6 +147,7 @@ export interface AppSettings {
   slack_webhook_url: string;
   pushover_app_token: string;
   pushover_user_key: string;
+  portfolio_reset_at?: string | null;
 }
 
 export interface ActivePair {

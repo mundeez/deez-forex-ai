@@ -37,6 +37,19 @@ settings = get_settings()
 AVAILABLE_PAIRS = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "GBPJPY", "XAUUSD"]
 
 
+def _parse_reset_at(reset_str: str) -> Optional[datetime]:
+    """Parse portfolio_reset_at setting into a timezone-aware datetime."""
+    if not reset_str or not reset_str.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(reset_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.config import validate_settings
@@ -524,43 +537,38 @@ async def close_position(trade_id: int, db: AsyncSession = Depends(get_db)):
 
 @app.get("/api/v1/portfolio/summary")
 async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
-    total_result = await db.execute(select(func.count(models.Trade.id)).where(models.Trade.status == models.TradeStatus.CLOSED))
+    reset_at_str = await get_setting(db, "portfolio_reset_at")
+    reset_at = _parse_reset_at(reset_at_str)
+
+    base_filters = [models.Trade.status == models.TradeStatus.CLOSED]
+    if reset_at is not None:
+        base_filters.append(models.Trade.close_time >= reset_at)
+
+    total_result = await db.execute(select(func.count(models.Trade.id)).where(*base_filters))
     total_closed = total_result.scalar() or 0
 
-    win_result = await db.execute(
-        select(func.count(models.Trade.id)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl > 0
-        )
-    )
+    win_filters = base_filters + [models.Trade.pnl > 0]
+    win_result = await db.execute(select(func.count(models.Trade.id)).where(*win_filters))
     wins = win_result.scalar() or 0
 
-    loss_result = await db.execute(
-        select(func.count(models.Trade.id)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl <= 0
-        )
-    )
+    loss_filters = base_filters + [models.Trade.pnl <= 0]
+    loss_result = await db.execute(select(func.count(models.Trade.id)).where(*loss_filters))
     losses = loss_result.scalar() or 0
 
+    profit_filters = base_filters + [models.Trade.pnl > 0]
     gross_profit_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl > 0
-        )
+        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(*profit_filters)
     )
     gross_profit = gross_profit_result.scalar() or 0.0
 
+    loss_sum_filters = base_filters + [models.Trade.pnl <= 0]
     gross_loss_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl <= 0
-        )
+        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(*loss_sum_filters)
     )
     gross_loss = abs(gross_loss_result.scalar() or 0.0)
 
     total_pnl_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(models.Trade.status == models.TradeStatus.CLOSED)
+        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(*base_filters)
     )
     total_pnl = total_pnl_result.scalar() or 0.0
 
@@ -600,58 +608,67 @@ async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
         "max_drawdown_pct": round(abs(max_drawdown), 2),
         "sharpe_ratio": round(sharpe, 2),
         "expectancy": round(expectancy_val, 2) if expectancy_val is not None else None,
+        "portfolio_reset_at": reset_at_str if reset_at_str else None,
+    }
+
+
+@app.post("/api/v1/portfolio/reset")
+async def reset_portfolio(db: AsyncSession = Depends(get_db)):
+    """Reset portfolio statistics by setting portfolio_reset_at to current UTC time.
+
+    After reset, all portfolio metrics (win rate, profit factor, equity, etc.)
+    will only count trades closed after this timestamp.
+    """
+    now_str = utc_now().isoformat()
+    await set_setting(db, "portfolio_reset_at", now_str)
+    return {
+        "detail": "Portfolio reset successfully",
+        "portfolio_reset_at": now_str,
     }
 
 
 @app.get("/api/v1/trades/stats")
 async def get_trade_stats(db: AsyncSession = Depends(get_db)):
-    total_result = await db.execute(select(func.count(models.Trade.id)).where(models.Trade.status == models.TradeStatus.CLOSED))
+    reset_at_str = await get_setting(db, "portfolio_reset_at")
+    reset_at = _parse_reset_at(reset_at_str)
+
+    base_filters = [models.Trade.status == models.TradeStatus.CLOSED]
+    if reset_at is not None:
+        base_filters.append(models.Trade.close_time >= reset_at)
+
+    total_result = await db.execute(select(func.count(models.Trade.id)).where(*base_filters))
     total_closed = total_result.scalar() or 0
 
-    win_result = await db.execute(
-        select(func.count(models.Trade.id)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl > 0
-        )
-    )
+    win_filters = base_filters + [models.Trade.pnl > 0]
+    win_result = await db.execute(select(func.count(models.Trade.id)).where(*win_filters))
     wins = win_result.scalar() or 0
 
-    loss_result = await db.execute(
-        select(func.count(models.Trade.id)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl <= 0
-        )
-    )
+    loss_filters = base_filters + [models.Trade.pnl <= 0]
+    loss_result = await db.execute(select(func.count(models.Trade.id)).where(*loss_filters))
     losses = loss_result.scalar() or 0
 
+    profit_filters = base_filters + [models.Trade.pnl > 0]
     gross_profit_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl > 0
-        )
+        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(*profit_filters)
     )
     gross_profit = gross_profit_result.scalar() or 0.0
 
+    loss_sum_filters = base_filters + [models.Trade.pnl <= 0]
     gross_loss_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.pnl <= 0
-        )
+        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(*loss_sum_filters)
     )
     gross_loss = abs(gross_loss_result.scalar() or 0.0)
 
     total_pnl_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(models.Trade.status == models.TradeStatus.CLOSED)
+        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(*base_filters)
     )
     total_pnl = total_pnl_result.scalar() or 0.0
 
     today = utc_now().date()
     start_of_day = datetime.combine(today, datetime.min.time())
+    day_filters = base_filters + [models.Trade.close_time >= start_of_day]
     daily_pnl_result = await db.execute(
-        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-            models.Trade.status == models.TradeStatus.CLOSED,
-            models.Trade.close_time >= start_of_day,
-        )
+        select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(*day_filters)
     )
     daily_pnl = daily_pnl_result.scalar() or 0.0
 
@@ -671,6 +688,7 @@ async def get_trade_stats(db: AsyncSession = Depends(get_db)):
         "losing_trades": losses,
         "win_rate": round(win_rate, 2) if win_rate is not None else None,
         "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
+        "portfolio_reset_at": reset_at_str if reset_at_str else None,
     }
 
 
