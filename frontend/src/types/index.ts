@@ -16,21 +16,43 @@ export interface Trade {
   direction: "buy" | "sell";
   status: "open" | "closed";
   mode: "paper" | "live";
+  strategy_mode?: string | null;
   entry_price: number;
+  exit_price?: number | null;
   stop_loss: number | null;
   take_profit: number | null;
   position_size: number;
+  original_position_size?: number | null;
   risk_pct: number | null;
   pnl: number | null;
   pnl_pct: number | null;
+  partial_pnl?: number | null;
+  closed_portion?: number | null;
   open_time: string;
   close_time: string | null;
   close_reason: string | null;
   ai_decision_id: number | null;
   rationale: string | null;
+  provider?: string | null;
+  trailing_stop_active?: boolean | null;
+  trailing_stop_distance?: number | null;
+  highest_price_seen?: number | null;
+  lowest_price_seen?: number | null;
   duration_minutes?: number;
   distance_to_sl?: number | null;
   distance_to_tp?: number | null;
+  session_at_open?: string | null;
+  session_at_close?: string | null;
+  actual_holding_min?: number | null;
+  mfe_pips?: number | null;
+  mae_pips?: number | null;
+  peak_pnl?: number | null;
+  peak_pnl_time?: string | null;
+  max_risk_amount?: number | null;
+  partial_tp_hit?: boolean | null;
+  partial_profit_pnl?: number | null;
+  created_at?: string;
+  meta_order_id?: string | null;
 }
 
 export interface AIDecision {

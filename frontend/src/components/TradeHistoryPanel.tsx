@@ -1,24 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { History, TrendingUp, TrendingDown, Calendar } from "lucide-react";
+import { History, TrendingUp, TrendingDown, Calendar, Eye } from "lucide-react";
 import { API_URL } from "@/utils/api";
 import { formatDateTime } from "@/utils/date";
-
-interface Trade {
-  id: number;
-  symbol: string;
-  direction: string;
-  entry_price: number;
-  exit_price: number;
-  pnl: number;
-  pnl_pct: number;
-  mode: string;
-  close_time: string;
-}
+import { Trade } from "@/types";
+import TradeDetailModal from "./TradeDetailModal";
 
 export default function TradeHistoryPanel({ limit = 10 }: { limit?: number }) {
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
   useEffect(() => {
     fetchHistory();
@@ -48,9 +39,13 @@ export default function TradeHistoryPanel({ limit = 10 }: { limit?: number }) {
           <p className="text-sm text-slate-500">No closed trades yet.</p>
         )}
         {trades.map((t) => (
-          <div key={t.id} className="flex items-center justify-between bg-slate-800/40 rounded p-2 text-sm">
+          <div
+            key={t.id}
+            onClick={() => setSelectedTrade(t)}
+            className="flex items-center justify-between bg-slate-800/40 rounded p-2 text-sm cursor-pointer hover:bg-slate-800/70 transition group"
+          >
             <div className="flex items-center gap-2">
-              {t.pnl >= 0 ? (
+              {t.pnl && t.pnl >= 0 ? (
                 <TrendingUp className="w-3 h-3 text-forex-bullish" />
               ) : (
                 <TrendingDown className="w-3 h-3 text-forex-bearish" />
@@ -65,13 +60,23 @@ export default function TradeHistoryPanel({ limit = 10 }: { limit?: number }) {
                 {formatDateTime(t.close_time)}
               </span>
             </div>
-            <div className={`font-mono font-semibold ${t.pnl >= 0 ? "text-forex-bullish" : "text-forex-bearish"}`}>
-              {t.pnl >= 0 ? "+" : ""}
-              {t.pnl?.toFixed(2)} ({t.pnl_pct?.toFixed(2)}%)
+            <div className="flex items-center gap-2">
+              <div className={`font-mono font-semibold ${t.pnl && t.pnl >= 0 ? "text-forex-bullish" : "text-forex-bearish"}`}>
+                {t.pnl && t.pnl >= 0 ? "+" : ""}
+                {t.pnl?.toFixed(2)} ({t.pnl_pct?.toFixed(2)}%)
+              </div>
+              <Eye className="w-3 h-3 text-slate-500 opacity-0 group-hover:opacity-100 transition" />
             </div>
           </div>
         ))}
       </div>
+
+      {selectedTrade && (
+        <TradeDetailModal
+          trade={selectedTrade}
+          onClose={() => setSelectedTrade(null)}
+        />
+      )}
     </div>
   );
 }
