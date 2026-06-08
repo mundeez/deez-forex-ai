@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity, RotateCcw, AlertTriangle } from "lucide-react";
+import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity, RotateCcw, AlertTriangle, Eye } from "lucide-react";
 import { API_URL } from "@/utils/api";
 import { formatDateTime } from "@/utils/date";
+import PortfolioIndicatorModal from "./PortfolioIndicatorModal";
 
 interface EquityPoint {
   date: string;
@@ -15,6 +16,7 @@ export default function ProfitMetricsPanel() {
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
   const [showConfirm, setShowConfirm] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
 
   useEffect(() => {
     fetchStats();
@@ -97,24 +99,36 @@ export default function ProfitMetricsPanel() {
       )}
 
       <div className="grid grid-cols-2 gap-3 mb-4">
-        <div className="bg-slate-800/50 p-3 rounded-lg">
-          <p className="text-xs text-slate-400">Equity</p>
+        <div className="bg-slate-800/50 p-3 rounded-lg cursor-pointer hover:bg-slate-800/70 transition group" onClick={() => setShowDetail(true)}>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">Equity</p>
+            <Eye className="w-3 h-3 text-slate-500 opacity-0 group-hover:opacity-100 transition" />
+          </div>
           <p className="text-xl font-bold">${stats?.equity?.toFixed(2) || "0.00"}</p>
         </div>
-        <div className="bg-slate-800/50 p-3 rounded-lg">
-          <p className="text-xs text-slate-400">Daily P&L</p>
+        <div className="bg-slate-800/50 p-3 rounded-lg cursor-pointer hover:bg-slate-800/70 transition group" onClick={() => setShowDetail(true)}>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">Daily P&L</p>
+            <Eye className="w-3 h-3 text-slate-500 opacity-0 group-hover:opacity-100 transition" />
+          </div>
           <p className={`text-xl font-bold ${(stats?.daily_pnl || 0) >= 0 ? "text-forex-bullish" : "text-forex-bearish"}`}>
             {stats?.daily_pnl >= 0 ? "+" : ""}{stats?.daily_pnl?.toFixed(2) || "0.00"}
           </p>
         </div>
-        <div className="bg-slate-800/50 p-3 rounded-lg">
-          <p className="text-xs text-slate-400">Unrealized</p>
+        <div className="bg-slate-800/50 p-3 rounded-lg cursor-pointer hover:bg-slate-800/70 transition group" onClick={() => setShowDetail(true)}>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">Unrealized</p>
+            <Eye className="w-3 h-3 text-slate-500 opacity-0 group-hover:opacity-100 transition" />
+          </div>
           <p className={`text-xl font-bold ${(stats?.unrealized_pnl || 0) >= 0 ? "text-forex-bullish" : "text-forex-bearish"}`}>
             {stats?.unrealized_pnl >= 0 ? "+" : ""}{stats?.unrealized_pnl?.toFixed(2) || "0.00"}
           </p>
         </div>
-        <div className="bg-slate-800/50 p-3 rounded-lg">
-          <p className="text-xs text-slate-400">Realized</p>
+        <div className="bg-slate-800/50 p-3 rounded-lg cursor-pointer hover:bg-slate-800/70 transition group" onClick={() => setShowDetail(true)}>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">Realized</p>
+            <Eye className="w-3 h-3 text-slate-500 opacity-0 group-hover:opacity-100 transition" />
+          </div>
           <p className={`text-xl font-bold ${(stats?.realized_pnl || 0) >= 0 ? "text-forex-bullish" : "text-forex-bearish"}`}>
             {stats?.realized_pnl >= 0 ? "+" : ""}{stats?.realized_pnl?.toFixed(2) || "0.00"}
           </p>
@@ -177,6 +191,9 @@ export default function ProfitMetricsPanel() {
           </div>
         </div>
       )}
+
+      {/* Portfolio Detail Modal */}
+      {showDetail && <PortfolioIndicatorModal onClose={() => setShowDetail(false)} />}
 
       {/* Reset Confirmation Modal */}
       {showConfirm && (
