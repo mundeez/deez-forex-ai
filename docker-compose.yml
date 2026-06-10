@@ -166,7 +166,7 @@ services:
       - "23000:3000"
     depends_on:
       - backend
-    command: npx next dev
+    command: npm start
 
 volumes:
   postgres_data:
