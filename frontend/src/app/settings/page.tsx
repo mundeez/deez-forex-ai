@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, AlertTriangle, Bot, Globe, BarChart3, Shield, Bell, Zap, Clock } from "lucide-react";
+import { ArrowLeft, Save, AlertTriangle, Bot, Globe, BarChart3, Shield, Bell, Zap, Clock, Server, Plus, Trash2, RotateCcw, CheckCircle2, AlertCircle } from "lucide-react";
 import { API_URL } from "@/utils/api";
 
 interface SettingsData {
@@ -275,6 +275,7 @@ export default function SettingsPage() {
     { id: "pairs", label: "Pairs", icon: Globe },
     { id: "ai", label: "AI", icon: Bot },
     { id: "notifications", label: "Notifications", icon: Bell },
+    { id: "mt5", label: "MT5 / Broker", icon: Server },
     { id: "general", label: "General", icon: BarChart3 },
   ];
 
@@ -1172,6 +1173,11 @@ export default function SettingsPage() {
                 </div>
               )}
 
+              {/* MT5 / Broker Settings */}
+              {activeTab === "mt5" && (
+                <MT5BrokerSettings />
+              )}
+
               {/* General Settings */}
               {activeTab === "general" && (
                 <div className="bg-forex-card rounded-xl border border-slate-700 p-6 space-y-6">
@@ -1244,6 +1250,219 @@ export default function SettingsPage() {
   );
 }
 
+
+
+function MT5BrokerSettings() {
+  const [status, setStatus] = useState<any>(null);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [form, setForm] = useState({ name: "", broker: "", login: "", password: "", server: "", is_demo: true });
+
+  const fetchStatus = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/v1/mt5/status`);
+      if (res.ok) setStatus(await res.json());
+    } catch {
+      setStatus({ container_running: false, mt5_terminal_running: false, zmq_bridge_running: false, mt5_initialized: false, message: "Unreachable" });
+    }
+  };
+
+  const fetchAccounts = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/v1/mt5/accounts`);
+      if (res.ok) setAccounts(await res.json());
+    } catch {
+      setAccounts([]);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatus();
+    fetchAccounts();
+    const iv = setInterval(fetchStatus, 10000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const createAccount = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_URL}/api/v1/mt5/accounts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setMessage("Account created successfully");
+      setShowForm(false);
+      setForm({ name: "", broker: "", login: "", password: "", server: "", is_demo: true });
+      await fetchAccounts();
+    } catch (e: any) {
+      setError(e.message || "Failed to create account");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const deleteAccount = async (id: number) => {
+    if (!confirm("Delete this account?")) return;
+    try {
+      await fetch(`${API_URL}/api/v1/mt5/accounts/${id}`, { method: "DELETE" });
+      await fetchAccounts();
+      setMessage("Account deleted");
+    } catch {
+      setError("Failed to delete account");
+    }
+  };
+
+  const activateAccount = async (id: number) => {
+    setLoading(true);
+    try {
+      await fetch(`${API_URL}/api/v1/mt5/accounts/${id}/activate`, { method: "PUT" });
+      await fetchAccounts();
+      await fetchStatus();
+      setMessage("Account activated");
+    } catch {
+      setError("Failed to activate account");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const restartContainer = async () => {
+    setLoading(true);
+    try {
+      await fetch(`${API_URL}/api/v1/mt5/restart`, { method: "POST" });
+      setMessage("Container restart initiated");
+    } catch {
+      setError("Failed to restart container");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const StatusBadge = ({ ok, label }: { ok: boolean; label: string }) => (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${ok ? "bg-emerald-900/40 text-emerald-300" : "bg-red-900/40 text-red-300"}`}>
+      {ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+      {label}
+    </span>
+  );
+
+  return (
+    <div className="bg-forex-card rounded-xl border border-slate-700 p-6 space-y-6">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <Server className="w-5 h-5 text-forex-accent" />
+          <h2 className="text-xl font-semibold">MT5 / Broker</h2>
+        </div>
+        <button
+          onClick={restartContainer}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition disabled:opacity-50"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          Restart Container
+        </button>
+      </div>
+
+      {message && (
+        <div className="text-sm px-4 py-2 rounded-lg bg-emerald-900/30 text-emerald-300">{message}</div>
+      )}
+      {error && (
+        <div className="text-sm px-4 py-2 rounded-lg bg-red-900/30 text-red-300">{error}</div>
+      )}
+
+      {/* Status */}
+      <div className="bg-slate-800/50 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-300">Container Status</h3>
+        {status ? (
+          <div className="flex flex-wrap gap-2">
+            <StatusBadge ok={status.container_running} label="Container" />
+            <StatusBadge ok={status.mt5_terminal_running} label="MT5 Terminal" />
+            <StatusBadge ok={status.zmq_bridge_running} label="ZMQ Bridge" />
+            <StatusBadge ok={status.mt5_initialized} label="MT5 Initialized" />
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">Loading status...</p>
+        )}
+        {status?.active_account && (
+          <p className="text-sm text-slate-400">
+            Active account: <span className="text-forex-accent font-medium">{status.active_account.name}</span> ({status.active_account.broker})
+          </p>
+        )}
+      </div>
+
+      {/* Accounts */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-300">Broker Accounts</h3>
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="flex items-center gap-1.5 text-xs bg-forex-accent hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg transition"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add Account
+          </button>
+        </div>
+
+        {showForm && (
+          <div className="bg-slate-800/50 rounded-lg p-4 space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input placeholder="Account name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="Broker name" value={form.broker} onChange={(e) => setForm({ ...form, broker: e.target.value })} className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="Login (account number)" value={form.login} onChange={(e) => setForm({ ...form, login: e.target.value })} className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm" />
+              <input type="password" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm" />
+              <input placeholder="Server name" value={form.server} onChange={(e) => setForm({ ...form, server: e.target.value })} className="bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm md:col-span-2" />
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-300">
+              <input type="checkbox" checked={form.is_demo} onChange={(e) => setForm({ ...form, is_demo: e.target.checked })} className="w-4 h-4 accent-forex-accent" />
+              Demo account
+            </label>
+            <div className="flex gap-2">
+              <button onClick={createAccount} disabled={loading} className="bg-forex-accent hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50">
+                {loading ? "Creating..." : "Create Account"}
+              </button>
+              <button onClick={() => setShowForm(false)} className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-4 py-2 rounded-lg text-sm transition">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {accounts.length === 0 ? (
+          <p className="text-sm text-slate-500">No accounts configured yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {accounts.map((acc) => (
+              <div key={acc.id} className={`flex items-center justify-between bg-slate-800/50 rounded-lg p-3 border ${acc.is_active ? "border-forex-accent/50" : "border-transparent"}`}>
+                <div>
+                  <p className="text-sm font-medium text-slate-200">{acc.name}</p>
+                  <p className="text-xs text-slate-400">{acc.broker} · {acc.login} · {acc.server} · {acc.is_demo ? "Demo" : "Live"}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {!acc.is_active && (
+                    <button onClick={() => activateAccount(acc.id)} disabled={loading} className="text-xs bg-emerald-900/40 hover:bg-emerald-900/60 text-emerald-300 px-2.5 py-1 rounded transition disabled:opacity-50">
+                      Activate
+                    </button>
+                  )}
+                  {acc.is_active && (
+                    <span className="text-xs text-forex-accent font-medium px-2.5 py-1">Active</span>
+                  )}
+                  <button onClick={() => deleteAccount(acc.id)} className="text-slate-500 hover:text-red-400 transition p-1">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 function SettingField({
   label,
   value,
