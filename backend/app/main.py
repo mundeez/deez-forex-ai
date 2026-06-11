@@ -677,6 +677,24 @@ async def get_trade_stats(db: AsyncSession = Depends(get_db)):
     equity = equity_balance + total_pnl + unrealized
     win_rate = (wins / total_closed * 100) if total_closed > 0 else None
     profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
+    expectancy_val = None
+    if total_closed > 0:
+        avg_win = gross_profit / wins if wins > 0 else 0
+        avg_loss = gross_loss / losses if losses > 0 else 0
+        win_rate_dec = wins / total_closed
+        expectancy_val = (avg_win * win_rate_dec) - (avg_loss * (1 - win_rate_dec))
+    max_dd_result = await db.execute(
+        select(func.coalesce(func.min(models.BacktestRun.max_drawdown_pct), 0)).where(
+            models.BacktestRun.total_return_pct.isnot(None)
+        )
+    )
+    max_drawdown = max_dd_result.scalar() or 0.0
+    sharpe_result = await db.execute(
+        select(func.coalesce(func.avg(models.BacktestRun.sharpe_ratio), 0)).where(
+            models.BacktestRun.sharpe_ratio.isnot(None)
+        )
+    )
+    sharpe = sharpe_result.scalar() or 0.0
 
     return {
         "equity": round(equity, 2),
@@ -688,6 +706,9 @@ async def get_trade_stats(db: AsyncSession = Depends(get_db)):
         "losing_trades": losses,
         "win_rate": round(win_rate, 2) if win_rate is not None else None,
         "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
+        "max_drawdown_pct": round(abs(max_drawdown), 2),
+        "sharpe_ratio": round(sharpe, 2),
+        "expectancy": round(expectancy_val, 2) if expectancy_val is not None else None,
         "portfolio_reset_at": reset_at_str if reset_at_str else None,
     }
 

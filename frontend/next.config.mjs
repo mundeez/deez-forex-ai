@@ -7,7 +7,7 @@ const nextConfig = {
     // In production/nginx mode, API_URL is an external HTTPS domain
     // and nginx handles proxying — so we must NOT rewrite here.
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-    if (apiUrl.includes("backend:8000") || apiUrl.includes("localhost:8000")) {
+    if (apiUrl.includes("backend:8000") || apiUrl.includes("localhost:8000") || apiUrl.includes("localhost:28000")) {
       return [
         {
           source: "/api/:path*",

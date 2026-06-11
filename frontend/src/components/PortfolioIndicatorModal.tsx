@@ -15,9 +15,9 @@ interface PortfolioStats {
   losing_trades: number;
   win_rate: number | null;
   profit_factor: number | null;
-  max_drawdown_pct: number;
-  sharpe_ratio: number;
-  expectancy: number | null;
+  max_drawdown_pct?: number | null;
+  sharpe_ratio?: number | null;
+  expectancy?: number | null;
   portfolio_reset_at?: string | null;
 }
 
@@ -169,10 +169,10 @@ export default function PortfolioIndicatorModal({ onClose }: PortfolioIndicatorM
           <div className="grid grid-cols-3 gap-3">
             <MetricCard
               label="Max Drawdown"
-              value={`${stats.max_drawdown_pct.toFixed(2)}%`}
-              negative
+              value={stats.max_drawdown_pct != null ? `${stats.max_drawdown_pct.toFixed(2)}%` : "—"}
+              negative={stats.max_drawdown_pct != null}
             />
-            <MetricCard label="Sharpe Ratio" value={stats.sharpe_ratio.toFixed(2)} />
+            <MetricCard label="Sharpe Ratio" value={stats.sharpe_ratio != null ? stats.sharpe_ratio.toFixed(2) : "—"} />
             <MetricCard
               label="Daily P&L"
               value={`${stats.daily_pnl >= 0 ? "+" : ""}$${stats.daily_pnl.toFixed(2)}`}

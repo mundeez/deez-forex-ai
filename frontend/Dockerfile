@@ -12,6 +12,10 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
+# Build-time arg for API URL (baked into client bundle)
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
 # Copy source, strip any local dev env files, and build
 COPY . .
 RUN rm -f .env.local .env.*.local
