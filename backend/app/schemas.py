@@ -354,3 +354,36 @@ class ManualTradeCreate(BaseModel):
     mode: Optional[str] = "paper"
     provider: Optional[DataProvider] = DataProvider.METAAPI
     rationale: Optional[str] = None
+
+
+class BrokerAccountCreate(BaseModel):
+    name: str
+    broker: str
+    login: str
+    password: str
+    server: str
+    is_demo: bool = True
+
+
+class BrokerAccountOut(BaseModel):
+    id: int
+    name: str
+    broker: str
+    login: str
+    server: str
+    is_active: bool
+    is_demo: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class MT5StatusOut(BaseModel):
+    container_running: bool
+    mt5_terminal_running: bool
+    zmq_bridge_running: bool
+    mt5_initialized: bool
+    active_account: Optional[BrokerAccountOut] = None
+    message: str

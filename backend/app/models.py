@@ -266,3 +266,18 @@ class OptimizationRun(Base):
     fitness = Column(Float)
     total_backtests = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class BrokerAccount(Base):
+    __tablename__ = "broker_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False)
+    broker = Column(String(100), nullable=False)
+    login = Column(String(50), nullable=False)
+    password = Column(String(100), nullable=False)  # TODO: encrypt in production
+    server = Column(String(100), nullable=False)
+    is_active = Column(Boolean, default=False)
+    is_demo = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

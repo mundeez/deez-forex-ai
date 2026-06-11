@@ -1379,3 +1379,122 @@ async def broadcast_settings_change(settings_data: dict):
     await manager.broadcast_to_subscribers("settings", message)
     from app.services.websocket_broadcaster import broadcast_via_redis, CHANNEL_SETTINGS
     await broadcast_via_redis(CHANNEL_SETTINGS, message)
+
+# =============================================================================
+# MT5 Container / Broker Account Management
+# =============================================================================
+
+@app.get("/api/v1/mt5/status", response_model=schemas.MT5StatusOut)
+async def get_mt5_status(db: AsyncSession = Depends(get_db)):
+    """Check MT5 container and ZMQ bridge status."""
+    import zmq
+    container_running = True
+    zmq_reachable = False
+    mt5_initialized = False
+    try:
+        ctx = zmq.Context()
+        sock = ctx.socket(zmq.REQ)
+        sock.setsockopt(zmq.RCVTIMEO, 5000)
+        sock.setsockopt(zmq.SNDTIMEO, 2000)
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.connect(f"tcp://{settings.MT5_ZMQ_HOST}:{settings.MT5_ZMQ_REQ_PORT}")
+        sock.send_string(json.dumps({"action": "GET_ACCOUNT"}))
+        resp = sock.recv_string()
+        data = json.loads(resp)
+        zmq_reachable = True
+        mt5_initialized = "error" not in data or "not initialized" not in data.get("error", "")
+        sock.close()
+        ctx.term()
+    except Exception:
+        container_running = False
+
+    active_account = None
+    result = await db.execute(
+        select(models.BrokerAccount).where(models.BrokerAccount.is_active == True)
+    )
+    account = result.scalar_one_or_none()
+    if account:
+        active_account = schemas.BrokerAccountOut.model_validate(account)
+
+    return schemas.MT5StatusOut(
+        container_running=container_running,
+        mt5_terminal_running=zmq_reachable,
+        zmq_bridge_running=zmq_reachable,
+        mt5_initialized=mt5_initialized,
+        active_account=active_account,
+        message="MT5 OK" if zmq_reachable else "MT5 container not reachable",
+    )
+
+
+@app.get("/api/v1/mt5/accounts", response_model=list[schemas.BrokerAccountOut])
+async def list_broker_accounts(db: AsyncSession = Depends(get_db)):
+    """List all stored MT5 broker accounts."""
+    result = await db.execute(select(models.BrokerAccount).order_by(models.BrokerAccount.created_at.desc()))
+    return result.scalars().all()
+
+
+@app.post("/api/v1/mt5/accounts", response_model=schemas.BrokerAccountOut)
+async def create_broker_account(payload: schemas.BrokerAccountCreate, db: AsyncSession = Depends(get_db)):
+    """Add a new MT5 broker account."""
+    account = models.BrokerAccount(
+        name=payload.name,
+        broker=payload.broker,
+        login=payload.login,
+        password=payload.password,
+        server=payload.server,
+        is_demo=payload.is_demo,
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+@app.delete("/api/v1/mt5/accounts/{account_id}")
+async def delete_broker_account(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove a broker account."""
+    result = await db.execute(select(models.BrokerAccount).where(models.BrokerAccount.id == account_id))
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    await db.delete(account)
+    await db.commit()
+    return {"status": "deleted", "id": account_id}
+
+
+@app.put("/api/v1/mt5/accounts/{account_id}/activate")
+async def activate_broker_account(account_id: int, db: AsyncSession = Depends(get_db)):
+    """Activate a broker account and deactivate all others."""
+    result = await db.execute(select(models.BrokerAccount).where(models.BrokerAccount.id == account_id))
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Deactivate all accounts
+    await db.execute(
+        text("UPDATE broker_accounts SET is_active = FALSE")
+    )
+    account.is_active = True
+    await db.commit()
+    await db.refresh(account)
+    return {"status": "activated", "account": schemas.BrokerAccountOut.model_validate(account)}
+
+
+@app.post("/api/v1/mt5/restart")
+async def restart_mt5_container():
+    """Restart the MT5 container (requires Docker socket access)."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["docker", "restart", "deez-forex-mt5"],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        return {"status": "restarted", "message": "MT5 container restart initiated"}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to restart MT5 container: {e.stderr.decode()}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to restart MT5 container: {e}")
+
+
