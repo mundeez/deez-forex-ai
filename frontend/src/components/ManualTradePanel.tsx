@@ -148,7 +148,7 @@ export default function ManualTradePanel({ symbol, onTrade, visible = true, prov
             className="text-xs bg-slate-800 text-slate-300 border border-slate-600 rounded px-1 py-0.5"
           >
             <option value="metaapi">MetaAPI.cloud</option>
-            <option value="mt5_zmq">MT5 Desktop (ZMQ)</option>
+            <option value="mt5_zmq">MT5 Container (ZMQ)</option>
           </select>
         </div>
 

@@ -58,7 +58,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-forex-dark text-slate-200">
-      <Header />
+      <Header provider={provider} />
 
       {/* Connection status bar */}
       <div className="max-w-7xl mx-auto px-4 pt-4">

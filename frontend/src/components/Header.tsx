@@ -17,9 +17,10 @@ import Link from "next/link";
 
 interface HeaderProps {
   connected?: boolean;
+  provider?: string;
 }
 
-export default function Header({ connected = true }: HeaderProps) {
+export default function Header({ connected = true, provider = "metaapi" }: HeaderProps) {
   return (
     <AppBar position="static" elevation={0} sx={{ borderBottom: "1px solid #1e293b" }}>
       <Toolbar sx={{ justifyContent: "space-between" }}>
@@ -33,6 +34,16 @@ export default function Header({ connected = true }: HeaderProps) {
         </Box>
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Chip
+            size="small"
+            label={provider === "mt5_zmq" ? "MT5 Container" : "MetaAPI.cloud"}
+            color="primary"
+            sx={{
+              bgcolor: "transparent",
+              border: (theme) => `1px solid ${theme.palette.primary.main}`,
+              color: (theme) => theme.palette.primary.main,
+            }}
+          />
           <Chip
             size="small"
             label={connected ? "24/7 Live" : "Disconnected"}
