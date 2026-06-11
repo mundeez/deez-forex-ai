@@ -7,7 +7,7 @@ settings = get_settings()
 
 
 class MT5ZMQClient:
-    """Async ZeroMQ client that talks directly to a desktop MT5 terminal."""
+    """Async ZeroMQ client that talks directly to an MT5 terminal or container."""
 
     def __init__(
         self,
@@ -24,24 +24,31 @@ class MT5ZMQClient:
         if self._socket is None or self._socket.closed:
             self._context = zmq.asyncio.Context()
             self._socket = self._context.socket(zmq.REQ)
-            self._socket.setsockopt(zmq.RCVTIMEO, 2000)  # 2s timeout to fail fast
-            self._socket.setsockopt(zmq.SNDTIMEO, 2000)
+            # 12s timeout — accommodates mt5.initialize(5s) + network overhead + retries
+            self._socket.setsockopt(zmq.RCVTIMEO, 12000)
+            self._socket.setsockopt(zmq.SNDTIMEO, 5000)
             self._socket.setsockopt(zmq.LINGER, 0)
             self._socket.connect(self.req_addr)
 
-    async def _send(self, payload: dict) -> dict:
-        await self._ensure_socket()
-        try:
-            await self._socket.send_string(json.dumps(payload))
-            raw = await self._socket.recv_string()
-            return json.loads(raw)
-        except zmq.Again:
-            raise TimeoutError(f"MT5 ZMQ timeout on {self.req_addr}")
-        except Exception as e:
+    async def _send(self, payload: dict, retries: int = 1) -> dict:
+        last_error = None
+        for attempt in range(retries + 1):
+            await self._ensure_socket()
+            try:
+                await self._socket.send_string(json.dumps(payload))
+                raw = await self._socket.recv_string()
+                return json.loads(raw)
+            except zmq.Again:
+                last_error = TimeoutError(f"MT5 ZMQ timeout on {self.req_addr} (attempt {attempt + 1})")
+            except Exception as e:
+                last_error = e
             # Recreate socket on error to avoid REQ/REP deadlock
-            self._socket.close()
+            try:
+                self._socket.close()
+            except Exception:
+                pass
             self._socket = None
-            raise e
+        raise last_error
 
     async def get_current_price(self, symbol: str = "EURUSD") -> Dict[str, Any]:
         resp = await self._send({"action": "GET_PRICE", "symbol": symbol})
