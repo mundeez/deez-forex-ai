@@ -7,7 +7,6 @@ Exposes a classic rpyc server on port 18812.
 import sys
 import rpyc
 from rpyc.utils.server import ThreadedServer
-from rpyc.core import SlaveService
 
 
 def main():
@@ -17,7 +16,7 @@ def main():
 
     try:
         t = ThreadedServer(
-            SlaveService,
+            rpyc.SlaveService,
             hostname=host,
             port=port,
             reuse_addr=True,

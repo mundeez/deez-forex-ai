@@ -5,7 +5,7 @@ set -e
 # MT5 Container Entrypoint — Proven approach from gmag11/metatrader5_vnc
 # =============================================================================
 
-INIT_MARKER="/app/.mt5_initialized"
+INIT_MARKER="/config/.mt5_initialized"
 
 # Configuration
 mt5file="/config/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
@@ -96,12 +96,13 @@ if [ ! -f "$INIT_MARKER" ]; then
     fi
 
     # 6. Install Python libraries in Wine
-    echo "[startup] [6/7] Installing MetaTrader5 + mt5linux + rpyc in Wine Python..."
+    echo "[startup] [6/7] Installing MetaTrader5 + mt5linux + rpyc + pyzmq in Wine Python..."
     $wine_executable python -m pip install --upgrade --no-cache-dir pip
     $wine_executable python -m pip install --no-cache-dir "numpy<2"
     $wine_executable python -m pip install --no-cache-dir "MetaTrader5==$metatrader_version"
     $wine_executable python -m pip install --no-cache-dir "mt5linux>=0.1.9"
     $wine_executable python -m pip install --no-cache-dir rpyc
+    $wine_executable python -m pip install --no-cache-dir pyzmq
     echo "[startup] [6/7] Wine Python libraries installed."
 
     # 7. Install mt5linux + rpyc in Linux Python
