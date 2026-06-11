@@ -41,6 +41,24 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  mt5:
+    build:
+      context: ./mt5
+      dockerfile: Dockerfile
+    container_name: deez-forex-mt5
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - mt5_config:/config
+    ports:
+      - "15555:5555"
+      - "15556:5556"
+    healthcheck:
+      test: ["CMD", "python3", "/app/health_check.py"]
+      interval: 30s
+      timeout: 25s
+      retries: 3
+      start_period: 180s
 
   backend:
     build:
@@ -62,7 +80,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
+      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
@@ -76,6 +94,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      mt5:
+        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   celery_worker:
@@ -102,7 +122,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
+      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
@@ -114,6 +134,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      mt5:
+        condition: service_healthy
     command: celery -A app.celery_app worker --pool=threads --loglevel=info
 
   celery_beat:
@@ -140,7 +162,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
+      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
@@ -152,6 +174,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      mt5:
+        condition: service_healthy
     command: celery -A app.celery_app beat --loglevel=info
 
   frontend:
@@ -174,3 +198,4 @@ volumes:
   postgres_data:
   redis_data:
   qdrant_data:
+  mt5_config:
