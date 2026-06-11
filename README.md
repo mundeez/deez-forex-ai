@@ -7,7 +7,7 @@ Intelligent 24/7 Forex Trading Platform powered by AI.
 - **Frontend:** Next.js 14 + TypeScript + TailwindCSS
 - **Backend:** Python FastAPI + SQLAlchemy (async PostgreSQL)
 - **Queue/Cache:** Redis + Celery
-- **Data Feed:** MetaAPI.cloud (MetaTrader 4/5 bridge)
+- **Data Feed:** MetaAPI.cloud or self-hosted MT5 Docker container (ZeroMQ)
 - **AI Engine:** OpenRouter.ai (Claude 3.5 Sonnet / GPT-4o)
 - **Deployment:** Docker Compose
 
@@ -15,7 +15,7 @@ Intelligent 24/7 Forex Trading Platform powered by AI.
 
 - **Multi-Factor Analysis:** Technical (EMA, RSI, MACD, Bollinger, ATR, divergence), Fundamental (economic calendar, interest rate spreads), Sentiment (news, retail, institutional/COT)
 - **AI Trade Decisions:** Structured JSON decisions from cloud LLMs via OpenRouter.ai
-- **Execution:** Paper trading simulator + live MetaAPI.cloud relay
+- **Execution:** Paper trading simulator + live MetaAPI.cloud relay + MT5 container (ZMQ)
 - **Risk Management:** Max 2% per trade, daily loss limits, correlation guards
 - **Backtesting:** Walk-forward historical replay with Sharpe, profit factor, max drawdown
 - **Dashboard:** Real-time market view, AI insights, trade journal

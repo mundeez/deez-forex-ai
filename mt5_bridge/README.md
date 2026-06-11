@@ -1,14 +1,28 @@
-# MT5 Desktop ZeroMQ Bridge
+# MT5 ZeroMQ Bridge
+
+## Two ways to connect
+
+### Option A: MT5 Docker Container (Recommended)
+
+The easiest way — a fully self-contained Wine + MT5 + ZMQ bridge running in Docker.
+
+```bash
+docker-compose up -d mt5
+```
+
+See [`mt5/README.md`](../mt5/README.md) for full details.
+
+### Option B: MT5 Desktop (Manual)
 
 Direct connection from `deez-forex-ai` backend to your local MetaTrader 5 terminal via ZeroMQ. No cloud dependency.
 
-## Prerequisites
+#### Prerequisites
 
-- MetaTrader 5 (MacBook Pro via Wine/PlayOnMac, or native Windows)
+- MetaTrader 5 (Mac via Wine/PlayOnMac, or native Windows)
 - [ZmqSocket MQL5 library](https://github.com/dingmaotu/mql-zmq) installed in MT5's `Include/` folder
 - `pyzmq` installed in backend (already added to `requirements.txt`)
 
-## How It Works
+#### How It Works
 
 ```
 Your MacBook (MT5)  <--SSH tunnel-->  Linux Server (Docker backend)
@@ -16,14 +30,14 @@ Your MacBook (MT5)  <--SSH tunnel-->  Linux Server (Docker backend)
      :5556  PUB socket                    MT5ZMQSubscriber
 ```
 
-## Step 1: Install the mql-zmq Library in MT5
+#### Step 1: Install the mql-zmq Library in MT5
 
 1. Download the [dingmaotu/mql-zmq](https://github.com/dingmaotu/mql-zmq) release.
 2. Copy the entire `Include/Zmq/` folder and the DLL into your MT5 data folder:
    - `MQL5/Include/Zmq/Zmq.mqh` (and all files in `Include/Zmq/`)
    - `MQL5/Libraries/libzmq.dll`
 
-## Step 2: Compile and Attach the EA
+#### Step 2: Compile and Attach the EA
 
 1. Open `mt5_bridge/ZeroMQ_Server.mq5` in MetaEditor.
 2. Compile (F7).
@@ -36,7 +50,7 @@ Your MacBook (MT5)  <--SSH tunnel-->  Linux Server (Docker backend)
 
 > **Important:** Enable `Allow Algo Trading` and `Allow WebRequest` in MT5 options.
 
-## Step 3: Create the SSH Reverse Tunnel
+#### Step 3: Create the SSH Reverse Tunnel
 
 On your **MacBook Pro** (where MT5 runs), open Terminal and run:
 
@@ -48,7 +62,7 @@ This forwards ports `5555` and `5556` from the Linux server back to your Mac's M
 
 > **Linux Docker users:** `host.docker.internal` does not auto-resolve on Linux. Add `--add-host=host.docker.internal:host-gateway` to your backend container or set `MT5_ZMQ_HOST` to the host's LAN IP.
 
-## Step 4: Configure Environment Variables
+#### Step 4: Configure Environment Variables
 
 In your backend `.env`:
 
@@ -65,14 +79,14 @@ Restart the backend:
 docker-compose restart backend
 ```
 
-## Step 5: Test
+#### Step 5: Test
 
 1. Check the backend logs for successful ZMQ subscriber startup.
 2. Open the frontend dashboard. Prices should now stream from your desktop MT5.
-3. Place a paper trade via the Manual Trade panel (select "MT5 Desktop (ZMQ)" broker).
+3. Place a paper trade via the Manual Trade panel (select "MT5 Container (ZMQ)" broker).
 4. Confirm the trade appears in your MT5 terminal.
 
-## Troubleshooting
+#### Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
