@@ -1,7 +1,7 @@
 # =============================================================================
-# deez-forex-ai MT5 Container
+# deez-forex-ai MT5 Container with KasmVNC Desktop
 # Based on gmag11/metatrader5_vnc (proven Wine + MT5 setup)
-# Strips VNC, keeps headless Wine/MT5 + ZMQ bridge
+# Includes: KasmVNC desktop, Wine/MT5, ZeroMQ MQL5 EA
 # =============================================================================
 
 FROM gmag11/metatrader5_vnc:latest
@@ -14,8 +14,7 @@ ENV WINEPREFIX=/config/.wine
 ENV WINEDEBUG=-all
 ENV DISPLAY=:99
 
-# Install additional dependencies for ZMQ bridge
-# Allow unsigned repos (WineHQ key may be missing in base image)
+# Install additional dependencies
 RUN apt-get update --allow-insecure-repositories || true && \
     apt-get install -y --no-install-recommends --allow-unauthenticated \
     wget \
@@ -35,6 +34,10 @@ RUN mkdir -p /var/run/supervisor
 # Create app directory
 WORKDIR /app
 
+# Copy ZeroMQ EA and libzmq.dll
+COPY ZeroMQ_Server.ex5 /app/ZeroMQ_Server.ex5
+COPY libzmq.dll /app/libzmq.dll
+
 # Copy supervisord config and scripts
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY startup.sh /app/startup.sh
@@ -43,10 +46,14 @@ COPY run_rpyc.sh /app/run_rpyc.sh
 COPY health_check.py /app/health_check.py
 COPY rpyc_server.py /app/rpyc_server.py
 COPY zmq_bridge.py /app/zmq_bridge.py
-RUN chmod +x /app/startup.sh /app/run_mt5.sh /app/run_rpyc.sh
+COPY run_zmq_bridge.sh /app/run_zmq_bridge.sh
+RUN chmod +x /app/startup.sh /app/run_mt5.sh /app/run_rpyc.sh /app/run_zmq_bridge.sh
 
 # Expose ZMQ ports (internal Docker network only)
 EXPOSE 5555 5556
+
+# Expose KasmVNC websocket port (for browser access)
+EXPOSE 6901
 
 # Health check via Python script
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

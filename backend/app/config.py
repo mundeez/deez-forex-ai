@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     MODEL_PERF_WEIGHTING_ENABLED: bool = False
 
     # MT5 ZeroMQ Bridge
-    MT5_ZMQ_HOST: str = "host.docker.internal"
+    MT5_ZMQ_HOST: str = "mt5"
     MT5_ZMQ_REQ_PORT: int = 5555
     MT5_ZMQ_PUB_PORT: int = 5556
 

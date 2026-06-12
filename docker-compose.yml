@@ -53,6 +53,7 @@ services:
     ports:
       - "15555:5555"
       - "15556:5556"
+      - "16901:6901"
     healthcheck:
       test: ["CMD", "python3", "/app/health_check.py"]
       interval: 30s
@@ -194,8 +195,20 @@ services:
       - backend
     command: npm start
 
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: deez-forex-nginx
+    restart: unless-stopped
+    ports:
+      - "28080:80"
+    depends_on:
+      - mt5
+
 volumes:
   postgres_data:
   redis_data:
   qdrant_data:
   mt5_config:
+

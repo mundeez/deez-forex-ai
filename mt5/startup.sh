@@ -2,7 +2,7 @@
 set -e
 
 # =============================================================================
-# MT5 Container Entrypoint — Proven approach from gmag11/metatrader5_vnc
+# MT5 Container Entrypoint — KasmVNC Desktop + Wine/MT5 + ZMQ Bridge
 # =============================================================================
 
 INIT_MARKER="/config/.mt5_initialized"
@@ -18,21 +18,51 @@ python_url="https://www.python.org/ftp/python/3.9.13/python-3.9.13.exe"
 mt5setup_url="https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
 
 export WINEPREFIX
+export DISPLAY=:99
 
 # Ensure Wine prefix directory exists
 mkdir -p "$WINEPREFIX/drive_c"
 
-# Clean up stale Xvfb lock files from previous container restarts
+# Clean up stale lock files
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 
-# Start persistent Xvfb *before* any Wine commands
-if ! pgrep -f "Xvfb :99" > /dev/null 2>&1; then
-    echo "[startup] Starting persistent Xvfb on :99 ..."
-    Xvfb :99 -screen 0 1024x768x24 +extension GLX &
-    sleep 2
-    echo "[startup] Xvfb started"
+# =============================================================================
+# 1. Start KasmVNC (X server with web VNC interface)
+# =============================================================================
+if ! pgrep -f "Xvnc :99" > /dev/null 2>&1; then
+    echo "[startup] Starting KasmVNC on :99 ..."
+    /usr/local/bin/Xvnc :99 \
+        -PublicIP 127.0.0.1 \
+        -drinode /dev/dri/renderD128 \
+        -disableBasicAuth \
+        -SecurityTypes None \
+        -AlwaysShared \
+        -http-header Cross-Origin-Embedder-Policy=require-corp \
+        -http-header Cross-Origin-Opener-Policy=same-origin \
+        -geometry 1280x800 \
+        -sslOnly 0 \
+        -RectThreads 0 \
+        -websocketPort 6901 \
+        -interface 0.0.0.0 \
+        -Log *:stdout:10 &
+    sleep 3
+    echo "[startup] KasmVNC started on ws://0.0.0.0:6901"
 fi
-export DISPLAY=:99
+
+# =============================================================================
+# 2. Start Openbox window manager
+# =============================================================================
+if ! pgrep -f "openbox" > /dev/null 2>&1; then
+    echo "[startup] Starting Openbox window manager..."
+    export DISPLAY=:99
+    /usr/bin/openbox-session &
+    sleep 2
+    echo "[startup] Openbox started."
+fi
+
+# =============================================================================
+# 3. Initialize Wine + MT5 + Python (only on first run)
+# =============================================================================
 
 # Helper: find python.exe in Wine prefix
 find_wine_python() {
@@ -149,6 +179,14 @@ if [ ! -f "$INIT_MARKER" ]; then
     pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy || true
     pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux || true
     echo "[startup] [7/7] Linux Python libraries installed."
+
+    # 8. Copy ZeroMQ EA and libzmq.dll to MT5 directory
+    echo "[startup] [8/7] Setting up ZeroMQ EA and libzmq.dll..."
+    mkdir -p "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/MQL5/Experts/deez-forex-ai"
+    cp /app/ZeroMQ_Server.ex5 "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/MQL5/Experts/deez-forex-ai/" 2>/dev/null || true
+    cp /app/libzmq.dll "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/" 2>/dev/null || true
+    cp /app/libzmq.dll "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/MQL5/Libraries/" 2>/dev/null || true
+    echo "[startup] [8/7] ZeroMQ EA setup complete."
 
     touch "$INIT_MARKER"
     echo "[startup] Initialization complete."

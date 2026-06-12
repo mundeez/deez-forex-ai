@@ -14,4 +14,5 @@ if [ ! -f "$MT5_EXE" ]; then
 fi
 
 echo "[mt5_terminal] Starting MT5: $MT5_EXE"
-exec wine "$MT5_EXE" /portable
+# Note: no /portable flag so chart profiles and EA settings persist
+exec wine "$MT5_EXE"
