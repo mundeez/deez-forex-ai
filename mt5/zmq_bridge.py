@@ -31,13 +31,19 @@ TIMEFRAME_MAP = {
 }
 
 _mt5_initialized = False
+_last_init_attempt = 0
+_INIT_RETRY_INTERVAL = 30  # seconds
 
 
 def ensure_mt5():
     """Ensure MT5 is initialized, with timeout and error handling."""
-    global _mt5_initialized
+    global _mt5_initialized, _last_init_attempt
     if _mt5_initialized:
         return True
+    now = time.time()
+    if now - _last_init_attempt < _INIT_RETRY_INTERVAL:
+        return False
+    _last_init_attempt = now
     try:
         info = mt5.terminal_info()
         if info is not None:

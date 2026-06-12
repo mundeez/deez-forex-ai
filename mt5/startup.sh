@@ -22,6 +22,9 @@ export WINEPREFIX
 # Ensure Wine prefix directory exists
 mkdir -p "$WINEPREFIX/drive_c"
 
+# Clean up stale Xvfb lock files from previous container restarts
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+
 # Start persistent Xvfb *before* any Wine commands
 if ! pgrep -f "Xvfb :99" > /dev/null 2>&1; then
     echo "[startup] Starting persistent Xvfb on :99 ..."
@@ -30,6 +33,11 @@ if ! pgrep -f "Xvfb :99" > /dev/null 2>&1; then
     echo "[startup] Xvfb started"
 fi
 export DISPLAY=:99
+
+# Helper: find python.exe in Wine prefix
+find_wine_python() {
+    find "$WINEPREFIX" -name "python.exe" 2>/dev/null | head -1
+}
 
 if [ ! -f "$INIT_MARKER" ]; then
     echo "[startup] First run — setting up Wine + MT5 ..."
@@ -56,10 +64,21 @@ if [ ! -f "$INIT_MARKER" ]; then
         echo "[startup] [3/7] Downloading MT5 installer..."
         curl -L -o "$WINEPREFIX/drive_c/mt5setup.exe" "$mt5setup_url"
         echo "[startup] [3/7] Installing MetaTrader 5 (this may take a few minutes)..."
-        # Run installer in background and wait (some installers exit non-zero even on success)
         $wine_executable "$WINEPREFIX/drive_c/mt5setup.exe" "/auto" &
         MT5_INSTALL_PID=$!
-        wait $MT5_INSTALL_PID || true
+        # Wait for the installer to finish (up to 10 minutes)
+        for i in $(seq 1 600); do
+            if ! kill -0 $MT5_INSTALL_PID 2>/dev/null; then
+                echo "[startup] [3/7] Installer process finished."
+                break
+            fi
+            sleep 1
+        done
+        if kill -0 $MT5_INSTALL_PID 2>/dev/null; then
+            echo "[startup] [3/7] MT5 installer still running after 10 min, killing..."
+            kill $MT5_INSTALL_PID 2>/dev/null || true
+            wait $MT5_INSTALL_PID 2>/dev/null || true
+        fi
         rm -f "$WINEPREFIX/drive_c/mt5setup.exe"
     fi
 
@@ -85,30 +104,50 @@ if [ ! -f "$INIT_MARKER" ]; then
     fi
 
     # 5. Install Python in Wine
-    if ! $wine_executable python --version 2>/dev/null; then
+    WINE_PYTHON=$(find_wine_python)
+    if [ -n "$WINE_PYTHON" ]; then
+        echo "[startup] [5/7] Python already in Wine at $WINE_PYTHON."
+    else
         echo "[startup] [5/7] Installing Python in Wine..."
         curl -L "$python_url" -o /tmp/python-installer.exe
-        $wine_executable /tmp/python-installer.exe /quiet InstallAllUsers=1 PrependPath=1
+        # Run installer and wait for it to finish (up to 5 minutes)
+        $wine_executable /tmp/python-installer.exe /quiet InstallAllUsers=1 PrependPath=1 &
+        PYTHON_PID=$!
+        for i in $(seq 1 300); do
+            if ! kill -0 $PYTHON_PID 2>/dev/null; then
+                echo "[startup] [5/7] Python installer finished."
+                break
+            fi
+            sleep 1
+        done
+        if kill -0 $PYTHON_PID 2>/dev/null; then
+            echo "[startup] [5/7] Python installer still running after 5 min, killing..."
+            kill $PYTHON_PID 2>/dev/null || true
+            wait $PYTHON_PID 2>/dev/null || true
+        fi
         rm -f /tmp/python-installer.exe
-        echo "[startup] [5/7] Python installed in Wine."
-    else
-        echo "[startup] [5/7] Python already in Wine."
+        WINE_PYTHON=$(find_wine_python)
+        if [ -z "$WINE_PYTHON" ]; then
+            echo "[startup] [5/7] ERROR: Python installation failed."
+            exit 1
+        fi
+        echo "[startup] [5/7] Python installed in Wine at $WINE_PYTHON."
     fi
 
     # 6. Install Python libraries in Wine
     echo "[startup] [6/7] Installing MetaTrader5 + mt5linux + rpyc + pyzmq in Wine Python..."
-    $wine_executable python -m pip install --upgrade --no-cache-dir pip
-    $wine_executable python -m pip install --no-cache-dir "numpy<2"
-    $wine_executable python -m pip install --no-cache-dir "MetaTrader5==$metatrader_version"
-    $wine_executable python -m pip install --no-cache-dir "mt5linux>=0.1.9"
-    $wine_executable python -m pip install --no-cache-dir rpyc
-    $wine_executable python -m pip install --no-cache-dir pyzmq
+    $wine_executable "$WINE_PYTHON" -m pip install --upgrade --no-cache-dir pip || true
+    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir "numpy<2" || true
+    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir "MetaTrader5==$metatrader_version" || true
+    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir "mt5linux>=0.1.9" || true
+    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir rpyc || true
+    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir pyzmq || true
     echo "[startup] [6/7] Wine Python libraries installed."
 
     # 7. Install mt5linux + rpyc in Linux Python
     echo "[startup] [7/7] Installing mt5linux + rpyc in Linux Python..."
-    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy
-    pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux
+    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy || true
+    pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux || true
     echo "[startup] [7/7] Linux Python libraries installed."
 
     touch "$INIT_MARKER"

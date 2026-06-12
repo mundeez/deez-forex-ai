@@ -1394,7 +1394,7 @@ async def get_mt5_status(db: AsyncSession = Depends(get_db)):
     try:
         ctx = zmq.Context()
         sock = ctx.socket(zmq.REQ)
-        sock.setsockopt(zmq.RCVTIMEO, 5000)
+        sock.setsockopt(zmq.RCVTIMEO, 12000)
         sock.setsockopt(zmq.SNDTIMEO, 2000)
         sock.setsockopt(zmq.LINGER, 0)
         sock.connect(f"tcp://{settings.MT5_ZMQ_HOST}:{settings.MT5_ZMQ_REQ_PORT}")
@@ -1405,6 +1405,9 @@ async def get_mt5_status(db: AsyncSession = Depends(get_db)):
         mt5_initialized = "error" not in data or "not initialized" not in data.get("error", "")
         sock.close()
         ctx.term()
+    except zmq.Again:
+        # Timeout — container is running but MT5 init is slow
+        pass
     except Exception:
         container_running = False
 
