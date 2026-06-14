@@ -2,7 +2,7 @@ version: '3.9'
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: timescale/timescaledb:latest-pg15
     container_name: deez-forex-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-forex}
@@ -53,6 +53,7 @@ services:
     ports:
       - "15555:5555"
       - "15556:5556"
+      - "18812:18812"
       - "16901:6901"
     healthcheck:
       test: ["CMD", "python3", "/app/health_check.py"]
@@ -84,6 +85,8 @@ services:
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
+      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
+      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -126,6 +129,8 @@ services:
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
+      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
+      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
@@ -166,6 +171,8 @@ services:
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
+      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
+      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:

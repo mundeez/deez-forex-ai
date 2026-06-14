@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     MT5_ZMQ_REQ_PORT: int = 5555
     MT5_ZMQ_PUB_PORT: int = 5556
 
+    # MT5 RPyC Bridge
+    MT5_RPYC_HOST: str = "host.docker.internal"
+    MT5_RPYC_PORT: int = 18812
+
     # Security
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 

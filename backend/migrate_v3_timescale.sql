@@ -1,15 +1,14 @@
--- init.sql runs automatically on first container startup
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- ============================================================================
+-- Migration: v0.8.0 M0 — TimescaleDB Extension + Tick Pipeline Schema
+-- Run this against an EXISTING database to upgrade from v0.7.x to v0.8.0-m0
+-- New deployments get this automatically via init.sql on first startup.
+-- ============================================================================
 
-
--- ============================================================
--- TimescaleDB Extension + Tick Pipeline Schema (v0.8.0 M0)
--- ============================================================
-
+-- 1. Enable TimescaleDB extension
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
--- Raw tick store: one row per tick from Dukascopy / MT5
-CREATE TABLE ticks (
+-- 2. Raw tick store
+CREATE TABLE IF NOT EXISTS ticks (
     symbol      VARCHAR(10)  NOT NULL,
     timestamp   TIMESTAMPTZ  NOT NULL,
     bid         DOUBLE PRECISION NOT NULL,
@@ -32,14 +31,13 @@ CREATE TABLE ticks (
     PRIMARY KEY (symbol, timestamp)
 );
 
--- Convert to hypertable (chunk by 7 days)
+-- Convert to hypertable (safe if already exists)
 SELECT create_hypertable('ticks', 'timestamp', chunk_time_interval => INTERVAL '7 days', if_not_exists => TRUE);
 
--- Index on symbol + timestamp for fast symbol-specific queries
-CREATE INDEX idx_ticks_symbol_timestamp ON ticks (symbol, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_ticks_symbol_timestamp ON ticks (symbol, timestamp DESC);
 
--- Ingestion checkpoint / state tracking
-CREATE TABLE ingestion_state (
+-- 3. Ingestion state / checkpoint table
+CREATE TABLE IF NOT EXISTS ingestion_state (
     id              SERIAL PRIMARY KEY,
     symbol          VARCHAR(10)  NOT NULL,
     source          VARCHAR(20)  NOT NULL DEFAULT 'dukascopy',
@@ -52,8 +50,8 @@ CREATE TABLE ingestion_state (
     UNIQUE(symbol, source)
 );
 
--- Bars hypertable (will eventually replace market_data)
-CREATE TABLE bars (
+-- 4. Bars hypertable (future replacement for market_data)
+CREATE TABLE IF NOT EXISTS bars (
     symbol      VARCHAR(10)  NOT NULL,
     timeframe   VARCHAR(10)  NOT NULL,
     timestamp   TIMESTAMPTZ  NOT NULL,
@@ -68,7 +66,7 @@ CREATE TABLE bars (
 );
 
 SELECT create_hypertable('bars', 'timestamp', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
-CREATE INDEX idx_bars_symbol_tf_ts ON bars (symbol, timeframe, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_bars_symbol_tf_ts ON bars (symbol, timeframe, timestamp DESC);
 
--- Compression policy: compress tick chunks older than 7 days
+-- 5. Compression policy on ticks (chunks older than 7 days)
 SELECT add_compression_policy('ticks', INTERVAL '7 days', if_not_exists => TRUE);

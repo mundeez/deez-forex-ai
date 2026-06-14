@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Enum
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Enum, BigInteger
 from sqlalchemy.sql import func
 from app.database import Base
 from app.enums import TradeStatus, TradeDirection, TradeMode, DataProvider
@@ -281,3 +281,52 @@ class BrokerAccount(Base):
     is_demo = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+
+# ============================================================
+# Tick Pipeline Models (v0.8.0 M0)
+# ============================================================
+
+class Tick(Base):
+    __tablename__ = 'ticks'
+
+    symbol = Column(String(10), primary_key=True, nullable=False)
+    timestamp = Column(DateTime(timezone=True), primary_key=True, nullable=False)
+    bid = Column(Float, nullable=False)
+    ask = Column(Float, nullable=False)
+    bid_vol = Column(Float)
+    ask_vol = Column(Float)
+    spread_pips = Column(Float)
+    source = Column(String(20), default='dukascopy')
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IngestionState(Base):
+    __tablename__ = 'ingestion_state'
+
+    id = Column(Integer, primary_key=True, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    source = Column(String(20), nullable=False, default='dukascopy')
+    last_ingested_at = Column(DateTime(timezone=True))
+    last_ingested_hour = Column(DateTime(timezone=True))
+    status = Column(String(20), nullable=False, default='idle')
+    total_ticks = Column(BigInteger, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class Bar(Base):
+    __tablename__ = 'bars'
+
+    symbol = Column(String(10), primary_key=True, nullable=False)
+    timeframe = Column(String(10), primary_key=True, nullable=False)
+    timestamp = Column(DateTime(timezone=True), primary_key=True, nullable=False)
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(BigInteger, default=0)
+    avg_spread = Column(Float)
+    source = Column(String(20), default='dukascopy')
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

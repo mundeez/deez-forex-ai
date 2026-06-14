@@ -23,6 +23,7 @@ class TradeMode(str, enum.Enum):
 class DataProvider(str, enum.Enum):
     METAAPI = "metaapi"
     MT5_ZMQ = "mt5_zmq"
+    MT5_RPYC = "mt5_rpyc"
 
 
 class StrategyMode(str, enum.Enum):

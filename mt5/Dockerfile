@@ -47,10 +47,19 @@ COPY health_check.py /app/health_check.py
 COPY rpyc_server.py /app/rpyc_server.py
 COPY zmq_bridge.py /app/zmq_bridge.py
 COPY run_zmq_bridge.sh /app/run_zmq_bridge.sh
-RUN chmod +x /app/startup.sh /app/run_mt5.sh /app/run_rpyc.sh /app/run_zmq_bridge.sh
+
+# Copy new RPyC services and Redis tick publisher
+COPY mt5_service.py /app/mt5_service.py
+COPY slave_service.py /app/slave_service.py
+COPY redis_tick_publisher.py /app/redis_tick_publisher.py
+COPY run_mt5_service.sh /app/run_mt5_service.sh
+COPY run_slave_service.sh /app/run_slave_service.sh
+COPY run_redis_publisher.sh /app/run_redis_publisher.sh
+RUN chmod +x /app/startup.sh /app/run_mt5.sh /app/run_rpyc.sh /app/run_zmq_bridge.sh /app/run_mt5_service.sh /app/run_slave_service.sh /app/run_redis_publisher.sh
 
 # Expose ZMQ ports (internal Docker network only)
-EXPOSE 5555 5556
+# Also expose RPyC ports for MT5Service (18812) and SlaveService (18813)
+EXPOSE 5555 5556 18812 18813
 
 # Expose KasmVNC websocket port (for browser access)
 EXPOSE 6901

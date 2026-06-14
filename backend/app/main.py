@@ -23,6 +23,8 @@ from app.middleware.request_id import RequestIdMiddleware
 from app.services.data.metaapi_client import MetaApiClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.services.data.mt5_zmq_subscriber import MT5ZMQSubscriber
+from app.services.data.mt5_rpyc_client import MT5RPyCClient
+from app.services.data.mt5_redis_subscriber import MT5RedisTickSubscriber
 from app.services.execution.executor import ExecutionService, compute_live_unrealized
 from app.services.risk.manager import RiskManager
 from app.services.settings_service import build_settings_response, set_setting, get_setting_bool, get_setting, get_setting_float
@@ -61,14 +63,18 @@ async def lifespan(app: FastAPI):
     app.state.redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     app.state.metaapi = MetaApiClient()
     app.state.mt5_zmq = MT5ZMQClient()
+    app.state.mt5_rpyc = MT5RPyCClient()
     app.state.executor = ExecutionService()
     app.state.risk = RiskManager()
     app.state.ai = OpenRouterClient()
     app.state.aggregator = AnalysisAggregator()
 
-    # Start MT5 tick subscriber if using ZMQ
+    # Start MT5 tick subscriber based on provider
     if settings.DATA_PROVIDER == DataProvider.MT5_ZMQ:
         app.state.mt5_sub = MT5ZMQSubscriber(on_tick=broadcast_price_tick)
+        await app.state.mt5_sub.start()
+    elif settings.DATA_PROVIDER == DataProvider.MT5_RPYC:
+        app.state.mt5_sub = MT5RedisTickSubscriber(on_tick=broadcast_price_tick)
         await app.state.mt5_sub.start()
     else:
         app.state.mt5_sub = None
@@ -78,6 +84,7 @@ async def lifespan(app: FastAPI):
     if app.state.mt5_sub:
         await app.state.mt5_sub.stop()
     await app.state.mt5_zmq.close()
+    await app.state.mt5_rpyc.close()
 
 
 # Build CORS origins list from env
@@ -239,6 +246,8 @@ async def _get_data_client(provider: schemas.DataProvider = None):
     provider = provider or settings.DATA_PROVIDER
     if provider == DataProvider.MT5_ZMQ:
         return app.state.mt5_zmq
+    if provider == DataProvider.MT5_RPYC:
+        return app.state.mt5_rpyc
     return app.state.metaapi
 
 
@@ -255,7 +264,13 @@ async def _safe_get_price(symbol: str, provider: schemas.DataProvider = None):
             exc_info=True,
         )
         # Fallback to the other provider
-        fallback = app.state.mt5_zmq if primary == app.state.metaapi else app.state.metaapi
+                # Fallback chain: try other providers
+        if primary == app.state.metaapi:
+            fallback = app.state.mt5_rpyc
+        elif primary == app.state.mt5_rpyc:
+            fallback = app.state.mt5_zmq
+        else:
+            fallback = app.state.metaapi
         try:
             return await fallback.get_current_price(symbol)
         except Exception as e:
@@ -279,7 +294,13 @@ async def _safe_get_candles(symbol: str, timeframe: str, limit: int, provider: s
             primary.__class__.__name__, symbol, timeframe, e,
             exc_info=True,
         )
-        fallback = app.state.mt5_zmq if primary == app.state.metaapi else app.state.metaapi
+                # Fallback chain: try other providers
+        if primary == app.state.metaapi:
+            fallback = app.state.mt5_rpyc
+        elif primary == app.state.mt5_rpyc:
+            fallback = app.state.mt5_zmq
+        else:
+            fallback = app.state.metaapi
         try:
             return await fallback.get_historical_candles(symbol, timeframe, limit)
         except Exception as e:
@@ -1386,11 +1407,14 @@ async def broadcast_settings_change(settings_data: dict):
 
 @app.get("/api/v1/mt5/status", response_model=schemas.MT5StatusOut)
 async def get_mt5_status(db: AsyncSession = Depends(get_db)):
-    """Check MT5 container and ZMQ bridge status."""
+    """Check MT5 container, ZMQ bridge, and RPyC service status."""
     import zmq
     container_running = True
     zmq_reachable = False
+    rpyc_reachable = False
     mt5_initialized = False
+
+    # Check ZMQ (legacy)
     try:
         ctx = zmq.Context()
         sock = ctx.socket(zmq.REQ)
@@ -1406,10 +1430,31 @@ async def get_mt5_status(db: AsyncSession = Depends(get_db)):
         sock.close()
         ctx.term()
     except zmq.Again:
-        # Timeout — container is running but MT5 init is slow
         pass
     except Exception:
         container_running = False
+
+    # Check RPyC MT5Service (new primary)
+    try:
+        import rpyc
+        conn = rpyc.connect(
+            settings.MT5_RPYC_HOST,
+            settings.MT5_RPYC_PORT,
+            config={"sync_request_timeout": 8},
+        )
+        result = conn.root.exposed_get_price("EURUSD")
+        rpyc_reachable = True
+        # Check result BEFORE closing conn — result may be a netref requiring remote access
+        has_error = False
+        try:
+            has_error = result and "error" in result
+        except Exception:
+            pass
+        if result and not has_error:
+            mt5_initialized = True
+        conn.close()
+    except Exception:
+        pass
 
     active_account = None
     result = await db.execute(
@@ -1421,11 +1466,12 @@ async def get_mt5_status(db: AsyncSession = Depends(get_db)):
 
     return schemas.MT5StatusOut(
         container_running=container_running,
-        mt5_terminal_running=zmq_reachable,
+        mt5_terminal_running=zmq_reachable or rpyc_reachable,
         zmq_bridge_running=zmq_reachable,
+        rpyc_service_running=rpyc_reachable,
         mt5_initialized=mt5_initialized,
         active_account=active_account,
-        message="MT5 OK" if zmq_reachable else "MT5 container not reachable",
+        message="MT5 OK" if (zmq_reachable or rpyc_reachable) else "MT5 container not reachable",
     )
 
 
@@ -1499,5 +1545,58 @@ async def restart_mt5_container():
         raise HTTPException(status_code=500, detail=f"Failed to restart MT5 container: {e.stderr.decode()}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to restart MT5 container: {e}")
+
+
+@app.post("/api/v1/mt5/login")
+async def auto_login_mt5(db: AsyncSession = Depends(get_db)):
+    """
+    Auto-login to MT5 using the currently active broker account credentials.
+    Calls the RPyC MT5Service exposed_login method.
+    """
+    result = await db.execute(
+        select(models.BrokerAccount).where(models.BrokerAccount.is_active == True)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(
+            status_code=404,
+            detail="No active broker account found. Create and activate one first.",
+        )
+
+    try:
+        login_int = int(account.login)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Account login '{account.login}' is not a valid integer for MT5.",
+        )
+
+    try:
+        resp = await app.state.mt5_rpyc.login(
+            login=login_int,
+            password=account.password,
+            server=account.server,
+            timeout=60000,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"MT5 RPyC login call failed: {e}",
+        )
+
+    if resp.get("error"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"MT5 login rejected: {resp['error']}",
+        )
+
+    return {
+        "status": "logged_in",
+        "login": login_int,
+        "server": account.server,
+        "broker": account.broker,
+        "is_demo": account.is_demo,
+        "mt5_response": resp,
+    }
 
 

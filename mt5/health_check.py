@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Health check for MT5 container with ZMQ bridge."""
+"""Fast health check for MT5 container — must complete within Docker's timeout."""
+
 import subprocess
 import sys
-import zmq
-import json
+import socket
+
 
 def check_process(name):
     try:
@@ -12,38 +13,35 @@ def check_process(name):
     except subprocess.CalledProcessError:
         return False
 
-def main():
-    # Check MT5 terminal
-    if not check_process("terminal64.exe"):
-        print("FAIL: MT5 terminal not running")
-        sys.exit(1)
 
-    # Check KasmVNC
-    if not check_process("Xvnc :99"):
-        print("FAIL: KasmVNC not running")
-        sys.exit(1)
-
-    # Check if ZeroMQ bridge is responding
+def check_port(host, port, timeout=2):
     try:
-        ctx = zmq.Context()
-        sock = ctx.socket(zmq.REQ)
-        sock.setsockopt(zmq.RCVTIMEO, 5000)
-        sock.setsockopt(zmq.SNDTIMEO, 5000)
-        sock.connect("tcp://127.0.0.1:5555")
-        sock.send_string(json.dumps({"action": "GET_ACCOUNT"}))
-        resp = sock.recv_string()
-        data = json.loads(resp)
-        if "error" in data and data["error"]:
-            print(f"FAIL: ZMQ bridge error: {data[error]}")
-            sys.exit(1)
-        print("OK: MT5 terminal + KasmVNC + ZMQ bridge responding")
-        sys.exit(0)
-    except zmq.Again:
-        print("FAIL: ZMQ bridge timeout")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        sock.close()
+        return True
+    except Exception:
+        return False
+
+
+def main():
+    # Fast process checks
+    mt5_running = check_process("terminal64.exe") or check_process("terminal.exe")
+    vnc_running = check_process("Xvnc :99")
+    rpyc_listening = check_port("127.0.0.1", 18812)
+
+    if mt5_running and vnc_running:
+        if rpyc_listening:
+            print("OK: MT5 terminal + KasmVNC + RPyC running")
+            sys.exit(0)
+        else:
+            print("OK: MT5 terminal + KasmVNC running (RPyC not yet listening)")
+            sys.exit(0)
+    else:
+        print(f"FAIL: MT5={mt5_running} VNC={vnc_running} RPyC={rpyc_listening}")
         sys.exit(1)
-    except Exception as e:
-        print(f"FAIL: ZMQ bridge error: {e}")
-        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

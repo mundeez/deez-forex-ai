@@ -176,7 +176,7 @@ if [ ! -f "$INIT_MARKER" ]; then
 
     # 7. Install mt5linux + rpyc in Linux Python
     echo "[startup] [7/7] Installing mt5linux + rpyc in Linux Python..."
-    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy || true
+    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy redis || true
     pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux || true
     echo "[startup] [7/7] Linux Python libraries installed."
 
@@ -191,7 +191,16 @@ if [ ! -f "$INIT_MARKER" ]; then
     touch "$INIT_MARKER"
     echo "[startup] Initialization complete."
 else
-    echo "[startup] Already initialized — skipping setup."
+    echo "[startup] Already initialized — skipping Wine/MT5/Python install."
+    # Ensure required Python packages are always present in Wine Python
+    echo "[startup] Ensuring Wine Python packages (rpyc, pyzmq, mt5linux)..."
+    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir rpyc pyzmq mt5linux numpy 2>/dev/null || true
+    echo "[startup] Wine Python packages checked."
+    # Ensure required Python packages are always present in Linux Python
+    echo "[startup] Ensuring Linux Python packages (rpyc, redis, mt5linux)..."
+    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy redis 2>/dev/null || true
+    pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux 2>/dev/null || true
+    echo "[startup] Linux Python packages checked."
 fi
 
 echo "[startup] Starting supervisor..."

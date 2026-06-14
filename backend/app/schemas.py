@@ -384,6 +384,7 @@ class MT5StatusOut(BaseModel):
     container_running: bool
     mt5_terminal_running: bool
     zmq_bridge_running: bool
+    rpyc_service_running: bool = False
     mt5_initialized: bool
     active_account: Optional[BrokerAccountOut] = None
     message: str
