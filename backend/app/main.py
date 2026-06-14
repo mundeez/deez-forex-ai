@@ -25,7 +25,9 @@ from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.services.data.mt5_zmq_subscriber import MT5ZMQSubscriber
 from app.services.data.mt5_rpyc_client import MT5RPyCClient
 from app.services.data.mt5_redis_subscriber import MT5RedisTickSubscriber
-from app.services.execution.executor import ExecutionService, compute_live_unrealized
+from app.services.execution.executor import ExecutionService
+from app.services.data.ingestion_service import IngestionService
+from app.services.execution.executor import compute_live_unrealized
 from app.services.risk.manager import RiskManager
 from app.services.settings_service import build_settings_response, set_setting, get_setting_bool, get_setting, get_setting_float
 from app.ai.openrouter_client import OpenRouterClient
@@ -1600,3 +1602,80 @@ async def auto_login_mt5(db: AsyncSession = Depends(get_db)):
     }
 
 
+
+
+# ============================================================
+# Data Ingestion Pipeline Endpoints (v0.8.0 M1)
+# ============================================================
+
+
+
+@app.post("/api/v1/data/ingest")
+async def trigger_ingestion(request: Request):
+    """Trigger async historical tick ingestion for a symbol+date range."""
+    body = await request.json()
+    symbol = body.get("symbol")
+    start = body.get("start")
+    end = body.get("end")
+    if not symbol or not start or not end:
+        raise HTTPException(status_code=400, detail="symbol, start, end required")
+    task = ingest_historical_range.delay(symbol=symbol, start_iso=start, end_iso=end)
+    return {
+        "task_id": task.id,
+        "symbol": symbol,
+        "start": start,
+        "end": end,
+        "status": "queued",
+    }
+
+
+@app.get("/api/v1/data/ingestion-state")
+async def get_ingestion_state():
+    """Return current ingestion state for all symbols."""
+    service = IngestionService()
+    states = await service.get_pipeline_status()
+    return states
+
+
+@app.get("/api/v1/data/gaps/{symbol}")
+async def get_gaps(symbol: str, days: int = 7, source: str = "dukascopy"):
+    """Detect data gaps for a symbol over the last N days."""
+    service = IngestionService()
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    gaps = await service.detect_gaps(symbol, start, end, source)
+    return {
+        "symbol": symbol,
+        "source": source,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "gap_count": len(gaps),
+        "gaps": [{"start": g[0].isoformat(), "end": g[1].isoformat()} for g in gaps],
+    }
+
+
+@app.post("/api/v1/data/backfill/{symbol}")
+async def trigger_backfill(symbol: str, source: str = "dukascopy"):
+    """Manually trigger gap backfill for a symbol."""
+    task = detect_and_backfill_gaps.delay(symbol=symbol)
+    return {
+        "task_id": task.id,
+        "symbol": symbol,
+        "source": source,
+        "status": "queued",
+    }
+
+
+@app.get("/api/v1/data/pipeline-status")
+async def get_pipeline_status():
+    """High-level pipeline status overview."""
+    service = IngestionService()
+    states = await service.get_pipeline_status()
+    total_ticks = sum(s.get("total_ticks", 0) for s in states)
+    running = sum(1 for s in states if s.get("status") == "running")
+    return {
+        "symbols_tracked": len(states),
+        "running_jobs": running,
+        "total_ticks": total_ticks,
+        "states": states,
+    }
