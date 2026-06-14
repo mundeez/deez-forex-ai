@@ -157,6 +157,76 @@ class IngestionService:
         gaps.append((gap_start, gap_end))
         return gaps
 
+    async def ingest_mt5_recent(
+        self,
+        symbol: str,
+        lookback_hours: int = 72,
+    ) -> int:
+        """Fetch recent ticks from MT5 ZMQ and merge with Dukascopy data."""
+        from app.services.data.mt5_zmq_client import MT5ZMQClient
+        import time
+
+        client = MT5ZMQClient()
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - (lookback_hours * 3600 * 1000)
+
+        try:
+            ticks = await client.get_ticks(symbol, from_ms=start_ms, to_ms=end_ms)
+        except Exception as exc:
+            logger.warning("[mt5_fill] %s failed to fetch ticks: %s", symbol, exc)
+            return 0
+        finally:
+            await client.close()
+
+        if not ticks:
+            return 0
+
+        # Convert MT5 tick format to DataFrame
+        df = pd.DataFrame(ticks)
+        if df.empty:
+            return 0
+        df["timestamp"] = pd.to_datetime(df["time_ms"], unit="ms", utc=True)
+        df["symbol"] = symbol
+        df["source"] = "mt5_zmq"
+        # MT5 copy_ticks returns: time, bid, ask, last, volume, flags
+        # We map last->bid_vol (not ideal but we only have one volume field)
+        # Actually, MT5 tick volume is usually total volume; set bid_vol=ask_vol=volume/2
+        if "volume" in df.columns:
+            df["bid_vol"] = df["volume"] / 2.0
+            df["ask_vol"] = df["volume"] / 2.0
+        else:
+            df["bid_vol"] = 0.0
+            df["ask_vol"] = 0.0
+
+        # Deduplication: fetch existing Dukascopy timestamps for this range
+        existing = await self._get_existing_timestamps(symbol, start_ms, end_ms)
+        df = df[~df["timestamp"].isin(existing)]
+        if df.empty:
+            logger.info("[mt5_fill] %s: all ticks already present from Dukascopy", symbol)
+            return 0
+
+        count = await self._bulk_insert_ticks(df, symbol, "mt5_zmq")
+        logger.info("[mt5_fill] %s: inserted %d new ticks", symbol, count)
+        return count
+
+    async def _get_existing_timestamps(self, symbol: str, start_ms: int, end_ms: int) -> set:
+        """Return set of existing timestamps for deduplication."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                text("""
+                    SELECT timestamp FROM ticks
+                    WHERE symbol = :symbol
+                      AND timestamp BETWEEN :start AND :end
+                """),
+                {
+                    "symbol": symbol,
+                    "start": datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc),
+                    "end": datetime.fromtimestamp(end_ms / 1000.0, tz=timezone.utc),
+                },
+            )
+            rows = result.fetchall()
+        return {r[0] for r in rows}
+
     async def backfill_gaps(
         self,
         symbol: str,

@@ -99,3 +99,30 @@ def detect_and_backfill_gaps(self, symbol: str = None):
                 raise self.retry(exc=exc)
     logger.info("[detect_and_backfill_gaps] total backfilled: %d", total)
     return {"symbols": len(symbols), "ticks": total}
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=300,
+    time_limit=120,
+    soft_time_limit=90,
+)
+def ingest_mt5_fill(self, symbol: str = None):
+    """
+    Fill recent gaps from MT5 ZMQ (last 2h).
+    Runs every 30 minutes for all active symbols.
+    """
+    service = IngestionService()
+    symbols = [symbol] if symbol else ACTIVE_SYMBOLS
+    total = 0
+    for sym in symbols:
+        try:
+            count = service.ingest_mt5_recent(sym, lookback_hours=2)
+            total += count
+        except Exception as exc:
+            logger.error("[ingest_mt5_fill] %s failed: %s", sym, exc)
+            if self.request.retries < self.max_retries:
+                raise self.retry(exc=exc)
+    logger.info("[ingest_mt5_fill] total filled: %d", total)
+    return {"symbols": len(symbols), "ticks": total}

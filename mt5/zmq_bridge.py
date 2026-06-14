@@ -6,6 +6,7 @@ Uses the MetaTrader5 Python module directly.
 import json
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 import zmq
 import MetaTrader5 as mt5
 
@@ -66,6 +67,38 @@ def handle_get_candles(symbol, timeframe_str, limit):
             "volume": int(r[5]),
         })
     return {"candles": candles}
+
+def handle_get_ticks(symbol, from_ms, to_ms, flags=mt5.COPY_TICKS_ALL):
+    """Fetch raw ticks from MT5 via copy_ticks_range, with chunking if > 24h."""
+    from_dt = datetime.fromtimestamp(from_ms / 1000.0, tz=timezone.utc)
+    to_dt = datetime.fromtimestamp(to_ms / 1000.0, tz=timezone.utc)
+    total_hours = (to_dt - from_dt).total_seconds() / 3600
+
+    all_ticks = []
+    chunk_start = from_dt
+    max_chunk_hours = 24  # MT5 returns max ~2M ticks; ~24h is safe for EURUSD
+
+    while chunk_start < to_dt:
+        chunk_end = min(chunk_start + timedelta(hours=max_chunk_hours), to_dt)
+        ticks = mt5.copy_ticks_range(
+            symbol,
+            chunk_start,
+            chunk_end,
+            flags,
+        )
+        if ticks is not None and len(ticks) > 0:
+            for t in ticks:
+                all_ticks.append({
+                    "time_ms": int(t[0]),
+                    "bid": float(t[1]),
+                    "ask": float(t[2]),
+                    "last": float(t[3]),
+                    "volume": int(t[4]),
+                    "flags": int(t[5]),
+                })
+        chunk_start = chunk_end
+
+    return {"ticks": all_ticks, "count": len(all_ticks)}
 
 def handle_get_account():
     info = mt5.account_info()
@@ -183,6 +216,13 @@ def handle_command(payload):
         return handle_get_price(symbol)
     elif action == "GET_CANDLES":
         return handle_get_candles(symbol, payload.get("timeframe", "1h"), int(payload.get("limit", 500)))
+    elif action == "GET_TICKS":
+        return handle_get_ticks(
+            symbol,
+            int(payload.get("from_ms", 0)),
+            int(payload.get("to_ms", 0)),
+            int(payload.get("flags", mt5.COPY_TICKS_ALL)),
+        )
     elif action == "GET_ACCOUNT":
         return handle_get_account()
     elif action == "GET_POSITIONS":

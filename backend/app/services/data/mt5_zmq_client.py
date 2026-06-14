@@ -113,6 +113,23 @@ class MT5ZMQClient:
             raise RuntimeError(resp["error"])
         return resp.get("positions", [])
 
+    async def get_ticks(
+        self,
+        symbol: str = "EURUSD",
+        from_ms: int = 0,
+        to_ms: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """Fetch raw ticks from MT5 ZMQ bridge."""
+        resp = await self._send({
+            "action": "GET_TICKS",
+            "symbol": symbol,
+            "from_ms": from_ms,
+            "to_ms": to_ms,
+        })
+        if resp.get("error"):
+            raise RuntimeError(resp["error"])
+        return resp.get("ticks", [])
+
     async def close(self):
         if self._socket and not self._socket.closed:
             self._socket.close()
