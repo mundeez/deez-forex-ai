@@ -142,7 +142,7 @@ services:
         condition: service_started
       mt5:
         condition: service_healthy
-    command: celery -A app.celery_app worker --pool=threads --loglevel=info
+    command: celery -A app.celery_app worker --pool=threads --loglevel=info -Q celery,data_ingestion,dead_letter
 
   celery_beat:
     build:

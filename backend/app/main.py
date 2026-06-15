@@ -27,6 +27,7 @@ from app.services.data.mt5_rpyc_client import MT5RPyCClient
 from app.services.data.mt5_redis_subscriber import MT5RedisTickSubscriber
 from app.services.execution.executor import ExecutionService
 from app.services.data.ingestion_service import IngestionService
+from app.services.data.pipeline_orchestrator import PipelineOrchestrator, PipelineStatus, DeadLetterHandler
 from app.services.execution.executor import compute_live_unrealized
 from app.services.risk.manager import RiskManager
 from app.services.settings_service import build_settings_response, set_setting, get_setting_bool, get_setting, get_setting_float
@@ -1678,4 +1679,66 @@ async def get_pipeline_status():
         "running_jobs": running,
         "total_ticks": total_ticks,
         "states": states,
+    }
+
+
+
+# ============================================================
+# Pipeline Orchestration Endpoints (v0.8.0 M4)
+# ============================================================
+
+orch = PipelineOrchestrator()
+
+
+@app.get("/api/v1/data/pipeline/jobs")
+async def list_pipeline_jobs(status: str = None, source: str = None, limit: int = 100):
+    """List ingestion jobs filtered by status and/or source."""
+    status_enum = PipelineStatus(status) if status else None
+    jobs = await orch.list_jobs(status=status_enum, source=source, limit=limit)
+    return jobs
+
+
+@app.get("/api/v1/data/pipeline/jobs/{symbol}")
+async def get_pipeline_job(symbol: str, source: str = "dukascopy"):
+    """Get the state of a specific ingestion job."""
+    job = await orch.get_job(symbol, source)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.post("/api/v1/data/pipeline/jobs/{symbol}/retry")
+async def retry_pipeline_job(symbol: str, source: str = "dukascopy"):
+    """Retry a dead-letter or failed ingestion job."""
+    task = retry_dead_letter_job.delay(symbol=symbol, source=source)
+    return {"task_id": task.id, "symbol": symbol, "source": source, "status": "queued"}
+
+
+@app.get("/api/v1/data/pipeline/dead-letter")
+async def list_dead_letter_jobs(limit: int = 100):
+    """List all jobs that have entered the dead-letter state."""
+    dl = DeadLetterHandler()
+    jobs = await dl.list_dead_letter(limit=limit)
+    return jobs
+
+
+@app.post("/api/v1/data/pipeline/kill-stale")
+async def trigger_kill_stale_jobs(stale_minutes: int = 30):
+    """Manually trigger stale job cleanup."""
+    from app.tasks.data_tasks import kill_stale_jobs
+    task = kill_stale_jobs.delay(stale_minutes=stale_minutes)
+    return {"task_id": task.id, "stale_minutes": stale_minutes}
+
+
+@app.get("/api/v1/data/pipeline/summary")
+async def get_pipeline_summary():
+    """High-level pipeline summary with counts per status."""
+    all_jobs = await orch.list_jobs(limit=1000)
+    summary = {}
+    for job in all_jobs:
+        st = job.get("status", "unknown")
+        summary[st] = summary.get(st, 0) + 1
+    return {
+        "total_jobs": len(all_jobs),
+        "status_breakdown": summary,
     }

@@ -18,22 +18,34 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     # Task hardening: timeouts, retries, result expiration
-    task_time_limit=300,           # 5 minutes max per task (kill if hung)
-    task_soft_time_limit=240,      # 4 minutes soft limit (graceful shutdown)
-    task_default_retry_delay=60,   # 1 minute between retries
-    task_max_retries=3,             # Max 3 retries per task
-    result_expires=3600,           # Results expire after 1 hour
+    task_time_limit=300,
+    task_soft_time_limit=240,
+    task_default_retry_delay=60,
+    task_max_retries=3,
+    result_expires=3600,
     broker_connection_retry_on_startup=True,
-    worker_prefetch_multiplier=1,  # Fair task distribution
+    worker_prefetch_multiplier=1,
+    # M4: Dedicated queues for data ingestion pipeline
+    task_routes={
+        "app.tasks.data_tasks.ingest_dukascopy_daily": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.ingest_historical_range": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.detect_and_backfill_gaps": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.ingest_mt5_fill": {"queue": "data_ingestion"},
+        # Dead letter reprocessing goes to a separate queue to avoid blocking
+        "app.tasks.data_tasks.retry_dead_letter_job": {"queue": "dead_letter"},
+    },
+    # M4: Dead letter queue configuration (Redis-based)
+    task_reject_on_worker_lost=True,
+    task_default_queue="celery",
     beat_schedule={
         "analyze-market-scalping": {
             "task": "app.tasks.analysis_tasks.run_full_analysis",
-            "schedule": 300.0,  # Every 5 minutes for scalping/day trading
+            "schedule": 300.0,
             "options": {"time_limit": 240, "soft_time_limit": 180},
         },
         "check-open-positions": {
             "task": "app.tasks.execution_tasks.check_open_positions",
-            "schedule": 60.0,  # Every minute for SL/TP + time-based exit
+            "schedule": 60.0,
             "options": {"time_limit": 30, "soft_time_limit": 20},
         },
         "auto-select-pairs": {
@@ -58,23 +70,45 @@ celery_app.conf.update(
         },
         "compute-pair-performance": {
             "task": "app.tasks.execution_tasks.compute_pair_performance",
-            "schedule": 3600.0,  # Every hour
+            "schedule": 3600.0,
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "compute-daily-bias": {
             "task": "app.tasks.execution_tasks.compute_daily_bias",
-            "schedule": 14400.0,  # Every 4 hours
+            "schedule": 14400.0,
             "options": {"time_limit": 180, "soft_time_limit": 120},
         },
         "refresh-model-performance": {
             "task": "app.tasks.execution_tasks.refresh_model_performance",
-            "schedule": 3600.0,  # Every hour
+            "schedule": 3600.0,
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "reevaluate-open-positions": {
             "task": "app.tasks.execution_tasks.reevaluate_open_positions",
-            "schedule": 180.0,  # Every 3 minutes
+            "schedule": 180.0,
             "options": {"time_limit": 60, "soft_time_limit": 45},
+        },
+        # v0.8.0 M1 — Historical data ingestion pipeline
+        "ingest-dukascopy-daily": {
+            "task": "app.tasks.data_tasks.ingest_dukascopy_daily",
+            "schedule": crontab(hour=0, minute=5),
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
+        "detect-and-backfill-gaps": {
+            "task": "app.tasks.data_tasks.detect_and_backfill_gaps",
+            "schedule": crontab(hour=2, minute=0, day_of_week="sun"),
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
+        "ingest-mt5-fill": {
+            "task": "app.tasks.data_tasks.ingest_mt5_fill",
+            "schedule": 1800.0,
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
+        # M4: Kill stale ingestion jobs every 10 minutes
+        "kill-stale-jobs": {
+            "task": "app.tasks.data_tasks.kill_stale_jobs",
+            "schedule": 600.0,
+            "options": {"time_limit": 60, "soft_time_limit": 30},
         },
     }
 )
