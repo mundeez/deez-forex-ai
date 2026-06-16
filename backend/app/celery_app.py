@@ -96,6 +96,11 @@ celery_app.conf.update(
             "schedule": 3600.0 * 24,  # daily
             "options": {"time_limit": 300, "soft_time_limit": 240},
         },
+        "daily-kpi-snapshot": {
+            "task": "app.tasks.analysis_tasks.daily_kpi_snapshot",
+            "schedule": crontab(hour=0, minute=0),  # midnight UTC
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
         "compute-daily-bias": {
             "task": "app.tasks.execution_tasks.compute_daily_bias",
             "schedule": 14400.0,

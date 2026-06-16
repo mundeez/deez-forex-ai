@@ -1116,3 +1116,31 @@ def rolling_backtest_30d():
                         len(wf_results), mc_result.get("ruin_probability", 0), len(regime_result))
 
     asyncio.run(_run())
+
+
+@celery_app.task
+def daily_kpi_snapshot():
+    """Daily task: snapshot paper trading KPIs to database for trend tracking."""
+    async def _snapshot():
+        async with get_celery_session()() as db:
+            from app.services.paper_trading_monitor import PaperTradingMonitor
+            from app import models
+            from datetime import datetime, timezone
+
+            report = await PaperTradingMonitor.compute_report(db, days=7)
+            snapshot = models.ModelPerformance(
+                model_name="paper_trading_kpi",
+                version="v1.5.0",
+                timeframe="daily",
+                win_rate=report.get("win_rate", 0),
+                avg_return=report.get("net_pnl", 0),
+                total_trades=report.get("total_trades", 0),
+                avg_confidence=report.get("avg_exit_quality", 0),
+                computed_at=datetime.now(timezone.utc),
+            )
+            db.add(snapshot)
+            await db.commit()
+            logger.info("daily_kpi_snapshot: win_rate=%.2f trades=%d",
+                        report.get("win_rate", 0), report.get("total_trades", 0))
+
+    asyncio.run(_snapshot())
