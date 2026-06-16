@@ -559,6 +559,33 @@ async def close_position(trade_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.get("/api/v1/positions/{trade_id}/exit-recommendation")
+async def get_exit_recommendation(trade_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services.exit_evaluator import ExitEvaluator
+    result = await db.execute(select(models.Trade).where(models.Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
+    if trade.status != models.TradeStatus.OPEN:
+        raise HTTPException(status_code=400, detail="Trade is not open")
+    price = await _safe_get_price(trade.symbol, schemas.DataProvider(trade.provider))
+    current = price.get("bid") if trade.direction == "buy" else price.get("ask")
+    if not current:
+        raise HTTPException(status_code=503, detail="Price unavailable")
+    evaluator = ExitEvaluator()
+    rec = await evaluator.evaluate_trade(db, trade, current)
+    return {
+        "trade_id": rec.trade_id,
+        "symbol": rec.symbol,
+        "action": rec.action.value,
+        "reason": rec.reason,
+        "confidence": rec.confidence,
+        "suggested_sl": rec.suggested_sl,
+        "suggested_tp": rec.suggested_tp,
+        "close_pct": rec.close_pct,
+        "metadata": rec.metadata,
+    }
+
 @app.get("/api/v1/portfolio/summary")
 async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
     reset_at_str = await get_setting(db, "portfolio_reset_at")

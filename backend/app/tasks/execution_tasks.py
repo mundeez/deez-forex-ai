@@ -560,3 +560,30 @@ def reevaluate_open_positions():
 
             return {"checked": len(open_trades), "closed": closed_count, "alerts": alert_count}
     return asyncio.run(_reeval())
+
+
+@celery_app.task
+def evaluate_exits():
+    """Evaluate all open trades against exit rules every 60 seconds."""
+    async def _evaluate():
+        async with get_celery_session()() as db:
+            from app.services.exit_evaluator import ExitEvaluator, compute_exit_quality_score
+            from app.services.websocket_broadcaster import broadcast_trade_event
+            evaluator = ExitEvaluator()
+            recommendations, _ = await evaluator.evaluate_all(db)
+            executed = await evaluator.execute_all_recommendations(db, recommendations)
+            for trade in executed:
+                await broadcast_trade_event("exit_executed", {
+                    "id": trade.id,
+                    "symbol": trade.symbol,
+                    "direction": trade.direction,
+                    "exit_price": trade.exit_price,
+                    "pnl": trade.pnl,
+                    "pnl_pct": trade.pnl_pct,
+                    "mode": trade.mode,
+                    "close_reason": trade.close_reason,
+                })
+            if recommendations:
+                logger.info("evaluate_exits: %d recommendations, %d executed", len(recommendations), len(executed))
+
+    asyncio.run(_evaluate())

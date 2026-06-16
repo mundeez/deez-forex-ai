@@ -64,6 +64,7 @@ class Trade(Base):
     session_at_open = Column(String(20))
     session_at_close = Column(String(20))
     actual_holding_min = Column(Float)
+    exit_quality_score = Column(Float)
 
 
 class AIDecision(Base):

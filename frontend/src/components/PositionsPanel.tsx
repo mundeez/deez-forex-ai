@@ -1,9 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield, Timer, Calendar } from "lucide-react";
+import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield, Timer, Calendar, AlertTriangle, Lock, Zap } from "lucide-react";
 import { API_URL } from "@/utils/api";
 import { formatDateTime } from "@/utils/date";
+
+interface ExitRec {
+  action: string;
+  reason: string;
+  confidence: number;
+  suggested_sl?: number;
+  close_pct?: number;
+}
 
 interface Position {
   id: number;
@@ -31,15 +39,32 @@ interface Position {
 export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [settings, setSettings] = useState<any>({});
+  const [exitRecs, setExitRecs] = useState<Record<number, ExitRec>>({});
 
   useEffect(() => {
     fetchPositions();
     fetchSettings();
     const interval = setInterval(() => {
       fetchPositions();
+      positions.forEach((p) => fetchExitRec(p.id));
     }, 15000);
     return () => clearInterval(interval);
   }, []);
+
+  async function fetchExitRec(id: number) {
+    try {
+      const res = await fetch(`${API_URL}/api/v1/positions/${id}/exit-recommendation`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.action && data.action !== "hold") {
+        setExitRecs((prev) => ({ ...prev, [id]: data }));
+      } else {
+        setExitRecs((prev) => { const copy = { ...prev }; delete copy[id]; return copy; });
+      }
+    } catch (e) {
+      // silent fail
+    }
+  }
 
   async function fetchPositions() {
     try {
@@ -47,6 +72,7 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
       if (!res.ok) return;
       const data = await res.json();
       setPositions(data.positions || []);
+      (data.positions || []).forEach((p: Position) => fetchExitRec(p.id));
     } catch (e) {
       console.error("positions fetch error", e);
     }
@@ -189,6 +215,33 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
                 )}
               </div>
 
+              {exitRecs[p.id] && (
+                <div className="mt-2 p-2 rounded border text-xs flex items-start gap-2"
+                  style={{
+                    borderColor: exitRecs[p.id].action === "close_now" ? "#ef4444" : "#f59e0b",
+                    backgroundColor: exitRecs[p.id].action === "close_now" ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.1)",
+                    color: exitRecs[p.id].action === "close_now" ? "#fca5a5" : "#fcd34d",
+                  }}
+                >
+                  {exitRecs[p.id].action === "close_now" ? (
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  ) : exitRecs[p.id].action === "move_sl" ? (
+                    <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                  ) : (
+                    <Zap className="w-4 h-4 shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <p className="font-semibold">
+                      {exitRecs[p.id].action === "close_now" ? "EXIT RECOMMENDED" :
+                        exitRecs[p.id].action === "move_sl" ? "ADJUST STOP" : "PARTIAL CLOSE"}
+                    </p>
+                    <p className="opacity-80">{exitRecs[p.id].reason}</p>
+                    {exitRecs[p.id].suggested_sl && (
+                      <p className="opacity-80">Suggested SL: {exitRecs[p.id].suggested_sl.toFixed(5)}</p>
+                    )}
+                  </div>
+                </div>
+              )}
               <button
                 onClick={() => closePosition(p.id)}
                 className="w-full mt-2 text-xs text-red-400 hover:text-red-300 flex items-center justify-center gap-1 py-1 border border-red-900/50 rounded hover:bg-red-900/20 transition"

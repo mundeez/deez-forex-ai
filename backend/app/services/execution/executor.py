@@ -252,6 +252,14 @@ class ExecutionService:
                     trade.ai_decision_id, exc_info=True,
                 )
 
+        # Compute exit quality score for learning
+        try:
+            from app.services.exit_evaluator import compute_exit_quality_score
+            trade.exit_quality_score = compute_exit_quality_score(trade)
+            await db.commit()
+        except Exception:
+            logger.warning("Failed to compute exit_quality_score for trade %s", trade.id, exc_info=True)
+
         return trade
 
     async def _fetch_prices_batch(self, client, symbols: list) -> dict:
