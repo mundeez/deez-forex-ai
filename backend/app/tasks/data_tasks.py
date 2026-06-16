@@ -244,3 +244,97 @@ def retry_dead_letter_job(self, symbol: str, source: str):
         ingest_mt5_fill.delay(symbol=symbol)
 
     return {"symbol": symbol, "source": source, "status": "requeued"}
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=300,
+    time_limit=120,
+    soft_time_limit=90,
+    queue="data_ingestion",
+)
+def ingest_fred_macro(self, lookback_days: int = 365):
+    """Daily FRED macro data ingestion.  Runs at 06:00 UTC."""
+    import asyncio
+    from app.services.data.fred_client import FREDClient
+    from app.database import get_celery_session
+    async def _run():
+        async with get_celery_session()() as db:
+            client = FREDClient()
+            return await client.ingest_all(db, lookback_days=lookback_days)
+    return asyncio.run(_run())
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=600,
+    time_limit=300,
+    soft_time_limit=240,
+    queue="data_ingestion",
+)
+def ingest_cot_weekly(self):
+    """Weekly CFTC COT report ingestion.  Runs Monday 10:00 UTC."""
+    import asyncio
+    from app.services.data.cot_client import COTClient
+    from app.database import get_celery_session
+    async def _run():
+        async with get_celery_session()() as db:
+            client = COTClient()
+            return await client.ingest(db)
+    return asyncio.run(_run())
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=300,
+    time_limit=120,
+    soft_time_limit=90,
+    queue="data_ingestion",
+)
+def ingest_yfinance_macro(self, period: str = "1mo"):
+    """Daily yfinance macro data ingestion (DXY, VIX, yields, indices).  Runs at 07:00 UTC."""
+    import asyncio
+    from app.services.data.macro_client import MacroClient
+    from app.database import get_celery_session
+    async def _run():
+        async with get_celery_session()() as db:
+            client = MacroClient()
+            return await client.ingest_all(db, period=period)
+    return asyncio.run(_run())
+
+
+@shared_task(
+    bind=True,
+    max_retries=1,
+    default_retry_delay=60,
+    time_limit=120,
+    soft_time_limit=90,
+    queue="data_ingestion",
+)
+def backfill_dukascopy_5y(self, symbol: str = None):
+    """Trigger 5-year Dukascopy backfill for all active symbols (or one symbol).
+    Queues individual ingest_historical_range tasks per symbol.
+    """
+    from app.services.data.ingestion_service import ACTIVE_SYMBOLS
+    from datetime import datetime, timezone, timedelta
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=365 * 5)
+    symbols = [symbol] if symbol else ACTIVE_SYMBOLS
+
+    queued = 0
+    for sym in symbols:
+        try:
+            ingest_historical_range.delay(
+                symbol=sym,
+                start_iso=start.isoformat(),
+                end_iso=end.isoformat(),
+            )
+            queued += 1
+            logger.info("Queued 5y backfill for %s (%s -> %s)", sym, start.date(), end.date())
+        except Exception as exc:
+            logger.error("Failed to queue 5y backfill for %s: %s", sym, exc)
+    return {"symbols": queued, "start": start.isoformat(), "end": end.isoformat()}

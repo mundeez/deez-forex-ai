@@ -31,6 +31,9 @@ celery_app.conf.update(
         "app.tasks.data_tasks.ingest_historical_range": {"queue": "data_ingestion"},
         "app.tasks.data_tasks.detect_and_backfill_gaps": {"queue": "data_ingestion"},
         "app.tasks.data_tasks.ingest_mt5_fill": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.ingest_fred_macro": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.ingest_yfinance_macro": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.ingest_cot_weekly": {"queue": "data_ingestion"},
         # Dead letter reprocessing goes to a separate queue to avoid blocking
         "app.tasks.data_tasks.retry_dead_letter_job": {"queue": "dead_letter"},
     },
@@ -109,6 +112,22 @@ celery_app.conf.update(
             "task": "app.tasks.data_tasks.kill_stale_jobs",
             "schedule": 600.0,
             "options": {"time_limit": 60, "soft_time_limit": 30},
+        },
+        # Sprint 1: Macro data ingestion
+        "ingest-fred-macro": {
+            "task": "app.tasks.data_tasks.ingest_fred_macro",
+            "schedule": crontab(hour=6, minute=0),
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
+        "ingest-yfinance-macro": {
+            "task": "app.tasks.data_tasks.ingest_yfinance_macro",
+            "schedule": crontab(hour=7, minute=0),
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
+        "ingest-cot-weekly": {
+            "task": "app.tasks.data_tasks.ingest_cot_weekly",
+            "schedule": crontab(hour=10, minute=0, day_of_week="mon"),
+            "options": {"time_limit": 300, "soft_time_limit": 240},
         },
     }
 )

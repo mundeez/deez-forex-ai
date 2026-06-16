@@ -231,6 +231,27 @@ class ExecutionService:
 
         await db.commit()
         await db.refresh(trade)
+
+        # Update Qdrant vector store with trade outcome for RAG learning loop
+        if trade.ai_decision_id:
+            try:
+                from app.services.vector_store import VectorStore
+                vs = VectorStore()
+                vs.update_outcome(
+                    str(trade.ai_decision_id),
+                    trade.pnl or 0,
+                    trade.status.value,
+                )
+                logger.info(
+                    "Updated Qdrant outcome for decision %s: pnl=%.2f, status=%s",
+                    trade.ai_decision_id, trade.pnl or 0, trade.status.value,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to update Qdrant outcome for decision %s",
+                    trade.ai_decision_id, exc_info=True,
+                )
+
         return trade
 
     async def _fetch_prices_batch(self, client, symbols: list) -> dict:

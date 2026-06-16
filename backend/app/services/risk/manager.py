@@ -9,6 +9,7 @@ from app.enums import TradeDirection, TradeMode
 from app.config import get_settings
 from app.ai.openrouter_client import TradeDecision
 from app.services.settings_service import get_setting_float, get_setting_int, get_setting
+from app.utils.time import ensure_aware
 
 settings = get_settings()
 logger = logging.getLogger("app.services.risk")
@@ -66,9 +67,93 @@ class RiskManager:
             return STRATEGY_CONFIG.get(strategy_mode, {}).get(key, db_value)
         return db_value
 
+    async def validate_emergency_stops(self, db: AsyncSession) -> Tuple[bool, str]:
+        """Hard emergency stops for the seed account.
+        These are NOT configurable via settings — they are always enforced.
+        Returns (ok, reason).  If ok is False, trading must halt immediately.
+        Silently passes if DB tables are not yet available (test / bootstrap env)
+        or if equity_balance indicates this is not a funded seed account.
+        """
+        try:
+            equity = await self._get_equity(db)
+        except Exception:
+            return True, "OK"  # DB not ready yet
+        equity_balance = await get_setting_float(db, "equity_balance")
+        # Only enforce hard stops on funded seed accounts (>= 150 to catch 00+)
+        if equity_balance < 150:
+            return True, "OK"
+        seed_floor = 140.0  # 30% drawdown from 200 = halt
+        if equity < seed_floor:
+            return False, f"EMERGENCY HALT: equity ${equity:.2f} < floor ${seed_floor} (30% DD) — manual review required"
+
+        now = datetime.utcnow()
+        today = now.date()
+        start_of_day = datetime.combine(today, datetime.min.time())
+
+        # 1) Daily loss > 3%
+        try:
+            result = await db.execute(
+                select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
+                    models.Trade.status == models.TradeStatus.CLOSED,
+                    models.Trade.close_time >= start_of_day,
+                    models.Trade.pnl < 0,
+                )
+            )
+            daily_loss = abs(result.scalar() or 0)
+        except Exception:
+            daily_loss = 0
+        daily_loss_pct = daily_loss / max(equity_balance, 1.0) * 100
+        if daily_loss_pct > 3.0:
+            return False, f"EMERGENCY HALT: daily loss {daily_loss_pct:.1f}% > 3% — paused 24h"
+
+        # 2) Weekly loss > 6%
+        week_start = now - timedelta(days=now.weekday())
+        week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            result = await db.execute(
+                select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
+                    models.Trade.status == models.TradeStatus.CLOSED,
+                    models.Trade.close_time >= week_start,
+                    models.Trade.pnl < 0,
+                )
+            )
+            weekly_loss = abs(result.scalar() or 0)
+        except Exception:
+            weekly_loss = 0
+        weekly_loss_pct = weekly_loss / max(equity_balance, 1.0) * 100
+        if weekly_loss_pct > 6.0:
+            return False, f"EMERGENCY HALT: weekly loss {weekly_loss_pct:.1f}% > 6% — paused until next Monday"
+
+        # 3) Consecutive losses
+        try:
+            result = await db.execute(
+                select(models.Trade).where(
+                    models.Trade.status == models.TradeStatus.CLOSED,
+                ).order_by(models.Trade.close_time.desc()).limit(5)
+            )
+            recent = result.scalars().all()
+        except Exception:
+            recent = []
+        losses = [t for t in recent if (t.pnl or 0) < 0]
+        if len(losses) >= 5:
+            return False, "EMERGENCY HALT: 5 consecutive losses — paused until next daily bias refresh"
+        if len(losses) >= 3:
+            last3 = recent[:3]
+            if all((t.pnl or 0) < 0 for t in last3):
+                last_close = ensure_aware(last3[0].close_time) if last3[0].close_time else now
+                if (now - last_close).total_seconds() < 1800:
+                    return False, "EMERGENCY COOLING: 3 consecutive losses — 30-minute cooling-off active"
+
+        return True, "OK"
+
     async def validate_new_trade(
         self, db: AsyncSession, trade_in: schemas.TradeCreate
     ) -> Tuple[bool, str]:
+        # Emergency stops first — always enforced, bypass all other logic if triggered
+        emerg_ok, emerg_reason = await self.validate_emergency_stops(db)
+        if not emerg_ok:
+            return False, emerg_reason
+
         strategy_mode = await self._get_strategy_mode(db)
         sc = STRATEGY_CONFIG.get(strategy_mode, STRATEGY_CONFIG["scalping"])
 
@@ -117,6 +202,11 @@ class RiskManager:
     async def validate_ai_decision(
         self, db: AsyncSession, decision: TradeDecision
     ) -> Tuple[bool, str]:
+        # Emergency stops first — always enforced, bypass all other logic if triggered
+        emerg_ok, emerg_reason = await self.validate_emergency_stops(db)
+        if not emerg_ok:
+            return False, emerg_reason
+
         strategy_mode = await self._get_strategy_mode(db)
         sc = STRATEGY_CONFIG.get(strategy_mode, STRATEGY_CONFIG["scalping"])
 
@@ -261,17 +351,28 @@ class RiskManager:
                 return False, f"Correlation {corr:.2f} with {osym} exceeds limit {max_corr}"
         return True, "OK"
 
-    def calculate_position_size(self, equity: float, risk_pct: float, entry: float, stop_loss: float) -> float:
-        """Calculate lot size based on risk amount and stop distance."""
+    def calculate_position_size(
+        self, equity: float, risk_pct: float, entry: float, stop_loss: float, symbol: str
+    ) -> float:
+        """Calculate lot size based on risk amount and stop distance.
+        Enforces 0.01 lot minimum (broker requirement for micro accounts).
+        Handles JPY pairs correctly (0.01 pip value vs 0.0001 for standard pairs).
+        """
         if not entry or not stop_loss or entry == stop_loss:
             return 0.01
         risk_amount = equity * (risk_pct / 100)
         sl_dist = abs(entry - stop_loss)
+        # Pip value depends on whether symbol is JPY-based
+        pip_value = 0.01 if "JPY" in symbol.upper() else 0.0001
+        sl_pips = sl_dist / pip_value
         pip_value_per_lot = 10.0
-        sl_pips = sl_dist / 0.0001
         risk_per_lot = sl_pips * pip_value_per_lot
         if risk_per_lot <= 0:
             return 0.01
-        lots = risk_amount / risk_per_lot
-        lots = max(0.001, min(lots, equity / (entry * 100000)))
-        return round(lots, 3)
+        raw_size = risk_amount / risk_per_lot
+        size = round(raw_size, 2)
+        # Cap at ~20% of equity as position value
+        max_size = (equity * 0.20) / (entry * 100000)
+        size = min(size, round(max_size, 2))
+        size = max(size, 0.01)  # enforce broker minimum (micro lot) AFTER cap
+        return size

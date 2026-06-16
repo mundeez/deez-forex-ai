@@ -443,6 +443,12 @@ def run_full_analysis():
                 symbol = analysis["symbol"]
                 decision = decisions_map[symbol]
 
+                # Detect market regime for this symbol/timeframe
+                from app.services.regime_detector import RegimeDetector
+                regime_info = RegimeDetector.detect(
+                    analysis.get("technical", {}), symbol=symbol
+                )
+
                 db_decision = models.AIDecision(
                     symbol=symbol,
                     decision=decision.decision,
@@ -468,6 +474,11 @@ def run_full_analysis():
                     regime=_clean_numpy({
                         "strategy_mode": strategy_mode,
                         "session": analysis.get("session"),
+                        "detected": regime_info["regime"],
+                        "regime_confidence": regime_info["confidence"],
+                        "adx": regime_info["adx"],
+                        "bb_width_pct": regime_info["bb_width_pct"],
+                        "atr_pct": regime_info["atr_pct"],
                     }),
                     daily_bias=_clean_numpy(v2_results.get(symbol, {}).get("daily_bias")),
                 )
@@ -475,9 +486,26 @@ def run_full_analysis():
                 await db.commit()
                 await db.refresh(db_decision)
 
-                # Store market state snapshot to Qdrant vector DB
+                # Persist regime label to market_regimes table
                 try:
-                    point_id = f"{db_decision.id}"
+                    mr = models.MarketRegime(
+                        symbol=symbol,
+                        timeframe=decision.timeframe or "1h",
+                        regime=regime_info["regime"],
+                        adx=regime_info["adx"],
+                        bb_width_pct=regime_info["bb_width_pct"],
+                        atr_pct=regime_info["atr_pct"],
+                        confidence=regime_info["confidence"],
+                    )
+                    db.add(mr)
+                    await db.commit()
+                except Exception:
+                    logger.warning("Failed to insert MarketRegime for %s", symbol, exc_info=True)
+                    await db.rollback()
+
+                # Store market state snapshot to Qdrant vector DB + SQL table
+                point_id = f"{db_decision.id}"
+                try:
                     vs.upsert_snapshot(
                         point_id=point_id,
                         snapshot=analysis.get("technical", {}),
@@ -491,6 +519,30 @@ def run_full_analysis():
                     )
                 except Exception:
                     logger.warning("Failed to upsert Qdrant snapshot for decision %s", db_decision.id, exc_info=True)
+
+                # Persist snapshot metadata in SQL for audit + reporting
+                try:
+                    mss = models.MarketStateSnapshot(
+                        symbol=symbol,
+                        strategy_mode=strategy_mode,
+                        decision=decision.decision,
+                        confidence=decision.confidence,
+                        qdrant_point_id=point_id,
+                    )
+                    db.add(mss)
+                    await db.commit()
+                except Exception:
+                    logger.warning("Failed to insert MarketStateSnapshot for decision %s", db_decision.id, exc_info=True)
+                    await db.rollback()
+
+                # Back-link the Qdrant point ID to the AIDecision record
+                if hasattr(db_decision, "qdrant_point_id"):
+                    try:
+                        db_decision.qdrant_point_id = point_id
+                        await db.commit()
+                    except Exception:
+                        logger.warning("Failed to set qdrant_point_id on AIDecision %s", db_decision.id, exc_info=True)
+                        await db.rollback()
 
                 # Broadcast AI decision to all connected clients
                 await broadcast_ai_decision({
@@ -569,7 +621,8 @@ def run_full_analysis():
                             equity = await risk._get_equity(db)
                             position_size = risk.calculate_position_size(
                                 equity, decision.position_size_pct,
-                                decision.entry_price, decision.stop_loss
+                                decision.entry_price, decision.stop_loss,
+                                symbol,
                             )
 
                             # 4. Drawdown-based position size reduction

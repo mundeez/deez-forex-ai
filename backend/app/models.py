@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Enum, BigInteger
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Enum, BigInteger, ForeignKey, Date
 from sqlalchemy.sql import func
 from app.database import Base
 from app.enums import TradeStatus, TradeDirection, TradeMode, DataProvider
@@ -94,6 +94,7 @@ class AIDecision(Base):
     verifier_verdict = Column(String(10))
     regime = Column(JSON)
     daily_bias = Column(JSON)
+    qdrant_point_id = Column(String(50))
 
 
 class BacktestRun(Base):
@@ -330,3 +331,104 @@ class Bar(Base):
     avg_spread = Column(Float)
     source = Column(String(20), default='dukascopy')
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class EconomicEvent(Base):
+    __tablename__ = 'economic_events'
+    id = Column(BigInteger, primary_key=True, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    currency = Column(String(3), nullable=False)
+    event_name = Column(String(200), nullable=False)
+    impact = Column(String(10))
+    actual = Column(Float)
+    forecast = Column(Float)
+    previous = Column(Float)
+    surprise = Column(Float)
+    source = Column(String(20), default='forexfactory')
+
+
+class COTReport(Base):
+    __tablename__ = 'cot_reports'
+    id = Column(BigInteger, primary_key=True, index=True)
+    report_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    nc_long = Column(BigInteger)
+    nc_short = Column(BigInteger)
+    nc_net = Column(BigInteger)
+    nc_net_chg = Column(BigInteger)
+    comm_net = Column(BigInteger)
+    open_interest = Column(BigInteger)
+    spec_pct_oi = Column(Float)
+    source = Column(String(20), default='cftc')
+
+
+class RetailSentiment(Base):
+    __tablename__ = 'retail_sentiment'
+    id = Column(BigInteger, primary_key=True, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    long_pct = Column(Float)
+    short_pct = Column(Float)
+    net_score = Column(Float)
+    source = Column(String(20), default='myfxbook')
+
+
+class MacroSeries(Base):
+    __tablename__ = 'macro_series'
+    id = Column(BigInteger, primary_key=True, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    series_id = Column(String(50), nullable=False, index=True)
+    value = Column(Float)
+    source = Column(String(20))
+
+
+class NewsHeadline(Base):
+    __tablename__ = 'news_headlines'
+    id = Column(BigInteger, primary_key=True, index=True)
+    published_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    symbol = Column(String(10), index=True)
+    headline = Column(Text, nullable=False)
+    source = Column(String(50))
+    finbert_positive = Column(Float)
+    finbert_negative = Column(Float)
+    finbert_neutral = Column(Float)
+    composite_score = Column(Float)
+    processed = Column(Boolean, default=False)
+
+
+class TradePattern(Base):
+    __tablename__ = 'trade_patterns'
+    id = Column(BigInteger, primary_key=True, index=True)
+    trade_id = Column(Integer, ForeignKey('trades.id'))
+    symbol = Column(String(10))
+    entry_session = Column(String(20))
+    strategy_mode = Column(String(20))
+    entry_regime = Column(String(20))
+    analyst_consensus = Column(Float)
+    analyst_combination = Column(String(50))
+    daily_bias_aligned = Column(Boolean)
+    verifier_verdict = Column(String(10))
+    mfe_pips = Column(Float)
+    mae_pips = Column(Float)
+    mfe_mae_ratio = Column(Float)
+    outcome = Column(String(10))
+    pnl = Column(Float)
+    r_multiple = Column(Float)
+    exit_quality_score = Column(Float)
+    holding_min = Column(Float)
+    optimal_hold_min = Column(Float)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class MarketRegime(Base):
+    __tablename__ = 'market_regimes'
+    id = Column(BigInteger, primary_key=True, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    symbol = Column(String(10), nullable=False, index=True)
+    timeframe = Column(String(10), nullable=False, index=True)
+    regime = Column(String(20), nullable=False)
+    adx = Column(Float)
+    bb_width_pct = Column(Float)
+    atr_pct = Column(Float)
+    news_proximity = Column(Boolean, default=False)
+    confidence = Column(Float)
