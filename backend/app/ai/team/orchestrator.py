@@ -17,6 +17,7 @@ from app.ai.model_router import ModelRouter
 
 from .analyst import DomainAnalyst
 from .lead import LeadStrategist
+from app.services.analyst_weight_optimizer import AnalystWeightOptimizer
 from .verifier import Verifier
 
 logger = logging.getLogger("app.ai.team.orchestrator")
@@ -96,9 +97,16 @@ class TeamDecisionEngine:
         # 2. Domain analysts
         analyst_opinions = await self._run_analysts(analysis_snapshot)
 
-        # 3. Lead strategist
+        # 3. Lead strategist (with regime/session-aware analyst weights)
+        regime = analysis_snapshot.get("regime", "unknown")
+        session = analysis_snapshot.get("session", "unknown")
+        weights_dict = await AnalystWeightOptimizer().get_cached_weights() or {}
+        analyst_weights = AnalystWeightOptimizer.get_weights_for_context(
+            weights_dict, regime=regime, session=session
+        )
         lead_proposal = await self.lead.decide(
-            symbol, strategy_mode, analyst_opinions, daily_bias, router=self.router
+            symbol, strategy_mode, analyst_opinions, daily_bias,
+            router=self.router, analyst_weights=analyst_weights
         )
 
         # 4. Verifier (optional, off hot path for scalping if slow)

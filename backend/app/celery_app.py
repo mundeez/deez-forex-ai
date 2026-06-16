@@ -81,6 +81,16 @@ celery_app.conf.update(
             "schedule": 3600.0,
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
+        "compute-pattern-priors": {
+            "task": "app.tasks.analysis_tasks.compute_pattern_priors",
+            "schedule": 3600.0 * 6,  # every 6 hours
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
+        "update-model-performance": {
+            "task": "app.tasks.analysis_tasks.update_model_performance",
+            "schedule": 3600.0,  # hourly
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
         "compute-daily-bias": {
             "task": "app.tasks.execution_tasks.compute_daily_bias",
             "schedule": 14400.0,

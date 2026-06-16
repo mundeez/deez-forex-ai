@@ -50,6 +50,7 @@ class LeadStrategist:
         analyst_opinions: Dict[str, Any],
         daily_bias: Optional[Dict[str, Any]],
         similar_setups: list,
+        analyst_weights: Optional[Dict[str, float]] = None,
     ) -> str:
         prompt = (
             f"Symbol: {symbol}\n"
@@ -94,6 +95,7 @@ class LeadStrategist:
         analyst_opinions: Dict[str, Any],
         daily_bias: Optional[Dict[str, Any]],
         router: Optional[ModelRouter] = None,
+        analyst_weights: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         # RAG: retrieve similar past setups
         similar = []
@@ -108,7 +110,7 @@ class LeadStrategist:
         except Exception as exc:
             logger.warning("RAG search failed for lead: %s", exc)
 
-        prompt = self._build_prompt(symbol, strategy_mode, analyst_opinions, daily_bias, similar)
+        prompt = self._build_prompt(symbol, strategy_mode, analyst_opinions, daily_bias, similar, analyst_weights)
         payload = {
             "temperature": 0.15,
             "max_tokens": 384,

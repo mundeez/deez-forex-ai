@@ -293,6 +293,52 @@ def run_full_analysis():
                 else:
                     allowed_analyses.append(analysis)
 
+            # ------------------------------------------------------------------
+            # XGBoost Entry Gate — skip LLM if predicted quality is too low
+            # ------------------------------------------------------------------
+            entry_gate_enabled = await get_setting_bool(db, "entry_gate_enabled")
+            entry_gate_threshold = await get_setting_float(db, "entry_gate_threshold") or 0.40
+            if entry_gate_enabled:
+                from app.services.feature_store import FeatureStore
+                from app.services.ml.entry_model import EntryQualityModel
+                entry_model = EntryQualityModel()
+                filtered_analyses = []
+                for analysis in allowed_analyses:
+                    symbol = analysis["symbol"]
+                    features = FeatureStore.compute_entry_features(analysis)
+                    score = entry_model.predict(features)
+                    if score is not None and score < entry_gate_threshold:
+                        results.append({
+                            "symbol": symbol,
+                            "decision": "HOLD",
+                            "confidence": 0.0,
+                            "reason": f"Entry gate blocked (score={score:.2f} < {entry_gate_threshold})",
+                        })
+                        db_decision = models.AIDecision(
+                            symbol=symbol,
+                            decision="HOLD",
+                            confidence=0.0,
+                            rationale=f"Entry gate blocked (score={score:.2f} < {entry_gate_threshold})",
+                            model_used="xgb_entry_gate",
+                            provider=settings.DATA_PROVIDER.value,
+                        )
+                        db.add(db_decision)
+                        await db.commit()
+                        await db.refresh(db_decision)
+                        await broadcast_ai_decision({
+                            "id": db_decision.id,
+                            "symbol": symbol,
+                            "decision": "HOLD",
+                            "confidence": 0.0,
+                            "rationale": f"Entry gate blocked (score={score:.2f} < {entry_gate_threshold})",
+                            "manual_override": manual_override,
+                            "strategy_mode": strategy_mode,
+                        })
+                        logger.info("Entry gate blocked %s (score=%.2f)", symbol, score)
+                    else:
+                        filtered_analyses.append(analysis)
+                allowed_analyses = filtered_analyses
+
             # Use batched AI prompt if enabled and multiple pairs
             batched_enabled = await get_setting_bool(db, "batched_ai_enabled")
             ai_model = await get_setting(db, "ai_model") or settings.OPENROUTER_MODEL
@@ -827,3 +873,151 @@ def record_hourly_performance():
             return {"recorded": len(trades), "hour": hour}
 
     return asyncio.run(_record())
+
+
+@celery_app.task
+def compute_pattern_priors():
+    """Nightly task: compute pattern priors from closed trades and cache in Redis."""
+    async def _compute():
+        async with get_celery_session()() as db:
+            from sqlalchemy import select
+            from app import models
+            from app.services.pattern_extractor import PatternExtractor
+
+            result = await db.execute(
+                select(models.Trade).where(models.Trade.status == models.TradeStatus.CLOSED)
+                .order_by(models.Trade.close_time.desc())
+                .limit(500)
+            )
+            trades = result.scalars().all()
+
+            trade_dicts = []
+            for t in trades:
+                # Determine session from open_time
+                from datetime import timezone
+                hour = t.open_time.hour if t.open_time else 12
+                session = "london" if 7 <= hour < 16 else "ny" if 12 <= hour < 21 else "asia"
+                trade_dicts.append({
+                    "symbol": t.symbol,
+                    "direction": t.direction,
+                    "pnl": t.pnl or 0,
+                    "regime": t.regime or "unknown",
+                    "session": session,
+                    "pattern_tags": t.pattern_tags or [],
+                })
+
+            extractor = PatternExtractor()
+            priors = extractor.compute_pattern_priors(trade_dicts)
+            await extractor.cache_priors(priors)
+            logger.info("compute_pattern_priors: cached priors for %d trades", len(trade_dicts))
+
+    asyncio.run(_compute())
+
+
+@celery_app.task
+def update_model_performance():
+    """Hourly task: populate ModelPerformance table from recent decisions."""
+    async def _update():
+        async with get_celery_session()() as db:
+            from sqlalchemy import select, func
+            from datetime import datetime, timedelta, timezone
+            from app import models
+
+            since = datetime.now(timezone.utc) - timedelta(hours=24)
+            result = await db.execute(
+                select(models.AIDecision)
+                .where(models.AIDecision.created_at >= since)
+                .where(models.AIDecision.outcome.isnot(None))
+            )
+            decisions = result.scalars().all()
+
+            # Group by model_used
+            by_model = {}
+            for d in decisions:
+                model = d.model_used or "unknown"
+                by_model.setdefault(model, []).append(d)
+
+            for model, decs in by_model.items():
+                wins = sum(1 for d in decs if d.outcome == "win")
+                losses = sum(1 for d in decs if d.outcome == "loss")
+                total = wins + losses
+                if total == 0:
+                    continue
+                win_rate = wins / total
+                avg_confidence = sum(d.confidence or 0 for d in decs) / len(decs)
+
+                mp = models.ModelPerformance(
+                    model_name=model,
+                    version="1.0.0",
+                    timeframe="mixed",
+                    win_rate=win_rate,
+                    avg_return=sum(d.realized_return or 0 for d in decs) / total,
+                    total_trades=total,
+                    avg_confidence=avg_confidence,
+                    computed_at=datetime.now(timezone.utc),
+                )
+                db.add(mp)
+            await db.commit()
+            logger.info("update_model_performance: updated %d models", len(by_model))
+
+    asyncio.run(_update())
+
+
+@celery_app.task
+def train_entry_model():
+    """On-demand / scheduled task: retrain XGBoost entry quality model."""
+    async def _train():
+        async with get_celery_session()() as db:
+            from sqlalchemy import select
+            from datetime import datetime, timedelta, timezone
+            from app import models
+            from app.services.feature_store import FeatureStore
+            from app.services.ml.entry_model import EntryQualityModel
+
+            # Fetch closed trades with their associated decisions
+            since = datetime.now(timezone.utc) - timedelta(days=90)
+            result = await db.execute(
+                select(models.Trade)
+                .where(models.Trade.status == models.TradeStatus.CLOSED)
+                .where(models.Trade.close_time >= since)
+                .where(models.Trade.ai_decision_id.isnot(None))
+                .limit(2000)
+            )
+            trades = result.scalars().all()
+
+            decisions_data = []
+            for t in trades:
+                # Fetch the decision snapshot
+                d_result = await db.execute(
+                    select(models.AIDecision)
+                    .where(models.AIDecision.id == t.ai_decision_id)
+                )
+                decision = d_result.scalar_one_or_none()
+                if not decision:
+                    continue
+                # Reconstruct features from stored snapshots
+                analysis = {
+                    "technical": decision.technical_snapshot or {},
+                    "fundamental": decision.fundamental_snapshot or {},
+                    "sentiment": decision.sentiment_snapshot or {},
+                    "macro": decision.macro_snapshot or {},
+                }
+                features = FeatureStore.compute_entry_features(analysis)
+                label = 1 if (t.pnl or 0) > 0 else 0
+                decisions_data.append({
+                    "features": features,
+                    "label": label,
+                    "symbol": t.symbol,
+                    "direction": t.direction,
+                })
+
+            if len(decisions_data) < 50:
+                logger.warning("train_entry_model: insufficient data (%d samples), skipping", len(decisions_data))
+                return
+
+            df = FeatureStore.export_training_set(decisions_data)
+            model = EntryQualityModel()
+            metrics = model.train(df)
+            logger.info("train_entry_model: retrained — test_auc=%.3f", metrics.get("test_auc", 0))
+
+    asyncio.run(_train())
