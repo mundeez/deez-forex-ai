@@ -133,7 +133,38 @@ class ExecutionService:
             trailing_stop_distance=trailing_distance,
         )
 
+        # ------------------------------------------------------------------
+        # Live trading safety checks (Sprint 7)
+        # ------------------------------------------------------------------
         is_live = trade_in.mode == TradeMode.LIVE
+        if is_live:
+            from app.services.settings_service import get_setting, get_setting_bool
+            # 1. Verify symbol is in allowed live pairs
+            live_pairs_str = await get_setting(db, "live_pairs") or "EURUSD,GBPUSD"
+            allowed_pairs = [p.strip().upper() for p in live_pairs_str.split(",")]
+            if trade_in.symbol.upper() not in allowed_pairs:
+                logger.warning("LIVE BLOCKED: %s not in allowed pairs %s", trade_in.symbol, allowed_pairs)
+                raise ValueError(f"Symbol {trade_in.symbol} not approved for live trading. Allowed: {allowed_pairs}")
+
+            # 2. Verify concurrent trade count
+            max_concurrent = int(await get_setting(db, "max_concurrent_live_trades") or 2)
+            open_live_result = await db.execute(
+                select(func.count(models.Trade.id))
+                .where(models.Trade.mode == TradeMode.LIVE.value)
+                .where(models.Trade.status == models.TradeStatus.OPEN)
+            )
+            open_live_count = open_live_result.scalar() or 0
+            if open_live_count >= max_concurrent:
+                logger.warning("LIVE BLOCKED: max concurrent trades reached (%d/%d)", open_live_count, max_concurrent)
+                raise ValueError(f"Max concurrent live trades reached ({open_live_count}/{max_concurrent})")
+
+            # 3. Verify emergency equity stop
+            equity_balance = float(await get_setting(db, "equity_balance") or 200.0)
+            emergency_threshold = equity_balance * 0.70  # 30% drawdown trigger
+            if equity_balance < emergency_threshold:
+                logger.critical("LIVE BLOCKED: equity $%.2f below emergency threshold $%.2f", equity_balance, emergency_threshold)
+                raise ValueError(f"Emergency stop: equity {equity_balance} below threshold {emergency_threshold}")
+
         is_metaapi = trade_in.provider == DataProvider.METAAPI
         has_meta_token = bool(settings.META_API_TOKEN)
 

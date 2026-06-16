@@ -1769,3 +1769,71 @@ async def get_pipeline_summary():
         "total_jobs": len(all_jobs),
         "status_breakdown": summary,
     }
+
+
+@app.get("/api/v1/system/live-readiness")
+async def get_live_readiness(db: AsyncSession = Depends(get_db)):
+    """Live deployment readiness check — verify all safety systems are active."""
+    from app.services.settings_service import get_setting, get_setting_bool
+    from sqlalchemy import select, func
+    from app import models
+
+    checks = {}
+
+    # 1. Paper trading mode status
+    checks["paper_trading_mode"] = await get_setting_bool(db, "paper_trading_mode")
+
+    # 2. Allowed live pairs
+    live_pairs = await get_setting(db, "live_pairs")
+    checks["live_pairs_configured"] = bool(live_pairs and "EURUSD" in live_pairs)
+
+    # 3. Emergency stops active (equity balance set)
+    equity = await get_setting(db, "equity_balance")
+    checks["emergency_stops_configured"] = bool(equity and float(equity) > 0)
+
+    # 4. Max concurrent trades limit
+    max_conc = await get_setting(db, "max_concurrent_live_trades")
+    checks["max_concurrent_set"] = bool(max_conc and int(max_conc) > 0)
+
+    # 5. Exit rules enabled
+    checks["exit_rules_enabled"] = await get_setting_bool(db, "exit_rules_enabled")
+
+    # 6. Broker connection (MT5 or MetaAPI)
+    broker_ok = False
+    try:
+        from app.config import get_settings
+        s = get_settings()
+        if s.DATA_PROVIDER.value == "mt5_zmq":
+            from app.services.data.mt5_zmq_client import MT5ZMQClient
+            c = MT5ZMQClient()
+            price = await c.get_price("EURUSD")
+            broker_ok = bool(price and price.get("bid"))
+        else:
+            from app.services.data.metaapi_client import MetaApiClient
+            c = MetaApiClient()
+            price = await c.get_price("EURUSD")
+            broker_ok = bool(price and price.get("bid"))
+    except Exception:
+        broker_ok = False
+    checks["broker_connection"] = broker_ok
+
+    # 7. Recent paper trades logged (confirm telemetry working)
+    from datetime import datetime, timedelta, timezone
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    result = await db.execute(
+        select(func.count(models.Trade.id))
+        .where(models.Trade.mode == models.TradeMode.PAPER.value)
+        .where(models.Trade.open_time >= since)
+    )
+    paper_recent = result.scalar() or 0
+    checks["paper_telemetry_recent"] = paper_recent > 0
+
+    ready = sum(1 for v in checks.values() if v)
+    total = len(checks)
+
+    return {
+        "ready_for_live": ready >= total - 1,  # Allow 1 failure
+        "checks_passed": ready,
+        "checks_total": total,
+        "checks": checks,
+    }

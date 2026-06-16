@@ -96,6 +96,13 @@ DEFAULTS = {
     "paper_uses_live_feed": "true",
     "allow_paper_fallback": "false",
     "portfolio_reset_at": "",
+    "exit_ai_enabled": "false",
+    "exit_ai_min_confidence": "0.65",
+    "paper_trading_mode": "true",
+    "live_pairs": "EURUSD,GBPUSD",
+    "max_concurrent_live_trades": "2",
+    "enable_partial_profit_live": "false",
+    "stage0_equity_threshold": "210.0",
 }
 
 
@@ -265,4 +272,11 @@ async def build_settings_response(db: AsyncSession) -> dict:
         "paper_uses_live_feed": all_db.get("paper_uses_live_feed", "true").lower() == "true",
         "allow_paper_fallback": all_db.get("allow_paper_fallback", "false").lower() == "true",
         "portfolio_reset_at": all_db.get("portfolio_reset_at", ""),
+        "exit_ai_enabled": all_db.get("exit_ai_enabled", "false").lower() == "true",
+        "exit_ai_min_confidence": float(all_db.get("exit_ai_min_confidence", "0.65")),
+        "paper_trading_mode": all_db.get("paper_trading_mode", "true").lower() == "true",
+        "live_pairs": all_db.get("live_pairs", "EURUSD,GBPUSD"),
+        "max_concurrent_live_trades": int(all_db.get("max_concurrent_live_trades", "2")),
+        "enable_partial_profit_live": all_db.get("enable_partial_profit_live", "false").lower() == "true",
+        "stage0_equity_threshold": float(all_db.get("stage0_equity_threshold", "210.0")),
     }
