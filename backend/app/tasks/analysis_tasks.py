@@ -250,7 +250,7 @@ def run_full_analysis():
             analyses: List[Dict[str, Any]] = []
             for pair in active_pairs:
                 symbol = pair.symbol
-                analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode)
+                analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode, db=db)
                 analysis["symbol"] = symbol
                 analyses.append(analysis)
 
@@ -758,7 +758,7 @@ def auto_select_pairs():
             available = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "GBPJPY", "XAUUSD"]
             scored = []
             for sym in available:
-                analysis = await aggregator.gather_all(sym, strategy_mode=strategy_mode)
+                analysis = await aggregator.gather_all(sym, strategy_mode=strategy_mode, db=db)
                 score = aggregator._score_pair(analysis)
                 scored.append((sym, score))
 

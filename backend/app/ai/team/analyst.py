@@ -72,7 +72,9 @@ class DomainAnalyst:
                 f"  {tf}: signal={data.get('signal','neutral')}, confidence={data.get('confidence',0):.0%}, "
                 f"rsi={ind.get('rsi_14','N/A')}, ema9={ind.get('ema_9','N/A')}, "
                 f"ema21={ind.get('ema_21','N/A')}, adx={ind.get('adx_14','N/A')}, "
-                f"atr={ind.get('atr_14','N/A')}, bb_squeeze={data.get('bb_squeeze',False)}"
+                f"stoch_k={ind.get('stoch_k','N/A')}, stoch_d={ind.get('stoch_d','N/A')}, "
+                f"cci={ind.get('cci_20','N/A')}, atr={ind.get('atr_14','N/A')}, "
+                f"bb_squeeze={data.get('bb_squeeze',False)}"
             )
         return "Technical:\n" + "\n".join(parts)
 
@@ -91,19 +93,25 @@ class DomainAnalyst:
     @staticmethod
     def _sentiment_block(snapshot: Dict[str, Any]) -> str:
         sent = snapshot.get("sentiment", {})
+        inst = sent.get("institutional", {})
+        retail = sent.get("retail", {})
         return (
             f"Sentiment: overall={sent.get('overall_sentiment','neutral')}, "
-            f"score={sent.get('sentiment_score',0):.2f}"
+            f"score={sent.get('sentiment_score',0):.2f}, "
+            f"retail_long_pct={retail.get('long_pct','N/A')}%, "
+            f"cot_net={inst.get('net_position','N/A')}, "
+            f"cot_bias={inst.get('institutional_bias','neutral')}"
         )
 
     @staticmethod
     def _macro_block(snapshot: Dict[str, Any]) -> str:
         macro = snapshot.get("macro", {})
         return (
-            f"Macro: dxy_bias={macro.get('dxy_bias','neutral')}, "
+            f"Macro: dxy={macro.get('dxy','N/A')}, vix={macro.get('vix','N/A')}, "
+            f"yield_spread={macro.get('yield_spread_10y_2y','N/A')}, "
             f"risk_on_score={macro.get('risk_on_score',0):.2f}, "
-            f"rate_cycle={macro.get('rate_cycle','neutral')}, "
-            f"correlations={macro.get('correlations','N/A')}"
+            f"bias={macro.get('bias','neutral')}, "
+            f"gold={macro.get('gold','N/A')}, oil={macro.get('oil','N/A')}"
         )
 
     async def analyze(

@@ -54,6 +54,23 @@ def _vwap(df: pd.DataFrame) -> pd.Series:
     return cum_tp_vol / cum_vol
 
 
+def _stochastic(df: pd.DataFrame, k: int = 14, d: int = 3) -> tuple:
+    """Stochastic Oscillator (%K, %D)."""
+    low_min = df["low"].rolling(window=k).min()
+    high_max = df["high"].rolling(window=k).max()
+    k_line = 100 * (df["close"] - low_min) / (high_max - low_min)
+    d_line = k_line.rolling(window=d).mean()
+    return k_line, d_line
+
+
+def _cci(df: pd.DataFrame, length: int = 20) -> pd.Series:
+    """Commodity Channel Index."""
+    tp = (df["high"] + df["low"] + df["close"]) / 3
+    sma = tp.rolling(window=length).mean()
+    mean_dev = tp.rolling(window=length).apply(lambda x: abs(x - x.mean()).mean(), raw=True)
+    return (tp - sma) / (0.015 * mean_dev)
+
+
 def _adx(df: pd.DataFrame, length: int = 14) -> pd.Series:
     """Average Directional Index (trend strength, 0-100)."""
     high = df["high"]
@@ -108,6 +125,8 @@ class TechnicalAnalyzer:
         df["BB_LOWER"] = bb_lower
         df["ATR_14"] = _atr(df, 14)
         df["VWAP"] = _vwap(df)
+        df["STOCH_K"], df["STOCH_D"] = _stochastic(df)
+        df["CCI_20"] = _cci(df, 20)
         df["ADX_14"] = _adx(df, 14)
         squeeze = _bb_squeeze(df)
 
@@ -127,6 +146,9 @@ class TechnicalAnalyzer:
         atr = last.get("ATR_14")
         vwap = last.get("VWAP")
         adx = last.get("ADX_14")
+        stoch_k = last.get("STOCH_K")
+        stoch_d = last.get("STOCH_D")
+        cci = last.get("CCI_20")
         close_price = last["close"]
 
         bullish_factors = 0
@@ -215,6 +237,9 @@ class TechnicalAnalyzer:
                 "atr_14": round(atr, 5) if pd.notna(atr) else None,
                 "vwap": round(vwap, 5) if pd.notna(vwap) else None,
                 "adx_14": round(adx, 2) if pd.notna(adx) else None,
+                "stoch_k": round(stoch_k, 2) if pd.notna(stoch_k) else None,
+                "stoch_d": round(stoch_d, 2) if pd.notna(stoch_d) else None,
+                "cci_20": round(cci, 2) if pd.notna(cci) else None,
                 "close": round(close_price, 5),
             },
             "support": support,

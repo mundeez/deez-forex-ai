@@ -17,6 +17,7 @@ import redis.asyncio as aioredis
 
 from app.ai.openrouter_client import OpenRouterClient
 from app.ai.model_router import ModelRouter
+from app.config import get_settings
 
 logger = logging.getLogger("app.ai.team.daily_bias")
 
@@ -91,6 +92,7 @@ class DailyBiasEngine:
         }
 
     async def cache(self, symbol: str, bias: Dict[str, Any], ttl_sec: int = 28800) -> None:
+        settings = get_settings()
         """Store the daily bias in Redis (default 8h TTL)."""
         try:
             r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -100,6 +102,7 @@ class DailyBiasEngine:
             logger.warning("Failed to cache daily bias for %s: %s", symbol, exc)
 
     async def get_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
+        settings = get_settings()
         """Retrieve cached daily bias."""
         try:
             r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)

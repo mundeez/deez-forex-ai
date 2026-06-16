@@ -30,6 +30,9 @@ class FundamentalAnalyzer:
         if rate_diff is not None:
             direction_bias = "bearish" if rate_diff > 0 else "bullish"
 
+        # Compute economic surprise index from events where actual > forecast
+        surprise_score = self._compute_surprise_index(events)
+
         return {
             "event_risk": event_risk,
             "high_impact_events": high_impact_count,
@@ -37,6 +40,7 @@ class FundamentalAnalyzer:
             "interest_rate_spread": rate_diff,
             "direction_bias": direction_bias,
             "news_headlines": news,
+            "economic_surprise_index": surprise_score,
         }
 
     async def _fetch_economic_calendar(self) -> List[Dict[str, Any]]:
@@ -114,6 +118,29 @@ class FundamentalAnalyzer:
                 val = obs[0].get("value")
                 return float(val) if val and val != "." else None
         return None
+
+    @staticmethod
+    def _compute_surprise_index(events: List[Dict[str, Any]]) -> float:
+        """Score how much actual results beat/miss forecasts.
+        Returns a score between -1.0 and +1.0 where positive means
+        actuals mostly beat forecasts (positive surprise).
+        """
+        surprises = []
+        for e in events:
+            actual = e.get("actual")
+            forecast = e.get("forecast")
+            if actual is not None and forecast is not None:
+                try:
+                    a_val = float(str(actual).replace("K", "").replace("M", "").replace("%", "").replace(",", "").strip())
+                    f_val = float(str(forecast).replace("K", "").replace("M", "").replace("%", "").replace(",", "").strip())
+                    if f_val != 0:
+                        surprises.append((a_val - f_val) / abs(f_val))
+                except (ValueError, TypeError):
+                    continue
+        if not surprises:
+            return 0.0
+        avg_surprise = sum(surprises) / len(surprises)
+        return round(max(-1.0, min(1.0, avg_surprise)), 2)
 
     async def _fetch_news_headlines(self, symbol: str) -> List[str]:
         if not self.news_api_key:

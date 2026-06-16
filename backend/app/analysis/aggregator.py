@@ -3,6 +3,7 @@ from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.analysis.technical import TechnicalAnalyzer
 from app.analysis.fundamental import FundamentalAnalyzer
 from app.analysis.sentiment import SentimentAnalyzer
+from app.analysis.macro import MacroAnalyzer
 from app.config import get_settings
 from app import schemas
 from app.enums import DataProvider
@@ -20,8 +21,9 @@ class AnalysisAggregator:
         self.technical = TechnicalAnalyzer()
         self.fundamental = FundamentalAnalyzer()
         self.sentiment = SentimentAnalyzer()
+        self.macro = MacroAnalyzer()
 
-    async def gather_all(self, symbol: str = "EURUSD", strategy_mode: str = "scalping") -> dict:
+    async def gather_all(self, symbol: str = "EURUSD", strategy_mode: str = "scalping", db = None) -> dict:
         if strategy_mode == "scalping":
             # 1m for entry timing, 5m for micro trend, 15m for context
             candles_1m = await self.client.get_historical_candles(symbol, "1m", 300)
@@ -44,7 +46,8 @@ class AnalysisAggregator:
                     "overall_signal": self._weight_timeframes(tech_1m, tech_5m, tech_15m),
                 },
                 "fundamental": await self.fundamental.analyze(symbol),
-                "sentiment": await self.sentiment.analyze(symbol),
+                "sentiment": await self.sentiment.analyze(symbol, db=db),
+                "macro": await self.macro.analyze(db=db),
             }
 
         elif strategy_mode == "day_trading":
@@ -69,7 +72,8 @@ class AnalysisAggregator:
                     "overall_signal": self._weight_timeframes(tech_5m, tech_15m, tech_1h),
                 },
                 "fundamental": await self.fundamental.analyze(symbol),
-                "sentiment": await self.sentiment.analyze(symbol),
+                "sentiment": await self.sentiment.analyze(symbol, db=db),
+                "macro": await self.macro.analyze(db=db),
             }
 
         else:  # swing (default)
@@ -93,7 +97,8 @@ class AnalysisAggregator:
                     "overall_signal": self._weight_timeframes(tech_1h, tech_4h, tech_d1),
                 },
                 "fundamental": await self.fundamental.analyze(symbol),
-                "sentiment": await self.sentiment.analyze(symbol),
+                "sentiment": await self.sentiment.analyze(symbol, db=db),
+                "macro": await self.macro.analyze(db=db),
             }
 
     async def analyze_multiple(self, symbols: list[str], strategy_mode: str = "scalping") -> list[dict]:

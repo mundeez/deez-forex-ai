@@ -908,7 +908,7 @@ async def trigger_ai_analysis(
     executor: ExecutionService = app.state.executor
     risk: RiskManager = app.state.risk
 
-    analysis = await aggregator.gather_all(symbol)
+    analysis = await aggregator.gather_all(symbol, db=db)
     decision = await ai.get_trade_decision(analysis)
 
     db_decision = models.AIDecision(
@@ -1123,7 +1123,7 @@ async def get_analysis_full(symbol: str = settings.DEFAULT_PAIR, db: AsyncSessio
 async def get_analysis_summary(symbol: str = settings.DEFAULT_PAIR, db: AsyncSession = Depends(get_db)):
     aggregator: AnalysisAggregator = app.state.aggregator
     try:
-        result = await aggregator.gather_all(symbol)
+        result = await aggregator.gather_all(symbol, db=db)
         tech = result.get("technical", {})
         fund = result.get("fundamental", {})
         sent = result.get("sentiment", {})
