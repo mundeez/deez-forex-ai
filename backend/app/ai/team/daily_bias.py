@@ -17,11 +17,8 @@ import redis.asyncio as aioredis
 
 from app.ai.openrouter_client import OpenRouterClient
 from app.ai.model_router import ModelRouter
-from app.config import get_settings
 
-settings = get_settings()
 logger = logging.getLogger("app.ai.team.daily_bias")
-
 
 class DailyBiasEngine:
     """Generates and caches a daily directional bias per symbol."""
@@ -36,7 +33,7 @@ class DailyBiasEngine:
     )
 
     def __init__(self, model: str = None):
-        self.model = model or settings.MODEL_MACRO
+        self.model = model or "deepseek/deepseek-r1:free"
         self.client = OpenRouterClient()
 
     async def compute(

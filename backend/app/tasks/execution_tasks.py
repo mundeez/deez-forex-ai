@@ -342,7 +342,18 @@ def compute_daily_bias():
             if not active_pairs:
                 active_pairs = [models.ActivePair(symbol="EURUSD", selection_mode="manual", priority=1)]
 
-            engine = DailyBiasEngine()
+            from app.ai.suites import resolve_models
+            suite = await get_setting(db, "model_suite") or "free"
+            overrides = {
+                "technical": await get_setting(db, "model_technical"),
+                "fundamental": await get_setting(db, "model_fundamental"),
+                "sentiment": await get_setting(db, "model_sentiment"),
+                "macro": await get_setting(db, "model_macro"),
+                "lead": await get_setting(db, "model_lead"),
+                "verifier": await get_setting(db, "model_verifier"),
+            }
+            models_map = resolve_models(suite, overrides)
+            engine = DailyBiasEngine(model=models_map.get("macro"))
             news = NewsService()
             fund = FundamentalAnalyzer()
             out = {}

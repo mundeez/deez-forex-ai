@@ -14,15 +14,12 @@ import logging
 
 from app.ai.openrouter_client import OpenRouterClient
 from app.ai.model_router import ModelRouter
-from app.config import get_settings
 
 from .analyst import DomainAnalyst
 from .lead import LeadStrategist
 from .verifier import Verifier
 
-settings = get_settings()
 logger = logging.getLogger("app.ai.team.orchestrator")
-
 
 class TeamDecisionEngine:
     """The v2 multi-agent trading decision engine."""
@@ -42,13 +39,13 @@ class TeamDecisionEngine:
         analyst_parallelism: bool = True,
     ):
         self.analysts = {
-            "technical": DomainAnalyst("technical", technical_model or settings.MODEL_TECHNICAL),
-            "fundamental": DomainAnalyst("fundamental", fundamental_model or settings.MODEL_FUNDAMENTAL),
-            "sentiment": DomainAnalyst("sentiment", sentiment_model or settings.MODEL_SENTIMENT),
-            "macro": DomainAnalyst("macro", macro_model or settings.MODEL_MACRO),
+            "technical": DomainAnalyst("technical", technical_model or "openai/gpt-oss-120b:free"),
+            "fundamental": DomainAnalyst("fundamental", fundamental_model or "meta-llama/llama-3.3-70b-instruct:free"),
+            "sentiment": DomainAnalyst("sentiment", sentiment_model or "qwen/qwen3-next-80b-a3b-instruct:free"),
+            "macro": DomainAnalyst("macro", macro_model or "deepseek/deepseek-r1:free"),
         }
-        self.lead = LeadStrategist(lead_model or settings.MODEL_LEAD)
-        self.verifier = Verifier(verifier_model or settings.MODEL_VERIFIER)
+        self.lead = LeadStrategist(lead_model or "openai/gpt-oss-120b:free")
+        self.verifier = Verifier(verifier_model or "deepseek/deepseek-r1:free")
         self.verifier_enabled = verifier_enabled
         self.verifier_can_veto = verifier_can_veto
         self.analyst_parallelism = analyst_parallelism

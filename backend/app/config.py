@@ -29,13 +29,13 @@ class Settings(BaseSettings):
     DECISION_ENGINE_VERSION: EngineVersion = EngineVersion.V1
 
     # v2 AI Team Settings (env-level defaults)
-    MODEL_SUITE: str = "free"  # free | production | extreme | custom
-    MODEL_TECHNICAL: str = "openai/gpt-oss-120b:free"
-    MODEL_FUNDAMENTAL: str = "meta-llama/llama-3.3-70b-instruct:free"
-    MODEL_SENTIMENT: str = "qwen/qwen3-next-80b-a3b-instruct:free"
-    MODEL_MACRO: str = "deepseek/deepseek-r1:free"
-    MODEL_LEAD: str = "openai/gpt-oss-120b:free"
-    MODEL_VERIFIER: str = "deepseek/deepseek-r1:free"
+    MODEL_SUITE: str = ""  # free | production | extreme | custom — DB settings override
+    MODEL_TECHNICAL: str = ""
+    MODEL_FUNDAMENTAL: str = ""
+    MODEL_SENTIMENT: str = ""
+    MODEL_MACRO: str = ""
+    MODEL_LEAD: str = ""
+    MODEL_VERIFIER: str = ""
 
     # v2 Feature Flags (env-level defaults)
     VERIFIER_ENABLED: bool = True

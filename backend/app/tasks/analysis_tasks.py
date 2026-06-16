@@ -314,6 +314,21 @@ def run_full_analysis():
             ai_error_message = ""
 
             # ------------------------------------------------------------------
+            # Resolve model suite (used by both v1 and v2 engine paths)
+            # ------------------------------------------------------------------
+            from app.ai.suites import resolve_models
+            suite = await get_setting(db, "model_suite") or "free"
+            overrides = {
+                "technical": await get_setting(db, "model_technical"),
+                "fundamental": await get_setting(db, "model_fundamental"),
+                "sentiment": await get_setting(db, "model_sentiment"),
+                "macro": await get_setting(db, "model_macro"),
+                "lead": await get_setting(db, "model_lead"),
+                "verifier": await get_setting(db, "model_verifier"),
+            }
+            models_map = resolve_models(suite, overrides)
+
+            # ------------------------------------------------------------------
             # v2 multi-agent team engine (behind feature flag)
             # ------------------------------------------------------------------
             engine_version = await get_setting(db, "decision_engine_version") or "v1"
@@ -321,17 +336,6 @@ def run_full_analysis():
 
             if engine_version == "v2":
                 from app.ai.team.orchestrator import TeamDecisionEngine
-                from app.ai.suites import resolve_models
-                suite = await get_setting(db, "model_suite") or "free"
-                overrides = {
-                    "technical": await get_setting(db, "model_technical"),
-                    "fundamental": await get_setting(db, "model_fundamental"),
-                    "sentiment": await get_setting(db, "model_sentiment"),
-                    "macro": await get_setting(db, "model_macro"),
-                    "lead": await get_setting(db, "model_lead"),
-                    "verifier": await get_setting(db, "model_verifier"),
-                }
-                models_map = resolve_models(suite, overrides)
                 team = TeamDecisionEngine(
                     technical_model=models_map.get("technical"),
                     fundamental_model=models_map.get("fundamental"),
@@ -377,12 +381,13 @@ def run_full_analysis():
                         decision.rationale = f"[v2 TEAM UNAVAILABLE: {ai_error_message[:120]}] {decision.rationale}"
                         decisions_map[symbol] = decision
             else:
-                # v1 single-LLM path (unchanged)
+                # v1 single-LLM path — uses the resolved lead model from the suite
+                v1_model = models_map.get("lead") or ai_model
                 try:
                     if batched_enabled and len(allowed_analyses) > 1:
                         batched_decisions = await ai.get_batched_trade_decisions(
                             allowed_analyses, strategy_mode=strategy_mode,
-                            model_override=ai_model, aggressiveness=aggressiveness,
+                            model_override=v1_model, aggressiveness=aggressiveness,
                             router=router,
                         )
                         for analysis, decision in zip(allowed_analyses, batched_decisions):
@@ -391,7 +396,7 @@ def run_full_analysis():
                         for analysis in allowed_analyses:
                             decision = await ai.get_trade_decision(
                                 analysis, strategy_mode=strategy_mode,
-                                model_override=ai_model, aggressiveness=aggressiveness,
+                                model_override=v1_model, aggressiveness=aggressiveness,
                                 router=router,
                             )
                             decisions_map[analysis["symbol"]] = decision
