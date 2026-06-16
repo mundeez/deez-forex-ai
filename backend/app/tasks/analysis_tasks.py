@@ -1021,3 +1021,98 @@ def train_entry_model():
             logger.info("train_entry_model: retrained — test_auc=%.3f", metrics.get("test_auc", 0))
 
     asyncio.run(_train())
+
+
+@celery_app.task
+def rolling_backtest_30d():
+    """Nightly task: run rolling 30-day backtest on recent closed trades."""
+    async def _run():
+        async with get_celery_session()() as db:
+            from sqlalchemy import select
+            from datetime import datetime, timedelta, timezone
+            from app import models
+            from app.backtest.walk_forward import WalkForwardTester
+            from app.backtest.monte_carlo import MonteCarloSimulator
+            from app.backtest.regime_tester import RegimeBacktester
+
+            since = datetime.now(timezone.utc) - timedelta(days=90)
+            result = await db.execute(
+                select(models.Trade)
+                .where(models.Trade.status == models.TradeStatus.CLOSED)
+                .where(models.Trade.close_time >= since)
+                .order_by(models.Trade.close_time)
+            )
+            trades = result.scalars().all()
+
+            if len(trades) < 30:
+                logger.info("rolling_backtest_30d: insufficient trades (%d), skipping", len(trades))
+                return
+
+            # Walk-forward
+            decisions = [
+                {
+                    "timestamp": t.close_time,
+                    "pnl": t.pnl or 0,
+                    "direction": t.direction,
+                }
+                for t in trades
+            ]
+            wf_results = WalkForwardTester.run(decisions, train_months=2, test_months=1)
+            for r in wf_results:
+                br = models.BacktestRun(
+                    symbol="MULTI",
+                    start_date=datetime.fromisoformat(r["window_start"].replace("Z", "+00:00")),
+                    end_date=datetime.fromisoformat(r["window_end"].replace("Z", "+00:00")),
+                    total_trades=r["test_samples"],
+                    win_rate=r["win_rate"],
+                    profit_factor=r["profit_factor"],
+                    sharpe_ratio=r["sharpe"],
+                    max_drawdown_pct=r["max_drawdown"],
+                    backtest_type="walk_forward",
+                )
+                db.add(br)
+
+            # Monte Carlo on daily returns
+            daily_pnls = {}
+            for t in trades:
+                day = t.close_time.date()
+                daily_pnls[day] = daily_pnls.get(day, 0) + (t.pnl or 0)
+            mc_result = MonteCarloSimulator.run(
+                list(daily_pnls.values()), n_runs=5000, initial_equity=1000, ruin_threshold=700
+            )
+            if mc_result:
+                br = models.BacktestRun(
+                    symbol="MULTI",
+                    start_date=since,
+                    end_date=datetime.now(timezone.utc),
+                    total_trades=len(trades),
+                    profit_factor=mc_result.get("median_profit_factor", 0),
+                    max_drawdown_pct=mc_result.get("median_max_dd_pct", 0),
+                    backtest_type="monte_carlo",
+                    mc_ruin_probability=mc_result.get("ruin_probability"),
+                    mc_median_dd_pct=mc_result.get("median_max_dd_pct"),
+                )
+                db.add(br)
+
+            # Regime backtest
+            regime_trades = [{"regime": t.regime or "unknown", "pnl": t.pnl or 0} for t in trades]
+            regime_result = RegimeBacktester.run(regime_trades)
+            for regime, stats in regime_result.items():
+                br = models.BacktestRun(
+                    symbol="MULTI",
+                    start_date=since,
+                    end_date=datetime.now(timezone.utc),
+                    total_trades=stats["count"],
+                    win_rate=stats["win_rate"],
+                    profit_factor=stats["profit_factor"],
+                    max_drawdown_pct=stats["max_drawdown"],
+                    backtest_type="regime",
+                    regime=regime,
+                )
+                db.add(br)
+
+            await db.commit()
+            logger.info("rolling_backtest_30d: %d WF, MC ruin=%.2f, %d regimes",
+                        len(wf_results), mc_result.get("ruin_probability", 0), len(regime_result))
+
+    asyncio.run(_run())

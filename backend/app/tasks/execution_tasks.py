@@ -586,4 +586,53 @@ def evaluate_exits():
             if recommendations:
                 logger.info("evaluate_exits: %d recommendations, %d executed", len(recommendations), len(executed))
 
+            # TradeManagerAgent: alert-only exit advice (optional)
+            exit_ai_enabled = await get_setting_bool(db, "exit_ai_enabled")
+            exit_ai_min_conf = await get_setting_float(db, "exit_ai_min_confidence") or 0.65
+            if exit_ai_enabled:
+                from app.ai.team.trade_manager import TradeManagerAgent
+                from app.services.data.metaapi_client import MetaApiClient
+                from app.services.data.mt5_zmq_client import MT5ZMQClient
+                from app.config import get_settings
+                from app.enums import DataProvider
+                tm = TradeManagerAgent()
+                settings = get_settings()
+                if settings.DATA_PROVIDER == DataProvider.MT5_ZMQ:
+                    price_client = MT5ZMQClient()
+                else:
+                    price_client = MetaApiClient()
+
+                for trade in executed:
+                    try:
+                        price = await price_client.get_price(trade.symbol)
+                        current = price.get("bid") if trade.direction == "buy" else price.get("ask")
+                        # Fetch latest analysis snapshot
+                        from app.services.vector_store import VectorStore
+                        vs = VectorStore()
+                        similar = vs.search_similar({"symbol": trade.symbol}, limit=1)
+                        analysis = similar[0] if similar else {}
+                        advice = await tm.advise(
+                            symbol=trade.symbol,
+                            direction=trade.direction,
+                            entry_price=trade.entry_price,
+                            current_price=current,
+                            stop_loss=trade.stop_loss,
+                            take_profit=trade.take_profit,
+                            pnl=trade.pnl or 0,
+                            pnl_pct=trade.pnl_pct or 0,
+                            duration_min=trade.actual_holding_min or 0,
+                            analysis_snapshot=analysis,
+                        )
+                        if advice["confidence"] >= exit_ai_min_conf:
+                            logger.info("TradeManagerAgent alert for %s: %s (conf=%.2f)", trade.symbol, advice["action"], advice["confidence"])
+                            event = models.TradeDecisionEvent(
+                                trade_id=trade.id,
+                                event_type="exit_ai_advice",
+                                payload={"advice": advice},
+                            )
+                            db.add(event)
+                            await db.commit()
+                    except Exception:
+                        logger.warning("TradeManagerAgent failed for trade %s", trade.id, exc_info=True)
+
     asyncio.run(_evaluate())

@@ -91,6 +91,11 @@ celery_app.conf.update(
             "schedule": 3600.0,  # hourly
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
+        "rolling-backtest-30d": {
+            "task": "app.tasks.analysis_tasks.rolling_backtest_30d",
+            "schedule": 3600.0 * 24,  # daily
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
         "compute-daily-bias": {
             "task": "app.tasks.execution_tasks.compute_daily_bias",
             "schedule": 14400.0,

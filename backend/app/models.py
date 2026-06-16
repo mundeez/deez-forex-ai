@@ -116,6 +116,10 @@ class BacktestRun(Base):
     expectancy = Column(Float)
     config = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    backtest_type = Column(String(20), default="walk_forward")  # walk_forward, monte_carlo, regime, news
+    regime = Column(String(20))
+    mc_ruin_probability = Column(Float)
+    mc_median_dd_pct = Column(Float)
 
 
 class DailyPnl(Base):
