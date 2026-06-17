@@ -232,6 +232,7 @@ services:
       - "28080:80"
     depends_on:
       - mt5
+      - backend
 
 volumes:
   postgres_data:

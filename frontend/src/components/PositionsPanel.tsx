@@ -215,33 +215,37 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
                 )}
               </div>
 
-              {exitRecs[p.id] && (
-                <div className="mt-2 p-2 rounded border text-xs flex items-start gap-2"
-                  style={{
-                    borderColor: exitRecs[p.id].action === "close_now" ? "#ef4444" : "#f59e0b",
-                    backgroundColor: exitRecs[p.id].action === "close_now" ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.1)",
-                    color: exitRecs[p.id].action === "close_now" ? "#fca5a5" : "#fcd34d",
-                  }}
-                >
-                  {exitRecs[p.id].action === "close_now" ? (
-                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  ) : exitRecs[p.id].action === "move_sl" ? (
-                    <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-                  ) : (
-                    <Zap className="w-4 h-4 shrink-0 mt-0.5" />
-                  )}
-                  <div>
-                    <p className="font-semibold">
-                      {exitRecs[p.id].action === "close_now" ? "EXIT RECOMMENDED" :
-                        exitRecs[p.id].action === "move_sl" ? "ADJUST STOP" : "PARTIAL CLOSE"}
-                    </p>
-                    <p className="opacity-80">{exitRecs[p.id].reason}</p>
-                    {exitRecs[p.id].suggested_sl && (
-                      <p className="opacity-80">Suggested SL: {exitRecs[p.id].suggested_sl.toFixed(5)}</p>
+              {(() => {
+                const rec = exitRecs[p.id];
+                if (!rec) return null;
+                return (
+                  <div className="mt-2 p-2 rounded border text-xs flex items-start gap-2"
+                    style={{
+                      borderColor: rec.action === "close_now" ? "#ef4444" : "#f59e0b",
+                      backgroundColor: rec.action === "close_now" ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.1)",
+                      color: rec.action === "close_now" ? "#fca5a5" : "#fcd34d",
+                    }}
+                  >
+                    {rec.action === "close_now" ? (
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    ) : rec.action === "move_sl" ? (
+                      <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                    ) : (
+                      <Zap className="w-4 h-4 shrink-0 mt-0.5" />
                     )}
+                    <div>
+                      <p className="font-semibold">
+                        {rec.action === "close_now" ? "EXIT RECOMMENDED" :
+                          rec.action === "move_sl" ? "ADJUST STOP" : "PARTIAL CLOSE"}
+                      </p>
+                      <p className="opacity-80">{rec.reason}</p>
+                      {rec.suggested_sl && (
+                        <p className="opacity-80">Suggested SL: {rec.suggested_sl.toFixed(5)}</p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
               <button
                 onClick={() => closePosition(p.id)}
                 className="w-full mt-2 text-xs text-red-400 hover:text-red-300 flex items-center justify-center gap-1 py-1 border border-red-900/50 rounded hover:bg-red-900/20 transition"
