@@ -191,7 +191,7 @@ async def _memory_guard(db, vs, analysis, decision):
     if not await get_setting_bool(db, "memory_guard_enabled"):
         return True, "", ""
     try:
-        similar = vs.search_similar(analysis.get("technical", {}), limit=20)
+        similar = await vs.search_similar(analysis.get("technical", {}), limit=20)
     except Exception:
         logger.warning("Memory guard: Qdrant search failed", exc_info=True)
         return True, "", ""
@@ -238,8 +238,8 @@ def run_full_analysis():
             results = []
 
             # Initialize Qdrant vector store
-            from app.services.vector_store import VectorStore
-            vs = VectorStore()
+            from app.services.vector_store import AsyncVectorStore
+            vs = AsyncVectorStore()
 
             # News-based trading halt per pair
             news_halt_enabled = await get_setting_bool(db, "news_halt_enabled")
@@ -282,7 +282,7 @@ def run_full_analysis():
                     await db.commit()
                     await db.refresh(db_decision)
                     await broadcast_ai_decision({
-                        "id": db_decision.id,
+                        "id": _decision_id,
                         "symbol": symbol,
                         "decision": "HOLD",
                         "confidence": 0.0,
@@ -326,7 +326,7 @@ def run_full_analysis():
                         await db.commit()
                         await db.refresh(db_decision)
                         await broadcast_ai_decision({
-                            "id": db_decision.id,
+                            "id": _decision_id,
                             "symbol": symbol,
                             "decision": "HOLD",
                             "confidence": 0.0,
@@ -531,6 +531,8 @@ def run_full_analysis():
                 db.add(db_decision)
                 await db.commit()
                 await db.refresh(db_decision)
+                _decision_id = db_decision.id  # capture before any sync calls
+                _decision_qdrant_id = getattr(db_decision, "qdrant_point_id", None)
 
                 # Persist regime label to market_regimes table
                 try:
@@ -550,9 +552,9 @@ def run_full_analysis():
                     await db.rollback()
 
                 # Store market state snapshot to Qdrant vector DB + SQL table
-                point_id = f"{db_decision.id}"
+                point_id = f"{_decision_id}"
                 try:
-                    vs.upsert_snapshot(
+                    await vs.upsert_snapshot(
                         point_id=point_id,
                         snapshot=analysis.get("technical", {}),
                         payload={
@@ -564,7 +566,7 @@ def run_full_analysis():
                         },
                     )
                 except Exception:
-                    logger.warning("Failed to upsert Qdrant snapshot for decision %s", db_decision.id, exc_info=True)
+                    logger.warning("Failed to upsert Qdrant snapshot for decision %s", _decision_id, exc_info=True)
 
                 # Persist snapshot metadata in SQL for audit + reporting
                 try:
@@ -578,21 +580,24 @@ def run_full_analysis():
                     db.add(mss)
                     await db.commit()
                 except Exception:
-                    logger.warning("Failed to insert MarketStateSnapshot for decision %s", db_decision.id, exc_info=True)
+                    logger.warning("Failed to insert MarketStateSnapshot for decision %s", _decision_id, exc_info=True)
                     await db.rollback()
 
                 # Back-link the Qdrant point ID to the AIDecision record
-                if hasattr(db_decision, "qdrant_point_id"):
-                    try:
-                        db_decision.qdrant_point_id = point_id
+                try:
+                    # Re-fetch decision to avoid stale object issues
+                    d_res = await db.execute(select(models.AIDecision).where(models.AIDecision.id == _decision_id))
+                    db_decision_refresh = d_res.scalar_one_or_none()
+                    if db_decision_refresh:
+                        db_decision_refresh.qdrant_point_id = point_id
                         await db.commit()
-                    except Exception:
-                        logger.warning("Failed to set qdrant_point_id on AIDecision %s", db_decision.id, exc_info=True)
-                        await db.rollback()
+                except Exception:
+                    logger.warning("Failed to set qdrant_point_id on AIDecision %s", _decision_id, exc_info=True)
+                    await db.rollback()
 
                 # Broadcast AI decision to all connected clients
                 await broadcast_ai_decision({
-                    "id": db_decision.id,
+                    "id": _decision_id,
                     "symbol": symbol,
                     "decision": decision.decision,
                     "confidence": decision.confidence,
@@ -679,7 +684,7 @@ def run_full_analysis():
 
                         if ok:
                             # Calculate trailing stop distance from ATR
-                            from app.services.settings_service import get_setting_float
+                            # get_setting_float already imported at module level
                             trailing_atr_mult = await get_setting_float(db, "trailing_stop_distance_atr")
                             trailing_distance = atr * trailing_atr_mult if atr and trailing_atr_mult else None
 
@@ -747,7 +752,7 @@ def run_full_analysis():
                                 symbol, decision.decision, decision.confidence, reason,
                             )
                             await broadcast_ai_decision({
-                                "id": db_decision.id,
+                                "id": _decision_id,
                                 "symbol": symbol,
                                 "decision": "HOLD",
                                 "confidence": decision.confidence,
@@ -768,7 +773,7 @@ def run_full_analysis():
                             symbol, decision.decision, decision.confidence, reason,
                         )
                         await broadcast_ai_decision({
-                            "id": db_decision.id,
+                            "id": _decision_id,
                             "symbol": symbol,
                             "decision": "HOLD",
                             "confidence": decision.confidence,
@@ -880,7 +885,6 @@ def compute_pattern_priors():
     """Nightly task: compute pattern priors from closed trades and cache in Redis."""
     async def _compute():
         async with get_celery_session()() as db:
-            from sqlalchemy import select
             from app import models
             from app.services.pattern_extractor import PatternExtractor
 
@@ -919,7 +923,7 @@ def update_model_performance():
     """Hourly task: populate ModelPerformance table from recent decisions."""
     async def _update():
         async with get_celery_session()() as db:
-            from sqlalchemy import select, func
+            from sqlalchemy import func
             from datetime import datetime, timedelta, timezone
             from app import models
 
@@ -1006,7 +1010,6 @@ def train_entry_model():
     """On-demand / scheduled task: retrain XGBoost entry quality model."""
     async def _train():
         async with get_celery_session()() as db:
-            from sqlalchemy import select
             from datetime import datetime, timedelta, timezone
             from app import models
             from app.services.feature_store import FeatureStore
@@ -1066,7 +1069,6 @@ def rolling_backtest_30d():
     """Nightly task: run rolling 30-day backtest on recent closed trades."""
     async def _run():
         async with get_celery_session()() as db:
-            from sqlalchemy import select
             from datetime import datetime, timedelta, timezone
             from app import models
             from app.backtest.walk_forward import WalkForwardTester

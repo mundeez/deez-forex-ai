@@ -18,10 +18,10 @@ def check_open_positions():
     async def _check():
         async with get_celery_session()() as db:
             from app.services.websocket_broadcaster import broadcast_trade_event
-            from app.services.vector_store import VectorStore
+            from app.services.vector_store import AsyncVectorStore
             executor = ExecutionService()
             notifier = NotificationService()
-            vs = VectorStore()
+            vs = AsyncVectorStore()
             # Check SL/TP first
             closed_trades = await executor.check_and_close_positions(db)
             for trade in closed_trades:
@@ -36,7 +36,7 @@ def check_open_positions():
                     "close_reason": "sl_tp",
                 })
                 if trade.ai_decision_id:
-                    vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+                    await vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
                 try:
                     await notifier.send_trade_closed(
                         db,
@@ -65,7 +65,7 @@ def check_open_positions():
                     "close_reason": "trailing_stop",
                 })
                 if trade.ai_decision_id:
-                    vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+                    await vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
                 try:
                     await notifier.send_trade_closed(
                         db,
@@ -106,7 +106,7 @@ def check_open_positions():
                     "close_reason": "max_duration",
                 })
                 if trade.ai_decision_id:
-                    vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
+                    await vs.update_outcome(str(trade.ai_decision_id), trade.pnl or 0, trade.status.value)
                 try:
                     await notifier.send_trade_closed(
                         db,
@@ -607,9 +607,9 @@ def evaluate_exits():
                         price = await price_client.get_price(trade.symbol)
                         current = price.get("bid") if trade.direction == "buy" else price.get("ask")
                         # Fetch latest analysis snapshot
-                        from app.services.vector_store import VectorStore
-                        vs = VectorStore()
-                        similar = vs.search_similar({"symbol": trade.symbol}, limit=1)
+                        from app.services.vector_store import AsyncVectorStore
+                        vs = AsyncVectorStore()
+                        similar = await vs.search_similar({"symbol": trade.symbol}, limit=1)
                         analysis = similar[0] if similar else {}
                         advice = await tm.advise(
                             symbol=trade.symbol,

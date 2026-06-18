@@ -9,7 +9,7 @@ import logging
 
 from app.ai.openrouter_client import OpenRouterClient, normalize_decision
 from app.ai.model_router import ModelRouter
-from app.services.vector_store import VectorStore
+from app.services.vector_store import AsyncVectorStore
 
 logger = logging.getLogger("app.ai.team.lead")
 
@@ -100,13 +100,13 @@ class LeadStrategist:
         # RAG: retrieve similar past setups
         similar = []
         try:
-            vs = VectorStore()
+            vs = AsyncVectorStore()
             # Use the technical snapshot to encode for similarity
             from app.services.vector_store import COLLECTION_NAME
             tech_snapshot = {}
             if "technical" in analyst_opinions:
                 tech_snapshot = {"technical": analyst_opinions.get("technical", {})}
-            similar = vs.search_similar(tech_snapshot, limit=10)
+            similar = await vs.search_similar(tech_snapshot, limit=10)
         except Exception as exc:
             logger.warning("RAG search failed for lead: %s", exc)
 
