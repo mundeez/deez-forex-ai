@@ -901,9 +901,9 @@ def compute_pattern_priors():
                     "symbol": t.symbol,
                     "direction": t.direction,
                     "pnl": t.pnl or 0,
-                    "regime": t.regime or "unknown",
+                    "regime": session,
                     "session": session,
-                    "pattern_tags": t.pattern_tags or [],
+                    "pattern_tags": [t.strategy_mode or "scalping"],
                 })
 
             extractor = PatternExtractor()
@@ -925,38 +925,76 @@ def update_model_performance():
 
             since = datetime.now(timezone.utc) - timedelta(hours=24)
             result = await db.execute(
-                select(models.AIDecision)
-                .where(models.AIDecision.created_at >= since)
-                .where(models.AIDecision.outcome.isnot(None))
+                select(models.Trade)
+                .where(models.Trade.status == models.TradeStatus.CLOSED)
+                .where(models.Trade.close_time >= since)
+                .where(models.Trade.ai_decision_id.isnot(None))
             )
-            decisions = result.scalars().all()
+            trades = result.scalars().all()
 
-            # Group by model_used
+            # Group by model_used via joined AIDecision
             by_model = {}
-            for d in decisions:
-                model = d.model_used or "unknown"
-                by_model.setdefault(model, []).append(d)
+            for t in trades:
+                d_result = await db.execute(
+                    select(models.AIDecision)
+                    .where(models.AIDecision.id == t.ai_decision_id)
+                )
+                decision = d_result.scalar_one_or_none()
+                model = decision.model_used if decision else "unknown"
+                by_model.setdefault(model, []).append(t)
 
-            for model, decs in by_model.items():
-                wins = sum(1 for d in decs if d.outcome == "win")
-                losses = sum(1 for d in decs if d.outcome == "loss")
+            for model, model_trades in by_model.items():
+                wins = sum(1 for t in model_trades if (t.pnl or 0) > 0)
+                losses = sum(1 for t in model_trades if (t.pnl or 0) <= 0)
                 total = wins + losses
                 if total == 0:
                     continue
                 win_rate = wins / total
-                avg_confidence = sum(d.confidence or 0 for d in decs) / len(decs)
+                avg_pnl = sum(t.pnl or 0 for t in model_trades) / total
+                # Get avg confidence from associated decisions
+                confidences = []
+                for t in model_trades:
+                    if t.ai_decision_id:
+                        d_res = await db.execute(
+                            select(models.AIDecision.confidence)
+                            .where(models.AIDecision.id == t.ai_decision_id)
+                        )
+                        c = d_res.scalar()
+                        if c is not None:
+                            confidences.append(c)
+                avg_confidence = sum(confidences) / len(confidences) if confidences else 0.5
 
-                mp = models.ModelPerformance(
-                    model_name=model,
-                    version="1.0.0",
-                    timeframe="mixed",
-                    win_rate=win_rate,
-                    avg_return=sum(d.realized_return or 0 for d in decs) / total,
-                    total_trades=total,
-                    avg_confidence=avg_confidence,
-                    computed_at=datetime.now(timezone.utc),
+                # Check if entry exists and update, else insert
+                existing = await db.execute(
+                    select(models.ModelPerformance)
+                    .where(models.ModelPerformance.model == model)
+                    .where(models.ModelPerformance.domain == "overall")
+                    .where(models.ModelPerformance.window == "24h")
                 )
-                db.add(mp)
+                mp = existing.scalar_one_or_none()
+                if mp:
+                    mp.trades = total
+                    mp.winning_trades = wins
+                    mp.losing_trades = losses
+                    mp.win_rate = win_rate
+                    mp.avg_pnl = avg_pnl
+                    mp.avg_confidence = avg_confidence
+                    mp.updated_at = datetime.now(timezone.utc)
+                else:
+                    mp = models.ModelPerformance(
+                        model=model,
+                        domain="overall",
+                        window="24h",
+                        trades=total,
+                        winning_trades=wins,
+                        losing_trades=losses,
+                        win_rate=win_rate,
+                        expectancy=avg_pnl,
+                        avg_pnl=avg_pnl,
+                        avg_confidence=avg_confidence,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                    db.add(mp)
             await db.commit()
             logger.info("update_model_performance: updated %d models", len(by_model))
 
@@ -1000,7 +1038,7 @@ def train_entry_model():
                     "technical": decision.technical_snapshot or {},
                     "fundamental": decision.fundamental_snapshot or {},
                     "sentiment": decision.sentiment_snapshot or {},
-                    "macro": decision.macro_snapshot or {},
+                    "macro": decision.daily_bias or {},
                 }
                 features = FeatureStore.compute_entry_features(analysis)
                 label = 1 if (t.pnl or 0) > 0 else 0
@@ -1095,7 +1133,7 @@ def rolling_backtest_30d():
                 db.add(br)
 
             # Regime backtest
-            regime_trades = [{"regime": t.regime or "unknown", "pnl": t.pnl or 0} for t in trades]
+            regime_trades = [{"regime": t.session_at_open or "unknown", "pnl": t.pnl or 0} for t in trades]
             regime_result = RegimeBacktester.run(regime_trades)
             for regime, stats in regime_result.items():
                 br = models.BacktestRun(
@@ -1129,14 +1167,17 @@ def daily_kpi_snapshot():
 
             report = await PaperTradingMonitor.compute_report(db, days=7)
             snapshot = models.ModelPerformance(
-                model_name="paper_trading_kpi",
-                version="v1.5.0",
-                timeframe="daily",
+                model="paper_trading_kpi",
+                domain="overall",
+                window="7d",
+                trades=report.get("total_trades", 0),
+                winning_trades=0,
+                losing_trades=0,
                 win_rate=report.get("win_rate", 0),
-                avg_return=report.get("net_pnl", 0),
-                total_trades=report.get("total_trades", 0),
+                expectancy=report.get("net_pnl", 0),
+                avg_pnl=report.get("net_pnl", 0),
                 avg_confidence=report.get("avg_exit_quality", 0),
-                computed_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
             )
             db.add(snapshot)
             await db.commit()
