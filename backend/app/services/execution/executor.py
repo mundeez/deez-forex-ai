@@ -243,6 +243,17 @@ class ExecutionService:
             logger.info("Trade %s already closed (status=%s), skipping", trade_id, trade.status)
             return trade
 
+        # Sanity check: reject obviously corrupt exit prices
+        entry = trade.entry_price
+        if entry and exit_price:
+            pct_move = abs(exit_price - entry) / entry * 100
+            # Reject if > 2% move on forex in a single tick (impossible)
+            if pct_move > 2.0 and trade.mode == models.TradeMode.PAPER.value:
+                logger.error(
+                    "CORRUPT PRICE REJECTED for %s %s: entry=%.5f exit=%.5f (%.2f%% move). Keeping trade OPEN.",
+                    trade.symbol, trade.direction, entry, exit_price, pct_move
+                )
+                return trade  # Do not close on corrupt price
         trade.exit_price = exit_price
         trade.status = models.TradeStatus.CLOSED
         trade.close_time = utc_now()

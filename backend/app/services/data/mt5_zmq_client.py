@@ -54,10 +54,33 @@ class MT5ZMQClient:
         resp = await self._send({"action": "GET_PRICE", "symbol": symbol})
         if resp.get("error"):
             raise RuntimeError(resp["error"])
+        bid = resp.get("bid")
+        ask = resp.get("ask")
+        # Sanity check: reject obviously corrupt prices
+        if bid is None or ask is None:
+            raise RuntimeError(f"MT5 returned null price for {symbol}")
+        # Spread check: reject if spread > 5% of price (impossible for forex)
+        if bid > 0 and (ask - bid) / bid > 0.05:
+            raise RuntimeError(f"MT5 returned insane spread for {symbol}: bid={bid} ask={ask}")
+        # Range check: reject if price is outside plausible forex range
+        from app.services.instruments import pip_size
+        pip = pip_size(symbol)
+        # For major forex pairs, price should be roughly 0.5 - 300
+        # Gold can be 1000-3000, JPY pairs ~100-200
+        mid = (bid + ask) / 2.0
+        if symbol == "XAUUSD":
+            if not (500 <= mid <= 5000):
+                raise RuntimeError(f"MT5 returned out-of-range gold price: {mid}")
+        elif "JPY" in symbol:
+            if not (50 <= mid <= 400):
+                raise RuntimeError(f"MT5 returned out-of-range JPY price: {mid}")
+        else:
+            if not (0.3 <= mid <= 50):
+                raise RuntimeError(f"MT5 returned out-of-range price for {symbol}: {mid}")
         return {
             "symbol": symbol,
-            "bid": resp.get("bid"),
-            "ask": resp.get("ask"),
+            "bid": bid,
+            "ask": ask,
             "timestamp": resp.get("timestamp"),
         }
 
