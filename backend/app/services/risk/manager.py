@@ -120,9 +120,10 @@ class RiskManager:
             weekly_loss = abs(result.scalar() or 0)
         except Exception:
             weekly_loss = 0
+        max_weekly_loss = await get_setting_float(db, "max_weekly_loss_pct") or 6.0
         weekly_loss_pct = weekly_loss / max(equity_balance, 1.0) * 100
-        if weekly_loss_pct > 6.0:
-            return False, f"EMERGENCY HALT: weekly loss {weekly_loss_pct:.1f}% > 6% — paused until next Monday"
+        if weekly_loss_pct > max_weekly_loss:
+            return False, f"EMERGENCY HALT: weekly loss {weekly_loss_pct:.1f}% > {max_weekly_loss:.1f}% — paused until next Monday"
 
         # 3) Consecutive losses
         try:
