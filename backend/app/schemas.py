@@ -294,6 +294,7 @@ class AppSettingsUpdate(BaseModel):
     max_risk_per_trade_abs: Optional[float] = Field(None, ge=0.0)
     max_daily_loss_pct: Optional[float] = Field(None, ge=0.1, le=100.0)
     max_weekly_loss_pct: Optional[float] = Field(None, ge=0.1, le=1000.0)
+    max_consecutive_losses: Optional[int] = Field(None, ge=0, le=100)
     ai_confidence_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
     min_risk_reward: Optional[float] = Field(None, ge=0.1)
     default_mode: Optional[str] = None

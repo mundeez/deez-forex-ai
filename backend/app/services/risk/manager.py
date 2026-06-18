@@ -9,7 +9,7 @@ from app.enums import TradeDirection, TradeMode
 from app.config import get_settings
 from app.ai.openrouter_client import TradeDecision
 from app.services.settings_service import get_setting_float, get_setting_int, get_setting
-from app.utils.time import ensure_aware
+from app.utils.time import ensure_aware, utc_now
 
 settings = get_settings()
 logger = logging.getLogger("app.services.risk")
@@ -86,7 +86,7 @@ class RiskManager:
         if equity < seed_floor:
             return False, f"EMERGENCY HALT: equity ${equity:.2f} < floor ${seed_floor} (30% DD) — manual review required"
 
-        now = datetime.utcnow()
+        now = utc_now()
         today = now.date()
         start_of_day = datetime.combine(today, datetime.min.time())
 
@@ -135,9 +135,11 @@ class RiskManager:
             recent = result.scalars().all()
         except Exception:
             recent = []
+        from app.services.settings_service import get_setting_int
+        max_consecutive = await get_setting_int(db, "max_consecutive_losses") or 5
         losses = [t for t in recent if (t.pnl or 0) < 0]
-        if len(losses) >= 5:
-            return False, "EMERGENCY HALT: 5 consecutive losses — paused until next daily bias refresh"
+        if len(losses) >= max_consecutive:
+            return False, f"EMERGENCY HALT: {max_consecutive} consecutive losses — paused until next daily bias refresh"
         if len(losses) >= 3:
             last3 = recent[:3]
             if all((t.pnl or 0) < 0 for t in last3):

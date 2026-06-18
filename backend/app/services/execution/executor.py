@@ -191,6 +191,38 @@ class ExecutionService:
                         raw_price, trade_in.direction.value, trade_in.symbol
                     )
 
+                    # CRITICAL FIX: Recalculate SL/TP to maintain AI's intended
+                    # risk/reward relative to the ACTUAL fill price. The AI's
+                    # estimated entry_price often differs from market by 10%+,
+                    # which places SL/TP on the wrong side of the real entry.
+                    if trade_in.entry_price and trade_in.stop_loss and trade_in.take_profit:
+                        ai_entry = float(trade_in.entry_price)
+                        ai_sl    = float(trade_in.stop_loss)
+                        ai_tp    = float(trade_in.take_profit)
+                        actual   = float(trade.entry_price)
+
+                        sl_dist = abs(ai_entry - ai_sl)
+                        tp_dist = abs(ai_tp - ai_entry)
+
+                        if is_buy:
+                            trade.stop_loss   = actual - sl_dist
+                            trade.take_profit = actual + tp_dist
+                        else:
+                            trade.stop_loss   = actual + sl_dist
+                            trade.take_profit = actual - tp_dist
+
+                        # Sanity check: reject trade if SL and TP are on the
+                        # same side of entry (guaranteed loss)
+                        sl_ok = (is_buy and trade.stop_loss < actual) or (not is_buy and trade.stop_loss > actual)
+                        tp_ok = (is_buy and trade.take_profit > actual) or (not is_buy and trade.take_profit < actual)
+                        if not (sl_ok and tp_ok):
+                            logger.error(
+                                "SL/TP RECALC FAILED for %s: entry=%.5f sl=%.5f tp=%.5f (is_buy=%s). "                                "AI entry=%.5f ai_sl=%.5f ai_tp=%.5f. Rejecting trade.",
+                                trade_in.symbol, actual, trade.stop_loss, trade.take_profit,
+                                is_buy, ai_entry, ai_sl, ai_tp,
+                            )
+                            raise ValueError(f"SL/TP recalculation failed for {trade_in.symbol}")
+
         db.add(trade)
         await db.commit()
         await db.refresh(trade)
