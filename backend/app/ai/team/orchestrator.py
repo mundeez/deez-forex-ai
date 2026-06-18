@@ -136,8 +136,10 @@ class TeamDecisionEngine:
         # with the existing execution pipeline (v1 TradeDecision fields).
         def _mid(zone):
             if isinstance(zone, (list, tuple)) and len(zone) >= 2:
-                return (float(zone[0]) + float(zone[1])) / 2.0
-            return float(zone) if zone else 0.0
+                v0 = float(zone[0]) if zone[0] is not None else 0.0
+                v1 = float(zone[1]) if zone[1] is not None else 0.0
+                return (v0 + v1) / 2.0
+            return float(zone) if zone is not None else 0.0
 
         return {
             "decision": final_decision,

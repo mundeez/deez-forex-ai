@@ -1002,6 +1002,23 @@ def update_model_performance():
             await db.commit()
             logger.info("update_model_performance: updated %d models", len(by_model))
 
+            # Cache win rates in Redis for fast model-router lookup
+            try:
+                import redis.asyncio as aioredis
+                from app.config import get_settings
+                r = aioredis.from_url(get_settings().REDIS_URL, decode_responses=True)
+                for model, model_trades in by_model.items():
+                    wins = sum(1 for t in model_trades if (t.pnl or 0) > 0)
+                    losses = sum(1 for t in model_trades if (t.pnl or 0) <= 0)
+                    total = wins + losses
+                    win_rate = wins / total if total else 0.0
+                    avg_pnl = sum(t.pnl or 0 for t in model_trades) / total if total else 0.0
+                    await r.hset("ai:model:performance", model, json.dumps({"win_rate": win_rate, "avg_pnl": avg_pnl, "trades": total}))
+                await r.expire("ai:model:performance", 86400)
+                await r.aclose()
+            except Exception:
+                logger.warning("Failed to cache model performance in Redis", exc_info=True)
+
     asyncio.run(_update())
 
 

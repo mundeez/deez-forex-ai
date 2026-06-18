@@ -164,9 +164,9 @@ class EntryQualityModel:
 
     def _cache_version(self, metrics: Dict[str, Any]) -> None:
         try:
-            import redis.asyncio as aioredis
+            import redis
             from app.config import get_settings
-            r = aioredis.from_url(get_settings().REDIS_URL, decode_responses=True)
+            r = redis.from_url(get_settings().REDIS_URL, decode_responses=True)
             payload = json.dumps(metrics)
             r.set(self.REDIS_KEY, payload)
             r.close()

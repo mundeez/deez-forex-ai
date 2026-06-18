@@ -15,7 +15,7 @@ numpy==1.26.4
 python-dateutil==2.9.0
 pytz==2024.1
 apscheduler==3.10.4
-websockets==12.0
+websockets>=13.0
 python-multipart==0.0.9
 aiosqlite==0.20.0
 pyzmq==26.0.3

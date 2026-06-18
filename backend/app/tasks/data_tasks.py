@@ -66,7 +66,7 @@ def ingest_dukascopy_daily(self, symbol: str = None):
         try:
             _sync_transition(sym, "dukascopy", self.request.id,
                              None, PipelineStatus.RUNNING)
-            count = service.ingest_symbol_range(sym, start, end, source="dukascopy")
+            count = async_to_sync(service.ingest_symbol_range)(sym, start, end, source="dukascopy")
             total += count
             _sync_transition(sym, "dukascopy", self.request.id,
                              PipelineStatus.RUNNING, PipelineStatus.COMPLETED,
@@ -107,7 +107,7 @@ def ingest_historical_range(self, symbol: str, start_iso: str, end_iso: str):
     try:
         _sync_transition(symbol, "dukascopy", self.request.id,
                          None, PipelineStatus.RUNNING)
-        count = service.ingest_symbol_range(symbol, start, end, source="dukascopy")
+        count = async_to_sync(service.ingest_symbol_range)(symbol, start, end, source="dukascopy")
         _sync_transition(symbol, "dukascopy", self.request.id,
                          PipelineStatus.RUNNING, PipelineStatus.COMPLETED,
                          metadata={"total_ticks": count})
@@ -147,7 +147,7 @@ def detect_and_backfill_gaps(self, symbol: str = None):
         try:
             _sync_transition(sym, "dukascopy", self.request.id,
                              None, PipelineStatus.RUNNING)
-            count = service.backfill_gaps(sym, source="dukascopy")
+            count = async_to_sync(service.backfill_gaps)(sym, source="dukascopy")
             total += count
             _sync_transition(sym, "dukascopy", self.request.id,
                              PipelineStatus.RUNNING, PipelineStatus.COMPLETED,
@@ -187,7 +187,7 @@ def ingest_mt5_fill(self, symbol: str = None):
         try:
             _sync_transition(sym, "mt5_zmq", self.request.id,
                              None, PipelineStatus.RUNNING)
-            count = service.ingest_mt5_recent(sym, lookback_hours=2)
+            count = async_to_sync(service.ingest_mt5_recent)(sym, lookback_hours=2)
             total += count
             _sync_transition(sym, "mt5_zmq", self.request.id,
                              PipelineStatus.RUNNING, PipelineStatus.COMPLETED,
@@ -217,7 +217,10 @@ def kill_stale_jobs(self, stale_minutes: int = 30):
     Monitor task: mark ingestion jobs stuck in RUNNING for too long as FAILED.
     Runs every 10 minutes via Celery beat.
     """
-    count = _sync_kill_stale(stale_minutes=stale_minutes)
+    async def _run():
+        orch = PipelineOrchestrator()
+        return await orch.kill_stale_jobs(stale_minutes=stale_minutes)
+    count = asyncio.run(_run())
     return {"killed": count}
 
 

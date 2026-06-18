@@ -115,15 +115,37 @@ class ModelRouter:
             return 0
 
     # -- Public API -----------------------------------------------------------
+    async def _get_win_rates(self, models: List[str]) -> dict:
+        """Fetch cached win rates from Redis for the given models."""
+        try:
+            import json
+            r = await self._redis()
+            raw = await r.hgetall("ai:model:performance")
+            await r.aclose()
+            win_rates = {}
+            for m in models:
+                data = raw.get(m)
+                if data:
+                    try:
+                        parsed = json.loads(data)
+                        win_rates[m] = parsed.get("win_rate", 0.0)
+                    except Exception:
+                        win_rates[m] = 0.0
+                else:
+                    win_rates[m] = 0.0
+            return win_rates
+        except Exception:
+            return {m: 0.0 for m in models}
+
     async def get_candidates(self, primary: Optional[str] = None) -> List[str]:
         """Return an ordered list of models to attempt for a single request.
 
         Rotation disabled: ``[primary]`` then the rest of the free pool then the
         paid fallback (so a forced model still has failover).
 
-        Rotation enabled: start at the round-robin offset, prefer models that
-        are not cooling down, append the paid fallback, and only retry
-        cooled-down free models as an absolute last resort.
+        Rotation enabled: sort fresh models by cached win rate (highest first),
+        then append the paid fallback, and only retry cooled-down free models
+        as an absolute last resort.
         """
         pool = list(self.free_pool)
 
@@ -141,7 +163,11 @@ class ModelRouter:
         fresh = [m for m in rotated if m not in cooled]
         stale = [m for m in rotated if m in cooled]
 
-        ordered = list(fresh)
+        # Performance-weighted ordering: higher win rate first
+        win_rates = await self._get_win_rates(fresh)
+        fresh_sorted = sorted(fresh, key=lambda m: win_rates.get(m, 0.0), reverse=True)
+
+        ordered = list(fresh_sorted)
         if self.paid_fallback and self.paid_fallback not in ordered:
             ordered.append(self.paid_fallback)
         ordered += stale  # last resort: try a cooling-down free model anyway
