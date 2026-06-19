@@ -327,7 +327,7 @@ class StandaloneBacktestEngine:
 
         async with get_celery_session()() as db:
             # Budget tracking for production runs
-            BUDGET_USD = 7.0  # production budget limit
+            BUDGET_USD = 15.0  # topped up - resume from session 302  # production budget limit
             COST_PER_SESSION = 0.03308  # $7 covers ~211 sessions
             estimated_cost = 0.0
             
