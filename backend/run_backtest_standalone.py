@@ -110,6 +110,20 @@ class StandaloneBacktestEngine:
         self.trade_count = 0
         self.error_count = 0
 
+    def _run_technical(self, symbol: str, candles: pd.DataFrame) -> Optional[Dict]:
+        if candles.empty or len(candles) < 20:
+            return None
+        try:
+            from app.analysis.technical import TechnicalAnalyzer
+            snapshot = candles.to_dict("records")
+            tech = TechnicalAnalyzer().analyze(snapshot)
+            return {
+                "signal": tech.get("signal", "neutral"),
+                "confidence": tech.get("confidence", 0.5),
+            }
+        except Exception:
+            return None
+
     async def _load_candles(self, db: AsyncSession, symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
         stmt = text("""
             SELECT timestamp, open, high, low, close, volume
@@ -159,11 +173,25 @@ class StandaloneBacktestEngine:
             logger.warning("v2 decision failed for %s: %s", symbol, str(exc)[:80])
             return None
 
-    def _simulate_trade(self, symbol: str, decision: Dict, candles: pd.DataFrame) -> Optional[Dict]:
-        if decision.get("decision") not in ("BUY", "SELL"):
-            return None
-        conf = float(decision.get("confidence", 0))
-        if conf < 0.4:
+    def _simulate_trade(self, symbol: str, decision: Dict, candles: pd.DataFrame, tech_signal: Optional[Dict] = None) -> Optional[Dict]:
+        # Fallback: if lead gave HOLD but technical signal is strong, trade on technical
+        lead_decision = decision.get("decision", "HOLD")
+        lead_conf = float(decision.get("confidence", 0))
+        
+        if lead_decision in ("BUY", "SELL") and lead_conf >= 0.25:
+            use_decision = decision
+        elif tech_signal and tech_signal.get("signal") in ("bullish", "bearish"):
+            tech_conf = float(tech_signal.get("confidence", 0.5))
+            if tech_conf >= 0.6:
+                # Use technical signal as fallback when lead is weak/missing
+                fallback = dict(decision)
+                fallback["decision"] = "BUY" if tech_signal["signal"] == "bullish" else "SELL"
+                fallback["confidence"] = tech_conf * 0.7  # discount for no-team consensus
+                fallback["lead_model"] = "technical_fallback"
+                use_decision = fallback
+            else:
+                return None
+        else:
             return None
         entry = float(decision.get("entry_price", 0))
         sl = float(decision.get("stop_loss", 0))
@@ -247,9 +275,10 @@ class StandaloneBacktestEngine:
     async def run_session(self, db: AsyncSession, symbol: str, s_start: datetime, s_end: datetime, strategy_mode: str) -> Optional[Dict]:
         try:
             candles = await self._load_candles(db, symbol, s_start, s_end)
+            tech = self._run_technical(symbol, candles)
             decision = await self._run_v2_decision(symbol, strategy_mode, candles)
-            if decision and decision.get("decision") in ("BUY", "SELL"):
-                return self._simulate_trade(symbol, decision, candles)
+            if decision and (decision.get("decision") in ("BUY", "SELL") or (tech and tech.get("confidence", 0) >= 0.6)):
+                return self._simulate_trade(symbol, decision, candles, tech_signal=tech)
         except Exception as exc:
             self.error_count += 1
             logger.warning("Session failed for %s %s: %s", symbol, s_start, str(exc)[:100])
@@ -321,7 +350,7 @@ class StandaloneBacktestEngine:
                         idx + 1, len(all_sessions), self.equity, self.trade_count, self.error_count, self.max_drawdown_pct)
 
                 # Rate limit: small sleep between sessions
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(5.0)  # more delay = fewer 429s, more analysts succeed
 
         metrics = self._compute_metrics()
         logger.info("BACKTEST COMPLETE: %s", json.dumps(metrics, indent=2, default=str))
