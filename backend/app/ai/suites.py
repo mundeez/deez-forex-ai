@@ -16,9 +16,9 @@ SUITES: Dict[str, Dict[str, str]] = {
         "technical": "openai/gpt-oss-120b:free",
         "fundamental": "meta-llama/llama-3.3-70b-instruct:free",
         "sentiment": "qwen/qwen3-next-80b-a3b-instruct:free",
-        "macro": "deepseek/deepseek-r1:free",
+        "macro": "openrouter/owl-alpha",
         "lead": "openai/gpt-oss-120b:free",
-        "verifier": "deepseek/deepseek-r1:free",
+        "verifier": "openrouter/owl-alpha",
     },
     "production": {
         "technical": "deepseek/deepseek-v4-flash",

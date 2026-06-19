@@ -350,7 +350,7 @@ class StandaloneBacktestEngine:
                         idx + 1, len(all_sessions), self.equity, self.trade_count, self.error_count, self.max_drawdown_pct)
 
                 # Rate limit: small sleep between sessions
-                await asyncio.sleep(5.0)  # more delay = fewer 429s, more analysts succeed
+                await asyncio.sleep(15.0)  # 15s delay = ~4 sessions/min = 20 RPM, within free limits
 
         metrics = self._compute_metrics()
         logger.info("BACKTEST COMPLETE: %s", json.dumps(metrics, indent=2, default=str))
@@ -453,8 +453,24 @@ class StandaloneBacktestEngine:
         }
 
 
+def find_latest_checkpoint():
+    import glob
+    states = glob.glob(os.path.join(CHECKPOINT_DIR, '*_state.json'))
+    if not states:
+        return None
+    # Sort by modification time, newest first
+    states.sort(key=os.path.getmtime, reverse=True)
+    latest = os.path.basename(states[0]).replace('_state.json', '')
+    return latest
+
 async def main():
-    engine = StandaloneBacktestEngine(initial_equity=200.0)
+    # Try to resume from latest checkpoint
+    latest_run = find_latest_checkpoint()
+    if latest_run:
+        logger.info('Resuming from checkpoint: %s', latest_run)
+        engine = StandaloneBacktestEngine(initial_equity=200.0, run_id=latest_run)
+    else:
+        engine = StandaloneBacktestEngine(initial_equity=200.0)
     start = datetime(2025, 10, 15, tzinfo=timezone.utc)
     end = datetime(2026, 6, 19, tzinfo=timezone.utc)
     symbols = ACTIVE_SYMBOLS
