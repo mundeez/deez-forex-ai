@@ -8,7 +8,7 @@ celery_app = Celery(
     "deez_forex",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["app.tasks.analysis_tasks", "app.tasks.execution_tasks", "app.tasks.data_tasks", "app.tasks.train_multitimeframe_team"]
+    include=["app.tasks.analysis_tasks", "app.tasks.execution_tasks", "app.tasks.data_tasks", "app.tasks.train_multitimeframe_team", "app.tasks.backtest_full"]
 )
 
 celery_app.conf.update(
