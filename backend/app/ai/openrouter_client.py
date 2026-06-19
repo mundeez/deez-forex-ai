@@ -181,7 +181,16 @@ class OpenRouterClient:
                     async with httpx.AsyncClient(timeout=60.0) as client:
                         resp = await client.post(self.base_url, headers=headers, json=payload)
                         resp.raise_for_status()
-                        return resp.json(), model
+                        data = resp.json()
+                        # Validate OpenRouter response structure
+                        if not isinstance(data, dict):
+                            raise ValueError(f"Invalid response type: {type(data).__name__}")
+                        if "choices" not in data or not isinstance(data["choices"], list) or len(data["choices"]) == 0:
+                            err_msg = data.get("error", {}).get("message", "Missing choices in response")
+                            raise ValueError(f"OpenRouter response missing choices: {err_msg}")
+                        if "message" not in data["choices"][0] or "content" not in data["choices"][0]["message"]:
+                            raise ValueError("OpenRouter response missing message content")
+                        return data, model
                 except httpx.HTTPStatusError as e:
                     last_exc = e
                     status = e.response.status_code
