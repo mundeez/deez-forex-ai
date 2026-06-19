@@ -155,7 +155,7 @@ class StandaloneBacktestEngine:
         }
         from app.ai.team.orchestrator import TeamDecisionEngine
         from app.ai.suites import resolve_models
-        models_map = resolve_models("free")
+        models_map = resolve_models("production")  # using affordable paid models for speed + reliability
         team = TeamDecisionEngine(
             technical_model=models_map.get("technical"),
             fundamental_model=models_map.get("fundamental"),
@@ -314,6 +314,11 @@ class StandaloneBacktestEngine:
         logger.info("Total sessions: %d", len(all_sessions))
 
         async with get_celery_session()() as db:
+            # Budget tracking for production runs
+            BUDGET_USD = 7.0  # production budget limit
+            COST_PER_SESSION = 0.03308  # $7 covers ~211 sessions
+            estimated_cost = 0.0
+            
             for idx in range(self.session_count, len(all_sessions)):
                 s_start, s_end, s_name = all_sessions[idx]
                 self.session_count = idx
@@ -333,6 +338,28 @@ class StandaloneBacktestEngine:
                         self.max_drawdown_pct = max(self.max_drawdown_pct, dd)
                         self.checkpoint.append_trade(trade)
 
+                # Budget tracking
+                estimated_cost += COST_PER_SESSION
+                
+                # Budget stop marker
+                if estimated_cost >= BUDGET_USD:
+                    logger.info("BUDGET EXHAUSTED: $%.2f spent | Stopping at session %d/%d | Resume next time!", 
+                                estimated_cost, idx + 1, len(all_sessions))
+                    # Save final marker state
+                    self.checkpoint.save_state({
+                        "session_idx": idx + 1,
+                        "equity": self.equity,
+                        "max_equity": self.max_equity,
+                        "max_drawdown_pct": self.max_drawdown_pct,
+                        "trade_count": self.trade_count,
+                        "error_count": self.error_count,
+                        "last_session": s_start.isoformat(),
+                        "budget_spent": estimated_cost,
+                        "budget_limit": BUDGET_USD,
+                        "status": "PAUSED_BUDGET_EXHAUSTED",
+                    })
+                    break
+                
                 # Save checkpoint every session
                 self.checkpoint.save_state({
                     "session_idx": idx + 1,
@@ -350,7 +377,7 @@ class StandaloneBacktestEngine:
                         idx + 1, len(all_sessions), self.equity, self.trade_count, self.error_count, self.max_drawdown_pct)
 
                 # Rate limit: small sleep between sessions
-                await asyncio.sleep(15.0)  # 15s delay = ~4 sessions/min = 20 RPM, within free limits
+                await asyncio.sleep(0.5)  # minimal delay for production models (no rate limits)
 
         metrics = self._compute_metrics()
         logger.info("BACKTEST COMPLETE: %s", json.dumps(metrics, indent=2, default=str))

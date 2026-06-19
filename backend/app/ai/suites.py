@@ -25,7 +25,7 @@ SUITES: Dict[str, Dict[str, str]] = {
         "fundamental": "google/gemini-2.5-flash",
         "sentiment": "meta-llama/llama-3.3-70b-instruct",
         "macro": "openai/gpt-4o-mini",
-        "lead": "google/gemini-2.5-flash",
+        "lead": "deepseek/deepseek-v4-flash",
         "verifier": "deepseek/deepseek-r1",
     },
     "extreme": {
