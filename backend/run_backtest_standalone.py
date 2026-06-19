@@ -168,6 +168,16 @@ class StandaloneBacktestEngine:
         )
         try:
             result = await team.decide(symbol, strategy_mode, analysis)
+            # Sanitize confidence: models sometimes return lists
+            if result and "confidence" in result:
+                c = result["confidence"]
+                if isinstance(c, list):
+                    # Handle nested lists
+                    while isinstance(c, list) and len(c) > 0:
+                        c = c[0]
+                    result["confidence"] = float(c) if (c is not None and not isinstance(c, list)) else 0.0
+                else:
+                    result["confidence"] = float(c)
             return result
         except Exception as exc:
             logger.warning("v2 decision failed for %s: %s", symbol, str(exc)[:80])
@@ -180,6 +190,7 @@ class StandaloneBacktestEngine:
         
         if lead_decision in ("BUY", "SELL") and lead_conf >= 0.25:
             use_decision = decision
+            conf = lead_conf
         elif tech_signal and tech_signal.get("signal") in ("bullish", "bearish"):
             tech_conf = float(tech_signal.get("confidence", 0.5))
             if tech_conf >= 0.6:
@@ -189,6 +200,7 @@ class StandaloneBacktestEngine:
                 fallback["confidence"] = tech_conf * 0.7  # discount for no-team consensus
                 fallback["lead_model"] = "technical_fallback"
                 use_decision = fallback
+                conf = tech_conf * 0.7
             else:
                 return None
         else:
