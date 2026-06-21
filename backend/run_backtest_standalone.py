@@ -110,6 +110,43 @@ class StandaloneBacktestEngine:
         self.trade_count = 0
         self.error_count = 0
 
+    def _compute_atr_based_sl(self, candles: pd.DataFrame, entry_price: float, direction: str) -> Optional[float]:
+        """Compute adaptive stop-loss based on 14-period ATR.
+        
+        Rules:
+        - SL distance = 1.5x ATR (adapts to volatility)
+        - Minimum: 10 pips (noise floor)
+        - Maximum: 30 pips (hard cap to limit single-trade loss)
+        """
+        if candles.empty or len(candles) < 14:
+            return None
+        
+        high = candles["high"].values
+        low = candles["low"].values
+        close = candles["close"].values
+        
+        # True Range
+        tr1 = high[1:] - low[1:]
+        tr2 = np.abs(high[1:] - close[:-1])
+        tr3 = np.abs(low[1:] - close[:-1])
+        tr = np.maximum(np.maximum(tr1, tr2), tr3)
+        
+        # 14-period ATR
+        atr_14 = np.mean(tr[-14:]) if len(tr) >= 14 else np.mean(tr)
+        
+        # SL distance = 1.5x ATR
+        sl_dist = atr_14 * 1.5
+        
+        # Symbol-specific pip value
+        pip = 0.01 if "JPY" in candles.attrs.get("symbol", "") else 0.0001
+        min_sl_dist = 10.0 * pip
+        max_sl_dist = 30.0 * pip
+        
+        sl_dist = max(min_sl_dist, min(max_sl_dist, sl_dist))
+        
+        is_buy = direction.lower() == "buy"
+        return entry_price - sl_dist if is_buy else entry_price + sl_dist
+
     def _run_technical(self, symbol: str, candles: pd.DataFrame) -> Optional[Dict]:
         if candles.empty or len(candles) < 20:
             return None
@@ -221,12 +258,20 @@ class StandaloneBacktestEngine:
         # Recalculate SL/TP from actual entry
         ai_sl_dist = abs(entry - sl)
         ai_tp_dist = abs(tp - entry)
-        if is_buy:
-            actual_sl = entry_price - ai_sl_dist
-            actual_tp = entry_price + ai_tp_dist
+        
+        # Use ATR-based adaptive SL (tighter of AI SL and ATR-based)
+        atr_sl = self._compute_atr_based_sl(candles, entry_price, direction)
+        if atr_sl is not None:
+            # Use the TIGHTER stop (closer to entry = smaller loss)
+            if is_buy:
+                actual_sl = max(atr_sl, entry_price - ai_sl_dist)
+            else:
+                actual_sl = min(atr_sl, entry_price + ai_sl_dist)
         else:
-            actual_sl = entry_price + ai_sl_dist
-            actual_tp = entry_price - ai_tp_dist
+            # Fallback to AI SL
+            actual_sl = entry_price - ai_sl_dist if is_buy else entry_price + ai_sl_dist
+        
+        actual_tp = entry_price + ai_tp_dist if is_buy else entry_price - ai_tp_dist
 
         # Walk forward
         for idx in range(1, len(candles)):

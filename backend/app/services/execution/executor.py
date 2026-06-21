@@ -109,6 +109,61 @@ class ExecutionService:
             return price + slip_price  # worse fill for buyer
         return price - slip_price  # worse fill for seller
 
+    async def _compute_atr_sl(self, db: AsyncSession, symbol: str, entry_price: float, direction: str, ai_sl_dist: float) -> float:
+        """Compute adaptive ATR-based stop-loss.
+        
+        Fetches last 20 5m candles, computes 14-period ATR, returns
+        the TIGHTER of AI SL and 1.5x ATR-based SL.
+        Min 10 pips, max 30 pips.
+        """
+        try:
+            from sqlalchemy import text
+            from datetime import datetime, timezone, timedelta
+            stmt = text("""
+                SELECT high, low, close
+                FROM historical_candles
+                WHERE symbol = :symbol AND timeframe = '5m'
+                  AND timestamp >= :start
+                ORDER BY timestamp DESC
+                LIMIT 20
+            """)
+            result = await db.execute(stmt, {
+                "symbol": symbol,
+                "start": datetime.now(timezone.utc) - timedelta(hours=4)
+            })
+            rows = result.fetchall()
+            if len(rows) < 14:
+                return entry_price - ai_sl_dist if direction == models.TradeDirection.BUY.value else entry_price + ai_sl_dist
+            
+            highs = [r[0] for r in rows][::-1]
+            lows = [r[1] for r in rows][::-1]
+            closes = [r[2] for r in rows][::-1]
+            
+            # True Range
+            import numpy as np
+            tr1 = np.array(highs[1:]) - np.array(lows[1:])
+            tr2 = np.abs(np.array(highs[1:]) - np.array(closes[:-1]))
+            tr3 = np.abs(np.array(lows[1:]) - np.array(closes[:-1]))
+            tr = np.maximum(np.maximum(tr1, tr2), tr3)
+            atr = np.mean(tr[-14:]) if len(tr) >= 14 else np.mean(tr)
+            
+            sl_dist = atr * 1.5
+            pip = 0.01 if "JPY" in symbol else 0.0001
+            min_dist = 10.0 * pip
+            max_dist = 30.0 * pip
+            sl_dist = max(min_dist, min(max_dist, sl_dist))
+            
+            is_buy = direction == models.TradeDirection.BUY.value
+            atr_sl = entry_price - sl_dist if is_buy else entry_price + sl_dist
+            ai_sl = entry_price - ai_sl_dist if is_buy else entry_price + ai_sl_dist
+            
+            # Return TIGHTER stop (closer to entry for smaller loss)
+            return max(atr_sl, ai_sl) if is_buy else min(atr_sl, ai_sl)
+        except Exception:
+            # Fallback to AI SL on any error
+            is_buy = direction == models.TradeDirection.BUY.value
+            return entry_price - ai_sl_dist if is_buy else entry_price + ai_sl_dist
+
     async def execute_trade(self, db: AsyncSession, trade_in: schemas.TradeCreate, position_size: float = None, strategy_mode: str = "scalping", trailing_distance: float = None) -> models.Trade:
         now = utc_now()
         client = self._get_client(trade_in.provider)
@@ -204,11 +259,12 @@ class ExecutionService:
                         sl_dist = abs(ai_entry - ai_sl)
                         tp_dist = abs(ai_tp - ai_entry)
 
+                        # Apply ATR-based adaptive SL (tighter of AI SL and ATR-based)
+                        trade.stop_loss = await self._compute_atr_sl(db, trade_in.symbol, actual, trade_in.direction, sl_dist)
+                        
                         if is_buy:
-                            trade.stop_loss   = actual - sl_dist
                             trade.take_profit = actual + tp_dist
                         else:
-                            trade.stop_loss   = actual + sl_dist
                             trade.take_profit = actual - tp_dist
 
                         # Sanity check: reject trade if SL and TP are on the
