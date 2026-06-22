@@ -34,7 +34,7 @@ class DailyBiasEngine:
     )
 
     def __init__(self, model: str = None):
-        self.model = model or "deepseek/deepseek-r1:free"
+        self.model = model or "deepseek/deepseek-r1"
         self.client = OpenRouterClient()
 
     async def compute(

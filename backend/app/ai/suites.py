@@ -47,9 +47,11 @@ def resolve_models(
     suite: str,
     overrides: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
-    """Return the per-function model map for a given suite + optional overrides.
+    """Return the per-function model map for a given suite.
 
-    Custom suite: falls back to overrides / env defaults.
+    Named suites (free, production, extreme) are returned exactly as defined.
+    Per-model overrides are ONLY applied when suite == "custom".
+    This ensures the frontend suite dropdown works correctly.
     """
     if suite == "custom":
         env = settings
@@ -61,18 +63,16 @@ def resolve_models(
             "lead": overrides.get("lead") if overrides else env.MODEL_LEAD,
             "verifier": overrides.get("verifier") if overrides else env.MODEL_VERIFIER,
         }
-        # Ensure no None values
-        defaults = SUITES["free"]
+        # Ensure no None values: fall back to production defaults for custom
+        defaults = SUITES["production"]
         return {k: (v or defaults[k]) for k, v in resolved.items()}
 
     if suite in SUITES:
-        base = dict(SUITES[suite])
-        if overrides:
-            base.update({k: v for k, v in overrides.items() if v})
-        return base
+        # Named suites are used verbatim; overrides are ignored.
+        return dict(SUITES[suite])
 
-    # Unknown suite — fall back to free
-    return dict(SUITES["free"])
+    # Unknown suite — fall back to production (safer than free for live trading)
+    return dict(SUITES["production"])
 
 
 def suite_info() -> List[Dict[str, Any]]:

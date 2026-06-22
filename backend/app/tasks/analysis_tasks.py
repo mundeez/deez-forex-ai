@@ -394,9 +394,39 @@ def run_full_analysis():
                     analyst_parallelism=await get_setting_bool(db, "analyst_parallelism"),
                 )
                 try:
+                    team_meta_enabled = await get_setting_bool(db, "team_meta_enabled")
                     for analysis in allowed_analyses:
                         symbol = analysis["symbol"]
                         v2_result = await team.decide(symbol, strategy_mode, analysis)
+
+                        # ------------------------------------------------------------------
+                        # TeamMetaModel soft confidence adjuster (Route B)
+                        # ------------------------------------------------------------------
+                        if team_meta_enabled and v2_result["decision"] in ("BUY", "SELL"):
+                            try:
+                                from app.services.ml.team_meta_model import TeamMetaModel
+                                tmm = TeamMetaModel()
+                                meta_score = tmm.predict(
+                                    v2_result.get("analyst_opinions"),
+                                    v2_result.get("verifier_verdict"),
+                                    v2_result.get("lead_model"),
+                                )
+                                if meta_score is not None:
+                                    old_conf = float(v2_result["confidence"])
+                                    adjusted = old_conf * (0.70 + 0.60 * meta_score)
+                                    adjusted = min(adjusted, 1.0)
+                                    v2_result["confidence"] = adjusted
+                                    v2_result["rationale"] += (
+                                        f" | TeamMeta: score={meta_score:.2f}, "
+                                        f"conf {old_conf:.2f} -> {adjusted:.2f}"
+                                    )
+                                    logger.info(
+                                        "TeamMeta adjusted %s confidence: %.2f -> %.2f (score=%.2f)",
+                                        symbol, old_conf, adjusted, meta_score,
+                                    )
+                            except Exception as tmm_exc:
+                                logger.warning("TeamMetaModel adjustment failed for %s: %s", symbol, tmm_exc)
+
                         v2_results[symbol] = v2_result
                         # Wrap v2 dict in a TradeDecision for downstream compatibility
                         from app.ai.openrouter_client import TradeDecision

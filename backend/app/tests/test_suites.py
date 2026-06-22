@@ -8,7 +8,7 @@ def test_free_suite_resolution():
     models = resolve_models("free")
     assert models["technical"] == "openai/gpt-oss-120b:free"
     assert models["lead"] == "openai/gpt-oss-120b:free"
-    assert models["verifier"] == "deepseek/deepseek-r1:free"
+    assert models["verifier"] == "openrouter/owl-alpha"
 
 
 def test_production_suite_resolution():
@@ -40,9 +40,9 @@ def test_custom_suite_empty_overrides():
 
 
 def test_unknown_suite_fallback():
-    """Unknown suite should fall back to free models."""
+    """Unknown suite should fall back to production models (safer for live)."""
     models = resolve_models("nonexistent")
-    assert models == SUITES["free"]
+    assert models == SUITES["production"]
 
 
 def test_suite_info_structure():
