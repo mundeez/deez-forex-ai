@@ -29,7 +29,7 @@ sys.path.insert(0, "/app")
 
 from app.database import get_celery_session
 from app import models
-from app.enums import TradeDirection, TradeMode
+from app.enums import TradeDirection, TradeMode, DataProvider, TradeStatus
 
 logging.basicConfig(
     level=logging.INFO,
@@ -200,7 +200,7 @@ class StandaloneBacktestEngine:
             macro_model=models_map.get("macro"),
             lead_model=models_map.get("lead"),
             verifier_model=models_map.get("verifier"),
-            verifier_enabled=False,
+            verifier_enabled=True,
             analyst_parallelism=True,
         )
         try:
@@ -215,10 +215,10 @@ class StandaloneBacktestEngine:
                     result["confidence"] = float(c) if (c is not None and not isinstance(c, list)) else 0.0
                 else:
                     result["confidence"] = float(c)
-            return result
+            return result, analysis
         except Exception as exc:
             logger.warning("v2 decision failed for %s: %s", symbol, str(exc)[:80])
-            return None
+            return None, None
 
     def _simulate_trade(self, symbol: str, decision: Dict, candles: pd.DataFrame, tech_signal: Optional[Dict] = None) -> Optional[Dict]:
         # Fallback: if lead gave HOLD but technical signal is strong, trade on technical
@@ -336,9 +336,82 @@ class StandaloneBacktestEngine:
         try:
             candles = await self._load_candles(db, symbol, s_start, s_end)
             tech = self._run_technical(symbol, candles)
-            decision = await self._run_v2_decision(symbol, strategy_mode, candles)
-            if decision and (decision.get("decision") in ("BUY", "SELL") or (tech and tech.get("confidence", 0) >= 0.6)):
-                return self._simulate_trade(symbol, decision, candles, tech_signal=tech)
+            v2_result, analysis = await self._run_v2_decision(symbol, strategy_mode, candles)
+            if not v2_result:
+                return None
+
+            decision = v2_result.get("decision", "HOLD")
+            lead_conf = float(v2_result.get("confidence", 0.0) or 0.0)
+            trade_dict = None
+
+            if decision in ("BUY", "SELL") or (tech and tech.get("confidence", 0) >= 0.6):
+                trade_dict = self._simulate_trade(symbol, v2_result, candles, tech_signal=tech)
+
+            # ------------------------------------------------------------------
+            # Persist AIDecision + Trade to DB for meta-model training
+            # ------------------------------------------------------------------
+            try:
+                db_decision = models.AIDecision(
+                    symbol=symbol,
+                    timestamp=s_start,
+                    decision=decision,
+                    confidence=lead_conf,
+                    timeframe=v2_result.get("timeframe", "M5"),
+                    entry_price=v2_result.get("entry_price"),
+                    stop_loss=v2_result.get("stop_loss"),
+                    take_profit=v2_result.get("take_profit"),
+                    position_size_pct=v2_result.get("position_size_pct", 1.0),
+                    risk_reward=v2_result.get("risk_reward", 1.0),
+                    rationale=v2_result.get("rationale", ""),
+                    technical_snapshot=analysis.get("technical"),
+                    fundamental_snapshot=analysis.get("fundamental"),
+                    sentiment_snapshot=analysis.get("sentiment"),
+                    model_used=v2_result.get("lead_model", ""),
+                    provider=DataProvider.MT5_ZMQ,
+                    engine_version="v2",
+                    analyst_opinions=v2_result.get("analyst_opinions"),
+                    lead_model=v2_result.get("lead_model"),
+                    verifier_model=v2_result.get("verifier_model"),
+                    verifier_verdict=v2_result.get("verifier_verdict"),
+                    verifier_confidence=v2_result.get("verifier_confidence"),
+                    regime={
+                        "strategy_mode": strategy_mode,
+                        "session": analysis.get("session", "unknown"),
+                        "detected": analysis.get("regime", "unknown"),
+                    },
+                    daily_bias=v2_result.get("daily_bias"),
+                )
+                db.add(db_decision)
+                await db.flush()  # get db_decision.id
+
+                if trade_dict:
+                    direction = TradeDirection.BUY if trade_dict["direction"] == "buy" else TradeDirection.SELL
+                    db_trade = models.Trade(
+                        symbol=symbol,
+                        direction=direction,
+                        status=TradeStatus.CLOSED,
+                        mode=TradeMode.PAPER,
+                        entry_price=trade_dict["entry_price"],
+                        exit_price=trade_dict["exit_price"],
+                        stop_loss=trade_dict["stop_loss"],
+                        take_profit=trade_dict["take_profit"],
+                        position_size=trade_dict["lot_size"],
+                        pnl=trade_dict["pnl_usd"],
+                        pnl_pct=(trade_dict["pnl_usd"] / max(self.equity, 1.0)) * 100,
+                        open_time=s_start,
+                        close_time=s_end,
+                        ai_decision_id=db_decision.id,
+                        rationale=trade_dict.get("close_reason", ""),
+                        provider=DataProvider.MT5_ZMQ,
+                    )
+                    db.add(db_trade)
+
+                await db.commit()
+            except Exception as db_exc:
+                logger.warning("DB persist failed for %s %s: %s", symbol, s_start, str(db_exc)[:100])
+                await db.rollback()
+
+            return trade_dict
         except Exception as exc:
             self.error_count += 1
             logger.warning("Session failed for %s %s: %s", symbol, s_start, str(exc)[:100])

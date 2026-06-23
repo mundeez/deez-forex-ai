@@ -118,7 +118,7 @@ def train_and_evaluate(
     base_params = {
         "objective": "binary:logistic",
         "eval_metric": "auc",
-        "max_depth": 3,
+        "max_depth": 5,
         "learning_rate": 0.05,
         "subsample": 0.8,
         "colsample_bytree": 0.8,

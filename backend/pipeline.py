@@ -62,6 +62,7 @@ async def _fetch_rows() -> List[dict]:
               AND d.timestamp IS NOT NULL
               AND t.status = 'CLOSED'
               AND t.pnl IS NOT NULL
+              AND d.lead_model = 'deepseek/deepseek-v4-flash'
             ORDER BY d.timestamp ASC
         """)
         return [dict(r) for r in rows]
