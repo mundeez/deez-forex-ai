@@ -43,7 +43,7 @@ celery_app.conf.update(
     beat_schedule={
         "analyze-market-scalping": {
             "task": "app.tasks.analysis_tasks.run_full_analysis",
-            "schedule": 300.0,
+            "schedule": 14400.0,  # 4 hours — once per trading session
             "options": {"time_limit": 240, "soft_time_limit": 180},
         },
         "check-open-positions": {

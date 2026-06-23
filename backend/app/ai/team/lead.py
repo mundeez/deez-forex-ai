@@ -6,6 +6,7 @@ computes and validates the exact numbers afterwards.
 """
 from typing import Dict, Any, Optional
 import logging
+import os
 
 from app.ai.openrouter_client import OpenRouterClient, normalize_decision, _safe_float_conf
 from app.ai.model_router import ModelRouter
@@ -99,16 +100,17 @@ class LeadStrategist:
     ) -> Dict[str, Any]:
         # RAG: retrieve similar past setups
         similar = []
-        try:
-            vs = AsyncVectorStore()
-            # Use the technical snapshot to encode for similarity
-            from app.services.vector_store import COLLECTION_NAME
-            tech_snapshot = {}
-            if "technical" in analyst_opinions:
-                tech_snapshot = {"technical": analyst_opinions.get("technical", {})}
-            similar = await vs.search_similar(tech_snapshot, limit=10)
-        except Exception as exc:
-            logger.warning("RAG search failed for lead: %s", exc)
+        if os.environ.get("BACKTEST_DISABLE_QDRANT") not in ("1", "true", "yes"):
+            try:
+                vs = AsyncVectorStore()
+                # Use the technical snapshot to encode for similarity
+                from app.services.vector_store import COLLECTION_NAME
+                tech_snapshot = {}
+                if "technical" in analyst_opinions:
+                    tech_snapshot = {"technical": analyst_opinions.get("technical", {})}
+                similar = await vs.search_similar(tech_snapshot, limit=10)
+            except Exception as exc:
+                logger.warning("RAG search failed for lead: %s", exc)
 
         prompt = self._build_prompt(symbol, strategy_mode, analyst_opinions, daily_bias, similar, analyst_weights)
         payload = {
