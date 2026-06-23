@@ -351,6 +351,18 @@ class StandaloneBacktestEngine:
             # Persist AIDecision + Trade to DB for meta-model training
             # ------------------------------------------------------------------
             try:
+                from sqlalchemy import select
+                existing = await db.execute(
+                    select(models.AIDecision.id)
+                    .where(models.AIDecision.symbol == symbol)
+                    .where(models.AIDecision.timestamp == s_start)
+                    .where(models.AIDecision.engine_version == "v2")
+                    .limit(1)
+                )
+                if existing.scalar():
+                    logger.debug("Skipping duplicate persist for %s %s", symbol, s_start)
+                    return trade_dict
+
                 db_decision = models.AIDecision(
                     symbol=symbol,
                     timestamp=s_start,

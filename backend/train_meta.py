@@ -107,12 +107,14 @@ def train_and_evaluate(
     X = df[feature_cols].values
     y = df["label"].values
 
-    tscv = TimeSeriesSplit(n_splits=n_splits)
+    # Guard: can't have more folds than samples
+    effective_splits = min(n_splits, max(2, len(y) // 3))
+    tscv = TimeSeriesSplit(n_splits=effective_splits)
     fold_metrics = []
     best_model = None
     best_auc = 0.0
 
-    logger.info("=== Starting %d-fold time-series cross-validation ===", n_splits)
+    logger.info("=== Starting %d-fold time-series cross-validation ===", effective_splits)
     logger.info("Total samples: %d | Features: %d | Positive rate: %.2f%%", len(y), X.shape[1], 100 * y.mean())
 
     base_params = {
