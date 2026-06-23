@@ -32,15 +32,14 @@ def _get_xgb():
     return _xgb
 
 
-FEATURE_COLS = [
-    "feat_tech_prob_calibrated",
-    "feat_lead_prob_calibrated",
-    "feat_fund_conviction",
-    "feat_macro_conviction",
-    "feat_sentiment_prob_calibrated",
-    "feat_verifier_score",
-    "feat_interaction_lead_verifier",
-]
+def _discover_feature_cols(df: pd.DataFrame) -> List[str]:
+    """Auto-discover feature columns (everything except metadata/label)."""
+    exclude = {
+        "decision_id", "timestamp", "symbol", "trade_id", "label",
+        "pnl", "pnl_pct", "lead_model", "verifier_model",
+        "tech_model", "fund_model", "sent_model", "macro_model",
+    }
+    return [c for c in df.columns if c not in exclude]
 
 
 def load_feature_matrix(path: str = "/app/data/meta_features.csv") -> pd.DataFrame:
@@ -97,14 +96,15 @@ def train_and_evaluate(
     # Ensure correct dtypes
     df = df.copy()
     df["label"] = df["label"].astype(int)
-    for col in FEATURE_COLS:
+    feature_cols = _discover_feature_cols(df)
+    for col in feature_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
     # Sort by timestamp to respect temporal order
     if "timestamp" in df.columns:
         df = df.sort_values("timestamp").reset_index(drop=True)
 
-    X = df[FEATURE_COLS].values
+    X = df[feature_cols].values
     y = df["label"].values
 
     tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -142,8 +142,8 @@ def train_and_evaluate(
         )
 
         params = {**base_params, "scale_pos_weight": scale_pos_weight}
-        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEATURE_COLS)
-        dval = xgb.DMatrix(X_val, label=y_val, feature_names=FEATURE_COLS)
+        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_cols)
+        dval = xgb.DMatrix(X_val, label=y_val, feature_names=feature_cols)
 
         evals = [(dtrain, "train"), (dval, "eval")]
         bst = xgb.train(
@@ -178,7 +178,7 @@ def train_and_evaluate(
     # Train final model on ALL data
     logger.info("=== Training final model on full dataset ===")
     final_params = {**base_params, "scale_pos_weight": max(1.0, (len(y) - y.sum()) / max(y.sum(), 1))}
-    dfull = xgb.DMatrix(X, label=y, feature_names=FEATURE_COLS)
+    dfull = xgb.DMatrix(X, label=y, feature_names=feature_cols)
     final_bst = xgb.train(final_params, dfull, num_boost_round=200, verbose_eval=False)
 
     # Feature importance
@@ -188,7 +188,8 @@ def train_and_evaluate(
     for feat, gain in sorted_imp:
         # XGBoost may use actual feature names if provided to DMatrix
         if feat.startswith("f") and feat[1:].isdigit():
-            name = FEATURE_COLS[int(feat[1:])]
+            idx = int(feat[1:])
+            name = feature_cols[idx] if idx < len(feature_cols) else feat
         else:
             name = feat
         logger.info("  %-40s gain=%.2f", name, gain)
@@ -203,14 +204,15 @@ def train_and_evaluate(
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "n_samples": int(len(y)),
         "n_features": int(X.shape[1]),
-        "feature_names": FEATURE_COLS,
+        "feature_names": feature_cols,
         "positive_rate": float(y.mean()),
         "fold_metrics": fold_metrics,
         "mean_auc": float(np.mean([m["auc"] for m in fold_metrics])),
         "std_auc": float(np.std([m["auc"] for m in fold_metrics])),
         "best_fold_auc": float(best_auc),
         "feature_importance": {
-            (FEATURE_COLS[int(k.replace("f", ""))] if k.startswith("f") and k[1:].isdigit() else k): float(v)
+            ((feature_cols[int(k.replace("f", ""))] if int(k.replace("f", "")) < len(feature_cols) else k)
+             if k.startswith("f") and k[1:].isdigit() else k): float(v)
             for k, v in importance.items()
         },
     }

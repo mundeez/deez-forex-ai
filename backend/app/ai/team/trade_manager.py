@@ -8,7 +8,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 
-from app.ai.openrouter_client import OpenRouterClient
+from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
 from app.ai.model_router import ModelRouter
 from app.utils.time import utc_now
 
@@ -102,7 +102,7 @@ class TradeManagerAgent:
 
         return {
             "action": str(parsed.get("action", "HOLD")).upper(),
-            "confidence": float(parsed.get("confidence") or 0.0),
+            "confidence": _safe_float_conf(parsed.get("confidence")),
             "reasoning": parsed.get("reasoning", ""),
             "suggested_sl": parsed.get("suggested_sl"),
             "suggested_tp": parsed.get("suggested_tp"),

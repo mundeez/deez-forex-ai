@@ -7,7 +7,7 @@ computes and validates the exact numbers afterwards.
 from typing import Dict, Any, Optional
 import logging
 
-from app.ai.openrouter_client import OpenRouterClient, normalize_decision
+from app.ai.openrouter_client import OpenRouterClient, normalize_decision, _safe_float_conf
 from app.ai.model_router import ModelRouter
 from app.services.vector_store import AsyncVectorStore
 
@@ -135,7 +135,7 @@ class LeadStrategist:
 
         return {
             "decision": normalize_decision(parsed.get("decision")),
-            "confidence": float(parsed.get("confidence") or 0.0),
+            "confidence": _safe_float_conf(parsed.get("confidence")),
             "timeframe": parsed.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
             "entry_zone": parsed.get("entry_zone", [0.0, 0.0]),
             "sl_zone": parsed.get("sl_zone", [0.0, 0.0]),

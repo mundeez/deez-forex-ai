@@ -15,7 +15,7 @@ from app.utils.time import utc_now
 
 import redis.asyncio as aioredis
 
-from app.ai.openrouter_client import OpenRouterClient
+from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
 from app.ai.model_router import ModelRouter
 from app.config import get_settings
 
@@ -83,7 +83,7 @@ class DailyBiasEngine:
 
         return {
             "bias": str(parsed.get("bias", "NEUTRAL")).upper(),
-            "confidence": float(parsed.get("confidence") or 0.0),
+            "confidence": _safe_float_conf(parsed.get("confidence")),
             "rationale": parsed.get("rationale", ""),
             "key_levels": parsed.get("key_levels", []),
             "risk_events": parsed.get("risk_events", []),

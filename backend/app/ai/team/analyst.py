@@ -7,7 +7,7 @@ returning a structured opinion.
 from typing import Dict, Any, Optional
 import logging
 
-from app.ai.openrouter_client import OpenRouterClient
+from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
 from app.ai.model_router import ModelRouter
 
 logger = logging.getLogger("app.ai.team.analyst")
@@ -150,7 +150,7 @@ class DomainAnalyst:
 
         return {
             "bias": str(parsed.get("bias", "NEUTRAL")).upper(),
-            "confidence_score": float(parsed.get("confidence_score") or 0.0),
+            "confidence_score": _safe_float_conf(parsed.get("confidence_score")),
             "reasoning_short": parsed.get("reasoning_short", ""),
             "risk_warning": parsed.get("risk_warning", ""),
             "model_used": used_model,

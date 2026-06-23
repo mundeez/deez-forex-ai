@@ -135,10 +135,17 @@ class TeamDecisionEngine:
         # Compute exact prices from zone midpoints for backward compatibility
         # with the existing execution pipeline (v1 TradeDecision fields).
         def _mid(zone):
-            if isinstance(zone, (list, tuple)) and len(zone) >= 2:
-                v0 = float(zone[0]) if zone[0] is not None else 0.0
-                v1 = float(zone[1]) if zone[1] is not None else 0.0
-                return (v0 + v1) / 2.0
+            if isinstance(zone, (list, tuple)):
+                # Unwrap nested lists (models sometimes return [[price]])
+                while isinstance(zone, list) and len(zone) == 1 and isinstance(zone[0], list):
+                    zone = zone[0]
+                if len(zone) >= 2:
+                    v0 = float(zone[0]) if zone[0] is not None else 0.0
+                    v1 = float(zone[1]) if zone[1] is not None else 0.0
+                    return (v0 + v1) / 2.0
+                if len(zone) == 1:
+                    return float(zone[0]) if zone[0] is not None else 0.0
+                return 0.0
             return float(zone) if zone is not None else 0.0
 
         return {

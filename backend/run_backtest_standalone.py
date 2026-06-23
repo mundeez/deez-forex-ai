@@ -175,9 +175,9 @@ class StandaloneBacktestEngine:
             return pd.DataFrame()
         return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-    async def _run_v2_decision(self, symbol: str, strategy_mode: str, candles: pd.DataFrame) -> Optional[Dict]:
+    async def _run_v2_decision(self, symbol: str, strategy_mode: str, candles: pd.DataFrame):
         if candles.empty:
-            return None
+            return None, None
         from app.analysis.technical import TechnicalAnalyzer
         snapshot = candles.to_dict("records")
         tech = TechnicalAnalyzer().analyze(snapshot)

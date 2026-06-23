@@ -9,7 +9,7 @@ For swing / exit re-eval: use DeepSeek-R1 for deep reasoning.
 from typing import Dict, Any, Optional
 import logging
 
-from app.ai.openrouter_client import OpenRouterClient
+from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
 from app.ai.model_router import ModelRouter
 
 logger = logging.getLogger("app.ai.team.verifier")
@@ -122,7 +122,7 @@ class Verifier:
 
         return {
             "verdict": verdict,
-            "confidence": float(parsed.get("confidence") or 0.0),
+            "confidence": _safe_float_conf(parsed.get("confidence")),
             "concerns": parsed.get("concerns", ""),
             "suggested_changes": parsed.get("suggested_changes", ""),
             "model_used": used_model,

@@ -26,6 +26,19 @@ def normalize_decision(value: Any) -> str:
     return "HOLD"
 
 
+def _safe_float_conf(value: Any) -> float:
+    """Models occasionally return confidence as a nested list; unwrap it."""
+    if isinstance(value, list):
+        while isinstance(value, list) and len(value) > 0:
+            value = value[0]
+        if value is None or isinstance(value, list):
+            return 0.0
+    try:
+        return float(value or 0.0)
+    except Exception:
+        return 0.0
+
+
 class TradeDecision(BaseModel):
     decision: str
     confidence: float
@@ -147,7 +160,7 @@ class OpenRouterClient:
 
         return TradeDecision(
             decision=normalize_decision(parsed.get("decision")),
-            confidence=float(parsed.get("confidence") or 0.0),
+            confidence=_safe_float_conf(parsed.get("confidence")),
             timeframe=parsed.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
             entry_price=float(parsed.get("entry_price") or 0.0),
             stop_loss=float(parsed.get("stop_loss") or 0.0),
@@ -320,7 +333,7 @@ class OpenRouterClient:
                 d = decisions_list[idx]
                 results.append(TradeDecision(
                     decision=normalize_decision(d.get("decision")),
-                    confidence=float(d.get("confidence") or 0.0),
+                    confidence=_safe_float_conf(d.get("confidence")),
                     timeframe=d.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
                     entry_price=float(d.get("entry_price") or 0.0),
                     stop_loss=float(d.get("stop_loss") or 0.0),
