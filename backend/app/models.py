@@ -93,6 +93,7 @@ class AIDecision(Base):
     lead_model = Column(String(100))
     verifier_model = Column(String(100))
     verifier_verdict = Column(String(10))
+    verifier_confidence = Column(Float)
     regime = Column(JSON)
     daily_bias = Column(JSON)
     qdrant_point_id = Column(String(50))

@@ -547,6 +547,7 @@ def run_full_analysis():
                     lead_model=v2_results.get(symbol, {}).get("lead_model"),
                     verifier_model=v2_results.get(symbol, {}).get("verifier_model"),
                     verifier_verdict=v2_results.get(symbol, {}).get("verifier_verdict"),
+                    verifier_confidence=v2_results.get(symbol, {}).get("verifier_confidence"),
                     regime=_clean_numpy({
                         "strategy_mode": strategy_mode,
                         "session": analysis.get("session"),

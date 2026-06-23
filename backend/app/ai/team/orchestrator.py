@@ -157,6 +157,7 @@ class TeamDecisionEngine:
             "analyst_opinions": analyst_opinions,
             "lead_model": lead_proposal["model_used"],
             "verifier_verdict": verifier_verdict,
+            "verifier_confidence": verifier_result["confidence"] if verifier_result else None,
             "verifier_model": verifier_result["model_used"] if verifier_result else None,
             "daily_bias": daily_bias,
             "engine_version": "v2",
