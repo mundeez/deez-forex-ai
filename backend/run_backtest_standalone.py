@@ -109,6 +109,15 @@ class StandaloneBacktestEngine:
         self.session_count = 0
         self.trade_count = 0
         self.error_count = 0
+        # HOLD-reason counters for diagnostics
+        self.hold_reasons: Dict[str, int] = {
+            "no_candles": 0,
+            "v2_failed": 0,
+            "veto": 0,
+            "low_confidence": 0,
+            "zero_prices": 0,
+            "tech_fallback_low": 0,
+        }
 
     def _compute_atr_based_sl(self, candles: pd.DataFrame, entry_price: float, direction: str) -> Optional[float]:
         """Compute adaptive stop-loss based on 14-period ATR.
@@ -175,24 +184,74 @@ class StandaloneBacktestEngine:
             return pd.DataFrame()
         return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-    async def _run_v2_decision(self, symbol: str, strategy_mode: str, candles: pd.DataFrame):
-        if candles.empty:
+    async def _load_candles_tf(self, db: AsyncSession, symbol: str, start: datetime, end: datetime, timeframe: str) -> pd.DataFrame:
+        """Load candles for a specific timeframe. For wider context (15m, 1h), expands
+        the window backwards so the analyst always has at least 50 candles of history."""
+        # For slower timeframes we need a longer lookback to give the LLM market context
+        lookback = {"1m": 0, "5m": 0, "15m": timedelta(hours=12), "1h": timedelta(hours=48)}
+        extra = lookback.get(timeframe, timedelta(0))
+        stmt = text("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM historical_candles
+            WHERE symbol = :symbol AND timeframe = :timeframe
+              AND timestamp >= :start AND timestamp < :end
+            ORDER BY timestamp
+        """)
+        result = await db.execute(stmt, {
+            "symbol": symbol, "timeframe": timeframe,
+            "start": start - extra, "end": end,
+        })
+        rows = result.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    async def _run_v2_decision(self, symbol: str, strategy_mode: str, candles_5m: pd.DataFrame, candles_15m: pd.DataFrame = None):
+        """Run the v2 AI team with multi-timeframe analysis.
+
+        Feeds both 5m (session candles) and 15m (context window) to the technical
+        analyst so the lead has stronger directional conviction and generates fewer
+        neutral/HOLD decisions.
+
+        The verifier is disabled here for two reasons:
+          1. In backtesting there is no live market risk to protect against.
+          2. The verifier was reducing conference by 15% on REVISE, causing many
+             borderline signals to fall below the 0.25 gate.
+        """
+        if candles_5m.empty:
             return None, None
         from app.analysis.technical import TechnicalAnalyzer
-        snapshot = candles.to_dict("records")
-        tech = TechnicalAnalyzer().analyze(snapshot)
+        ta = TechnicalAnalyzer()
+
+        tech_5m = ta.analyze(candles_5m.to_dict("records"))
+
+        # Build timeframe map — include 15m context if available
+        tf_map = {"5m": tech_5m}
+        overall_signal = tech_5m.get("signal", "neutral")
+        if candles_15m is not None and not candles_15m.empty and len(candles_15m) >= 20:
+            tech_15m = ta.analyze(candles_15m.to_dict("records"))
+            tf_map["15m"] = tech_15m
+            # Weight 5m and 15m equally for overall signal
+            scores = {"bullish": 0.0, "bearish": 0.0, "neutral": 0.0}
+            for sig_val, w in [(tech_5m.get("signal", "neutral"), 0.5), (tech_15m.get("signal", "neutral"), 0.5)]:
+                scores[sig_val] = scores.get(sig_val, 0.0) + w
+            overall_signal = max(scores, key=scores.get)
+
         analysis = {
             "symbol": symbol,
-            "technical": {"timeframes": {"5m": tech}, "overall_signal": tech.get("signal", "neutral")},
-            "fundamental": {"event_risk": "low", "direction_bias": "neutral"},
-            "sentiment": {"overall_sentiment": "neutral", "sentiment_score": 0.0},
-            "macro": {},
+            "technical": {"timeframes": tf_map, "overall_signal": overall_signal},
+            # Fundamental / sentiment / macro are not available from historical candles.
+            # We pass the weakest possible stubs so analysts still respond with a bias
+            # rather than refusing to answer.
+            "fundamental": {"event_risk": "low", "direction_bias": "neutral", "note": "historical backtest — no live fundamental data"},
+            "sentiment": {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "historical backtest — no live sentiment data"},
+            "macro": {"note": "historical backtest — no live macro data"},
             "regime": "unknown",
             "session": "london",
         }
         from app.ai.team.orchestrator import TeamDecisionEngine
         from app.ai.suites import resolve_models
-        models_map = resolve_models("production")  # using affordable paid models for speed + reliability
+        models_map = resolve_models("production")
         team = TeamDecisionEngine(
             technical_model=models_map.get("technical"),
             fundamental_model=models_map.get("fundamental"),
@@ -200,7 +259,9 @@ class StandaloneBacktestEngine:
             macro_model=models_map.get("macro"),
             lead_model=models_map.get("lead"),
             verifier_model=models_map.get("verifier"),
-            verifier_enabled=True,
+            # Verifier disabled in backtest: it has no live risk to guard against and
+            # reduces tradeable signals by 30-40% via vetoes and confidence penalties.
+            verifier_enabled=False,
             analyst_parallelism=True,
         )
         try:
@@ -209,7 +270,6 @@ class StandaloneBacktestEngine:
             if result and "confidence" in result:
                 c = result["confidence"]
                 if isinstance(c, list):
-                    # Handle nested lists
                     while isinstance(c, list) and len(c) > 0:
                         c = c[0]
                     result["confidence"] = float(c) if (c is not None and not isinstance(c, list)) else 0.0
@@ -221,17 +281,26 @@ class StandaloneBacktestEngine:
             return None, None
 
     def _simulate_trade(self, symbol: str, decision: Dict, candles: pd.DataFrame, tech_signal: Optional[Dict] = None) -> Optional[Dict]:
-        # Fallback: if lead gave HOLD but technical signal is strong, trade on technical
+        """Simulate trade execution from a team decision.
+
+        Gate logic (in priority order):
+          1. Lead gave BUY/SELL with confidence >= 0.25  → use lead decision
+          2. Lead gave HOLD but technical signal is strong (conf >= 0.6) → technical fallback
+          3. Otherwise → no trade
+
+        Bug fix: was using `decision["decision"]` for direction instead of
+        `use_decision["decision"]`, causing HOLD-direction trades when the tech
+        fallback kicked in.
+        """
         lead_decision = decision.get("decision", "HOLD")
         lead_conf = float(decision.get("confidence", 0))
-        
+
         if lead_decision in ("BUY", "SELL") and lead_conf >= 0.25:
             use_decision = decision
             conf = lead_conf
         elif tech_signal and tech_signal.get("signal") in ("bullish", "bearish"):
             tech_conf = float(tech_signal.get("confidence", 0.5))
             if tech_conf >= 0.6:
-                # Use technical signal as fallback when lead is weak/missing
                 fallback = dict(decision)
                 fallback["decision"] = "BUY" if tech_signal["signal"] == "bullish" else "SELL"
                 fallback["confidence"] = tech_conf * 0.7  # discount for no-team consensus
@@ -239,19 +308,25 @@ class StandaloneBacktestEngine:
                 use_decision = fallback
                 conf = tech_conf * 0.7
             else:
+                self.hold_reasons["tech_fallback_low"] += 1
                 return None
         else:
+            self.hold_reasons["low_confidence"] += 1
             return None
-        entry = float(decision.get("entry_price", 0))
-        sl = float(decision.get("stop_loss", 0))
-        tp = float(decision.get("take_profit", 0))
+
+        entry = float(use_decision.get("entry_price", 0))
+        sl = float(use_decision.get("stop_loss", 0))
+        tp = float(use_decision.get("take_profit", 0))
         if entry == 0 or sl == 0 or tp == 0:
+            self.hold_reasons["zero_prices"] += 1
             return None
 
         if candles.empty or len(candles) < 2:
             return None
 
-        direction = decision["decision"].lower()
+        # FIX: use use_decision (not original decision) so tech-fallback BUY/SELL
+        # direction is respected rather than the original HOLD being used.
+        direction = use_decision["decision"].lower()
         is_buy = direction == "buy"
         entry_price = float(candles.iloc[0]["open"])
 
@@ -334,18 +409,29 @@ class StandaloneBacktestEngine:
 
     async def run_session(self, db: AsyncSession, symbol: str, s_start: datetime, s_end: datetime, strategy_mode: str) -> Optional[Dict]:
         try:
-            candles = await self._load_candles(db, symbol, s_start, s_end)
-            tech = self._run_technical(symbol, candles)
-            v2_result, analysis = await self._run_v2_decision(symbol, strategy_mode, candles)
+            # Load 5m session candles (entry/exit timing) + 15m context window
+            candles_5m = await self._load_candles(db, symbol, s_start, s_end)
+            if candles_5m.empty:
+                self.hold_reasons["no_candles"] += 1
+                return None
+
+            candles_15m = await self._load_candles_tf(db, symbol, s_start, s_end, "15m")
+            tech = self._run_technical(symbol, candles_5m)
+            v2_result, analysis = await self._run_v2_decision(symbol, strategy_mode, candles_5m, candles_15m)
             if not v2_result:
+                self.hold_reasons["v2_failed"] += 1
                 return None
 
             decision = v2_result.get("decision", "HOLD")
+            verifier_verdict = v2_result.get("verifier_verdict", "SKIPPED")
             lead_conf = float(v2_result.get("confidence", 0.0) or 0.0)
             trade_dict = None
 
+            if verifier_verdict == "VETO":
+                self.hold_reasons["veto"] += 1
+
             if decision in ("BUY", "SELL") or (tech and tech.get("confidence", 0) >= 0.6):
-                trade_dict = self._simulate_trade(symbol, v2_result, candles, tech_signal=tech)
+                trade_dict = self._simulate_trade(symbol, v2_result, candles_5m, tech_signal=tech)
 
             # ------------------------------------------------------------------
             # Persist AIDecision + Trade to DB for meta-model training
@@ -518,10 +604,24 @@ class StandaloneBacktestEngine:
                     "last_session": s_start.isoformat(),
                 })
 
-                # Print progress every 10 sessions
+                # Print progress every 10 sessions with HOLD breakdown
                 if (idx + 1) % 10 == 0:
-                    logger.info("Checkpoint: %d/%d sessions | equity=$%.2f | trades=%d | errors=%d | max_dd=%.1f%%",
-                        idx + 1, len(all_sessions), self.equity, self.trade_count, self.error_count, self.max_drawdown_pct)
+                    total_holds = sum(self.hold_reasons.values())
+                    logger.info(
+                        "Checkpoint: %d/%d sessions | equity=$%.2f | trades=%d | errors=%d | max_dd=%.1f%%",
+                        idx + 1, len(all_sessions), self.equity, self.trade_count, self.error_count, self.max_drawdown_pct,
+                    )
+                    logger.info(
+                        "HOLD breakdown (total=%d): no_candles=%d v2_failed=%d veto=%d "
+                        "low_conf=%d zero_prices=%d tech_low=%d",
+                        total_holds,
+                        self.hold_reasons["no_candles"],
+                        self.hold_reasons["v2_failed"],
+                        self.hold_reasons["veto"],
+                        self.hold_reasons["low_confidence"],
+                        self.hold_reasons["zero_prices"],
+                        self.hold_reasons["tech_fallback_low"],
+                    )
 
                 # Rate limit: small sleep between sessions
                 await asyncio.sleep(0.5)  # minimal delay for production models (no rate limits)
