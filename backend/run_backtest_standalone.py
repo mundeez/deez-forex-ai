@@ -464,9 +464,11 @@ class StandaloneBacktestEngine:
             COST_PER_SESSION = 0.03308  # $7 covers ~211 sessions
             estimated_cost = 0.0
             
+            import os
             for idx in range(self.session_count, len(all_sessions)):
                 s_start, s_end, s_name = all_sessions[idx]
                 self.session_count = idx
+                os.environ["BACKTEST_DATE_CUTOFF"] = s_start.isoformat()
 
                 # Monthly model retrain
                 if retrain_monthly and s_start.day == 1 and s_start.hour == 0:

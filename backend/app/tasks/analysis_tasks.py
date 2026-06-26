@@ -40,6 +40,33 @@ def _clean_numpy(obj):
     return obj
 
 
+async def _should_run_analysis(r, symbol: str, current_price: float, threshold: float = 0.001) -> bool:
+    """Skip analysis if price hasn't moved meaningfully since last run.
+
+    Returns True if we should proceed with analysis, False if price is flat.
+    Falls back to True (run analysis) if Redis is unavailable.
+    """
+    try:
+        last = await r.get(f"last_analysis_price:{symbol}")
+        if not last:
+            return True
+        last_price = float(last)
+        if last_price == 0:
+            return True
+        change = abs(current_price - last_price) / last_price
+        return change >= threshold
+    except Exception:
+        return True
+
+
+async def _store_last_price(r, symbol: str, price: float, ttl: int = 14400):
+    """Store current price in Redis after analysis. TTL = 4h (one trading session)."""
+    try:
+        await r.setex(f"last_analysis_price:{symbol}", ttl, str(price))
+    except Exception:
+        pass
+
+
 async def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
     """Check if trading should be paused (EOD, weekend, etc.)."""
     now = utc_now()
@@ -383,12 +410,57 @@ def run_full_analysis():
             news_buffer_after = await get_setting_int(db, "news_halt_buffer_after_min") or 30
 
             # Gather all analyses first
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
             analyses: List[Dict[str, Any]] = []
-            for pair in active_pairs:
+            for idx, pair in enumerate(active_pairs):
                 symbol = pair.symbol
+                # Stagger symbol analyses to avoid OpenRouter rate-limit spikes
+                if idx > 0:
+                    await asyncio.sleep(90)
                 analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode, db=db)
+
+                # Price gate: skip if market hasn't moved meaningfully since last analysis
+                current_price = None
+                try:
+                    tf = list(analysis.get("technical", {}).get("timeframes", {}).values())[0]
+                    current_price = tf.get("indicators", {}).get("close")
+                except Exception:
+                    pass
+                if current_price and not await _should_run_analysis(r, symbol, float(current_price)):
+                    reason = "Price gate: market flat since last analysis (<0.1% move)"
+                    results.append({"symbol": symbol, "decision": "HOLD", "confidence": 0.0, "reason": reason})
+                    db_decision = models.AIDecision(
+                        symbol=symbol,
+                        decision="HOLD",
+                        confidence=0.0,
+                        rationale=reason,
+                        model_used="price_gate",
+                        provider=settings.DATA_PROVIDER.value,
+                    )
+                    db.add(db_decision)
+                    await db.commit()
+                    await db.refresh(db_decision)
+                    await broadcast_ai_decision({
+                        "id": db_decision.id,
+                        "symbol": symbol,
+                        "decision": "HOLD",
+                        "confidence": 0.0,
+                        "rationale": reason,
+                        "manual_override": manual_override,
+                        "strategy_mode": strategy_mode,
+                    })
+                    logger.info("Price gate skipped %s (price %.5f, flat)", symbol, current_price)
+                    continue
+                if current_price:
+                    await _store_last_price(r, symbol, float(current_price))
+
                 analysis["symbol"] = symbol
                 analyses.append(analysis)
+            try:
+                await r.close()
+            except Exception:
+                pass
 
             # Check news halt for each pair
             allowed_analyses = []

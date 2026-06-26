@@ -78,7 +78,7 @@ celery_app.conf.update(
         },
         "update-daily-pnl": {
             "task": "app.tasks.execution_tasks.update_daily_pnl",
-            "schedule": 3600.0,
+            "schedule": crontab(hour=0, minute=10),
             "options": {"time_limit": 60, "soft_time_limit": 45},
         },
         "close-eod-positions": {
@@ -93,7 +93,7 @@ celery_app.conf.update(
         },
         "compute-pair-performance": {
             "task": "app.tasks.execution_tasks.compute_pair_performance",
-            "schedule": 3600.0,
+            "schedule": 14400.0,  # every 4 hours
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "compute-pattern-priors": {
@@ -101,11 +101,7 @@ celery_app.conf.update(
             "schedule": 3600.0 * 6,  # every 6 hours
             "options": {"time_limit": 300, "soft_time_limit": 240},
         },
-        "update-model-performance": {
-            "task": "app.tasks.analysis_tasks.update_model_performance",
-            "schedule": 3600.0,  # hourly
-            "options": {"time_limit": 120, "soft_time_limit": 90},
-        },
+
         "rolling-backtest-30d": {
             "task": "app.tasks.analysis_tasks.rolling_backtest_30d",
             "schedule": 3600.0 * 24,  # daily
@@ -118,7 +114,7 @@ celery_app.conf.update(
         },
         "compute-daily-bias": {
             "task": "app.tasks.execution_tasks.compute_daily_bias",
-            "schedule": 14400.0,
+            "schedule": crontab(hour="6,10,14,18", minute=0, day_of_week="mon-fri"),
             "options": {"time_limit": 180, "soft_time_limit": 120},
         },
         # Pre-compute tasks — feed the Redis cache consumed by AnalysisAggregator.
@@ -136,7 +132,7 @@ celery_app.conf.update(
         },
         "refresh-model-performance": {
             "task": "app.tasks.execution_tasks.refresh_model_performance",
-            "schedule": 3600.0,
+            "schedule": crontab(hour=0, minute=5),
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "reevaluate-open-positions": {

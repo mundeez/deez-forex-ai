@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+from datetime import datetime, timezone
 import httpx
 from typing import Dict, Any, List, Optional, Tuple
 from pydantic import BaseModel
@@ -9,6 +11,57 @@ from app.ai.model_router import ModelRouter, RATE_LIMIT_STATUSES, SERVER_ERROR_S
 
 settings = get_settings()
 logger = logging.getLogger("app.ai.openrouter")
+
+
+class CircuitOpenError(Exception):
+    """Raised when the daily API cost budget is exceeded."""
+    pass
+
+
+class APICostTracker:
+    """Track daily OpenRouter API spend via Redis.  Halt analysis if budget exceeded."""
+
+    _DAILY_BUDGET_USD: float = float(os.environ.get("DAILY_API_BUDGET_USD", "20.0"))
+    _COST_PER_1K_TOKENS: float = float(os.environ.get("API_COST_PER_1K_USD", "0.001"))  # conservative mid-tier estimate
+    _REDIS_KEY: str = "api_spend_today"
+
+    @classmethod
+    async def check(cls) -> None:
+        """Raise CircuitOpenError if today's spend exceeds the budget."""
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            spent = await r.get(cls._REDIS_KEY)
+            await r.close()
+            if spent and float(spent) >= cls._DAILY_BUDGET_USD:
+                raise CircuitOpenError(
+                    f"Daily API budget exceeded: ${float(spent):.2f} / ${cls._DAILY_BUDGET_USD:.2f}. "
+                    "Halting AI analysis until tomorrow."
+                )
+        except CircuitOpenError:
+            raise
+        except Exception as exc:
+            logger.debug("API cost tracker check failed (allowing call): %s", exc)
+
+    @classmethod
+    async def record(cls, total_tokens: int) -> None:
+        """Add estimated cost to today's running total in Redis (TTL = 24h)."""
+        if total_tokens <= 0:
+            return
+        cost = (total_tokens / 1000.0) * cls._COST_PER_1K_TOKENS
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            # Get current total, default to 0
+            current = await r.get(cls._REDIS_KEY)
+            total = float(current) + cost if current else cost
+            # Set with TTL to end of day (or 24h)
+            ttl = 24 * 3600
+            await r.setex(cls._REDIS_KEY, ttl, str(round(total, 6)))
+            await r.close()
+            logger.debug("API cost recorded: +$%.4f (total $%.4f, tokens=%d)", cost, total, total_tokens)
+        except Exception as exc:
+            logger.debug("API cost tracker record failed: %s", exc)
 
 
 def normalize_decision(value: Any) -> str:
@@ -186,6 +239,9 @@ class OpenRouterClient:
         server / network errors get one short retry on the same model before
         failing over. Returns the parsed JSON response and the model that served it.
         """
+        # Circuit breaker: halt if daily budget exceeded
+        await APICostTracker.check()
+
         last_exc: Optional[Exception] = None
         for model in candidates:
             payload = {**base_payload, "model": model}
@@ -203,6 +259,10 @@ class OpenRouterClient:
                             raise ValueError(f"OpenRouter response missing choices: {err_msg}")
                         if "message" not in data["choices"][0] or "content" not in data["choices"][0]["message"]:
                             raise ValueError("OpenRouter response missing message content")
+                        # Record estimated cost
+                        usage = data.get("usage", {})
+                        total_tokens = usage.get("total_tokens", 0) or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
+                        await APICostTracker.record(total_tokens)
                         return data, model
                 except httpx.HTTPStatusError as e:
                     last_exc = e

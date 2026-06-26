@@ -1,6 +1,7 @@
 """Qdrant vector store client for market state snapshots."""
 import json
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
@@ -188,10 +189,15 @@ class AsyncVectorStore:
             with_payload=True,
         )
         out = []
+        cutoff = os.environ.get("BACKTEST_DATE_CUTOFF")
         for r in results:
             payload = r.payload or {}
             if min_confidence and (payload.get("confidence") or 0) < min_confidence:
                 continue
+            if cutoff:
+                ts = payload.get("timestamp")
+                if ts and str(ts) > cutoff:
+                    continue
             out.append({
                 "id": r.id,
                 "score": r.score,
