@@ -208,6 +208,142 @@ async def _memory_guard(db, vs, analysis, decision):
     return True, "", ctx
 
 
+# ---------------------------------------------------------------------------
+# Pre-compute tasks — feed the Redis cache consumed by AnalysisAggregator
+# ---------------------------------------------------------------------------
+
+@celery_app.task
+def refresh_technical_snapshots():
+    """Pre-compute multi-timeframe TA indicator snapshots for all active pairs.
+
+    Runs every 15 minutes (beat_schedule: refresh-technical-snapshots).
+    Results are stored in Redis under ``tech_snapshot:{symbol}:{strategy_mode}``
+    with a 30-minute TTL, so ``run_full_analysis`` reads a fresh snapshot
+    instead of fetching live candles on-demand every 4 hours.
+
+    Gracefully skips any pair that fails (data provider down, etc.) without
+    aborting the whole batch.
+    """
+    async def _run():
+        async with get_celery_session()() as db:
+            from app import models
+            from app.analysis.aggregator import AnalysisAggregator, _TECH_SNAPSHOT_TTL, _numpy_safe_default
+            import json, redis.asyncio as aioredis
+
+            active_result = await db.execute(
+                select(models.ActivePair).order_by(models.ActivePair.priority)
+            )
+            active_pairs = active_result.scalars().all()
+            if not active_pairs:
+                logger.info("refresh_technical_snapshots: no active pairs, skipping")
+                return {"refreshed": 0}
+
+            aggregator = AnalysisAggregator()
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            strategy_modes = ("scalping", "day_trading", "swing")
+            refreshed = 0
+
+            for pair in active_pairs:
+                symbol = pair.symbol
+                for mode in strategy_modes:
+                    try:
+                        # Fetch candles and run pure-Python TA (no LLM call)
+                        if mode == "scalping":
+                            candles_1m = await aggregator.client.get_historical_candles(symbol, "1m", 300)
+                            candles_5m = await aggregator.client.get_historical_candles(symbol, "5m", 300)
+                            candles_15m = await aggregator.client.get_historical_candles(symbol, "15m", 200)
+                            tf_map = {
+                                "1m": aggregator.technical.analyze(candles_1m),
+                                "5m": aggregator.technical.analyze(candles_5m),
+                                "15m": aggregator.technical.analyze(candles_15m),
+                            }
+                            tf_list = list(tf_map.values())
+                        elif mode == "day_trading":
+                            candles_5m = await aggregator.client.get_historical_candles(symbol, "5m", 300)
+                            candles_15m = await aggregator.client.get_historical_candles(symbol, "15m", 200)
+                            candles_1h = await aggregator.client.get_historical_candles(symbol, "1h", 150)
+                            tf_map = {
+                                "5m": aggregator.technical.analyze(candles_5m),
+                                "15m": aggregator.technical.analyze(candles_15m),
+                                "1h": aggregator.technical.analyze(candles_1h),
+                            }
+                            tf_list = list(tf_map.values())
+                        else:  # swing
+                            candles_1h = await aggregator.client.get_historical_candles(symbol, "1h", 300)
+                            candles_4h = await aggregator.client.get_historical_candles(symbol, "4h", 150)
+                            candles_d1 = await aggregator.client.get_historical_candles(symbol, "1d", 100)
+                            tf_map = {
+                                "1h": aggregator.technical.analyze(candles_1h),
+                                "4h": aggregator.technical.analyze(candles_4h),
+                                "1d": aggregator.technical.analyze(candles_d1),
+                            }
+                            tf_list = list(tf_map.values())
+
+                        snapshot = {
+                            "timeframes": tf_map,
+                            "overall_signal": aggregator._weight_timeframes(*tf_list),
+                        }
+                        key = f"tech_snapshot:{symbol}:{mode}"
+                        await r.setex(key, _TECH_SNAPSHOT_TTL, json.dumps(snapshot, default=_numpy_safe_default))
+                        refreshed += 1
+                        logger.debug("Tech snapshot refreshed: %s/%s", symbol, mode)
+                    except Exception:
+                        logger.warning("refresh_technical_snapshots failed for %s/%s", symbol, mode, exc_info=True)
+
+            await r.close()
+            logger.info("refresh_technical_snapshots: %d snapshots refreshed (%d pairs × 3 modes)", refreshed, len(active_pairs))
+            return {"refreshed": refreshed, "pairs": len(active_pairs)}
+
+    return asyncio.run(_run())
+
+
+@celery_app.task
+def refresh_sentiment_cache():
+    """Pre-compute sentiment scores for all active pairs.
+
+    Runs every hour (beat_schedule: refresh-sentiment-cache).
+    Stores results in Redis under ``sentiment_cache:{symbol}`` with a 2-hour TTL.
+    This keeps sentiment current without adding latency to the LLM analysis cycle.
+
+    COT data is read from the database; retail and news data are fetched live.
+    """
+    async def _run():
+        async with get_celery_session()() as db:
+            from app import models
+            from app.analysis.sentiment import SentimentAnalyzer
+            import json, redis.asyncio as aioredis
+            from app.analysis.aggregator import _SENTIMENT_CACHE_TTL, _numpy_safe_default
+
+            active_result = await db.execute(
+                select(models.ActivePair).order_by(models.ActivePair.priority)
+            )
+            active_pairs = active_result.scalars().all()
+            if not active_pairs:
+                logger.info("refresh_sentiment_cache: no active pairs, skipping")
+                return {"refreshed": 0}
+
+            analyzer = SentimentAnalyzer()
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            refreshed = 0
+
+            for pair in active_pairs:
+                symbol = pair.symbol
+                try:
+                    sentiment = await analyzer.analyze(symbol, db=db)
+                    key = f"sentiment_cache:{symbol}"
+                    await r.setex(key, _SENTIMENT_CACHE_TTL, json.dumps(sentiment, default=_numpy_safe_default))
+                    refreshed += 1
+                    logger.debug("Sentiment cache refreshed: %s (bias=%s, score=%s)", symbol, sentiment.get("overall_sentiment"), sentiment.get("sentiment_score"))
+                except Exception:
+                    logger.warning("refresh_sentiment_cache failed for %s", symbol, exc_info=True)
+
+            await r.close()
+            logger.info("refresh_sentiment_cache: %d pairs refreshed", refreshed)
+            return {"refreshed": refreshed}
+
+    return asyncio.run(_run())
+
+
 @celery_app.task
 def run_full_analysis():
     async def _analyze():

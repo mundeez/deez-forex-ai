@@ -25,8 +25,11 @@ celery_app.conf.update(
     result_expires=3600,
     broker_connection_retry_on_startup=True,
     worker_prefetch_multiplier=1,
-    # M4: Dedicated queues for data ingestion pipeline
+    # Queue routing — keep data_ingestion and dead_letter as before;
+    # add dedicated queues for execution (low-latency) and AI analysis (LLM calls).
+    # The default worker still consumes all queues as a catch-all fallback.
     task_routes={
+        # --- Data ingestion ---
         "app.tasks.data_tasks.ingest_dukascopy_daily": {"queue": "data_ingestion"},
         "app.tasks.data_tasks.ingest_historical_range": {"queue": "data_ingestion"},
         "app.tasks.data_tasks.detect_and_backfill_gaps": {"queue": "data_ingestion"},
@@ -36,6 +39,18 @@ celery_app.conf.update(
         "app.tasks.data_tasks.ingest_cot_weekly": {"queue": "data_ingestion"},
         # Dead letter reprocessing goes to a separate queue to avoid blocking
         "app.tasks.data_tasks.retry_dead_letter_job": {"queue": "dead_letter"},
+        # --- Execution tier: high-priority, low-latency (60-180 s tasks) ---
+        "app.tasks.execution_tasks.check_open_positions": {"queue": "execution"},
+        "app.tasks.execution_tasks.evaluate_exits": {"queue": "execution"},
+        "app.tasks.execution_tasks.reevaluate_open_positions": {"queue": "execution"},
+        "app.tasks.execution_tasks.close_eod_positions": {"queue": "execution"},
+        "app.tasks.execution_tasks.close_weekend_positions": {"queue": "execution"},
+        # --- AI analysis tier: slow LLM calls, dedicate 2 workers max ---
+        "app.tasks.analysis_tasks.run_full_analysis": {"queue": "ai_analysis"},
+        "app.tasks.analysis_tasks.compute_daily_bias": {"queue": "ai_analysis"},
+        # Pre-compute refresh tasks go to ai_analysis so they don't block execution
+        "app.tasks.analysis_tasks.refresh_technical_snapshots": {"queue": "ai_analysis"},
+        "app.tasks.analysis_tasks.refresh_sentiment_cache": {"queue": "ai_analysis"},
     },
     # M4: Dead letter queue configuration (Redis-based)
     task_reject_on_worker_lost=True,
@@ -105,6 +120,19 @@ celery_app.conf.update(
             "task": "app.tasks.execution_tasks.compute_daily_bias",
             "schedule": 14400.0,
             "options": {"time_limit": 180, "soft_time_limit": 120},
+        },
+        # Pre-compute tasks — feed the Redis cache consumed by AnalysisAggregator.
+        # These run more frequently than run_full_analysis so each LLM cycle
+        # reads a fresh snapshot instead of fetching live data on-demand.
+        "refresh-technical-snapshots": {
+            "task": "app.tasks.analysis_tasks.refresh_technical_snapshots",
+            "schedule": 900.0,  # every 15 minutes
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
+        "refresh-sentiment-cache": {
+            "task": "app.tasks.analysis_tasks.refresh_sentiment_cache",
+            "schedule": 3600.0,  # every hour
+            "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "refresh-model-performance": {
             "task": "app.tasks.execution_tasks.refresh_model_performance",
