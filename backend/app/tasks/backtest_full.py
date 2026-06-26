@@ -40,6 +40,19 @@ ACTIVE_SYMBOLS = [
     "USDCHF", "NZDUSD", "EURGBP", "GBPJPY",
 ]
 
+# Typical retail spreads in pips (conservative estimates)
+SPREADS_PIPS = {
+    "EURUSD": 1.5,
+    "GBPUSD": 1.5,
+    "USDJPY": 1.5,
+    "AUDUSD": 1.5,
+    "NZDUSD": 2.0,
+    "USDCAD": 2.0,
+    "USDCHF": 2.0,
+    "EURGBP": 2.0,
+    "GBPJPY": 4.0,
+}
+
 
 class SessionBacktestEngine:
     """Simulate trading once per session on historical data."""
@@ -112,21 +125,64 @@ class SessionBacktestEngine:
             return pd.DataFrame()
         return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
+    async def _load_context(
+        self, db, symbol: str, session_start: datetime,
+        lookback: timedelta, timeframe: str
+    ) -> pd.DataFrame:
+        """Load candles strictly BEFORE session_start. Never bleeds into the session."""
+        stmt = text("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM historical_candles
+            WHERE symbol = :symbol AND timeframe = :timeframe
+              AND timestamp >= :start
+              AND timestamp < :session_start        -- hard upper bound
+            ORDER BY timestamp DESC
+            LIMIT 100
+        """)
+        result = await db.execute(stmt, {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start": session_start - lookback,
+            "session_start": session_start,
+        })
+        rows = result.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        return df.sort_values("timestamp").reset_index(drop=True)
+
+    async def _load_execution(
+        self, db, symbol: str, session_start: datetime, session_end: datetime
+    ) -> pd.DataFrame:
+        """Load candles for walk-forward simulation ONLY. AI never sees these."""
+        stmt = text("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM historical_candles
+            WHERE symbol = :symbol AND timeframe = '5m'
+              AND timestamp >= :start AND timestamp < :end
+            ORDER BY timestamp
+        """)
+        result = await db.execute(stmt, {"symbol": symbol, "start": session_start, "end": session_end})
+        rows = result.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
     async def _run_v2_decision(
-        self, symbol: str, strategy_mode: str, session_candles: pd.DataFrame, candles_15m: pd.DataFrame = None,
+        self, symbol: str, strategy_mode: str, ctx_5m: pd.DataFrame, ctx_15m: pd.DataFrame = None, session_name: str = "asian",
     ) -> Optional[Dict[str, Any]]:
-        """Run the v2 AI team with multi-timeframe analysis snapshot."""
-        if session_candles.empty:
+        """Run the v2 AI team with multi-timeframe analysis snapshot using ONLY pre-session context."""
+        if ctx_5m.empty:
             return None
 
         from app.analysis.technical import TechnicalAnalyzer
         ta = TechnicalAnalyzer()
-        tech_5m = ta.analyze(session_candles.to_dict("records"))
+        tech_5m = ta.analyze(ctx_5m.to_dict("records"))
 
         tf_map = {"5m": tech_5m}
         overall_signal = tech_5m.get("signal", "neutral")
-        if candles_15m is not None and not candles_15m.empty and len(candles_15m) >= 20:
-            tech_15m = ta.analyze(candles_15m.to_dict("records"))
+        if ctx_15m is not None and not ctx_15m.empty and len(ctx_15m) >= 20:
+            tech_15m = ta.analyze(ctx_15m.to_dict("records"))
             tf_map["15m"] = tech_15m
             scores = {"bullish": 0.0, "bearish": 0.0, "neutral": 0.0}
             for sig_val, w in [(tech_5m.get("signal", "neutral"), 0.5), (tech_15m.get("signal", "neutral"), 0.5)]:
@@ -140,7 +196,7 @@ class SessionBacktestEngine:
             "sentiment": {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "historical backtest"},
             "macro": {"note": "historical backtest"},
             "regime": "unknown",
-            "session": SESSIONS[0][0],
+            "session": session_name,
         }
 
         from app.ai.team.orchestrator import TeamDecisionEngine
@@ -166,14 +222,11 @@ class SessionBacktestEngine:
             return None
 
     async def _simulate_trade(
-        self, symbol: str, decision: Dict, session_candles: pd.DataFrame,
+        self, symbol: str, decision: Dict, exec_candles: pd.DataFrame, ctx_candles: pd.DataFrame = None,
     ) -> Optional[Dict[str, Any]]:
-        """Simulate trade execution on session candles."""
+        """Simulate trade execution on execution candles. No look-ahead bias."""
         if decision.get("decision") not in ("BUY", "SELL"):
             return None
-        # Threshold lowered from 0.4 → 0.25 to match the standalone backtest gate.
-        # The old 0.4 threshold combined with the verifier's 15% confidence reduction
-        # on REVISE was silently blocking ~30% of valid signals.
         if decision.get("confidence", 0) < 0.25:
             return None
 
@@ -183,17 +236,16 @@ class SessionBacktestEngine:
         if entry == 0 or sl == 0 or tp == 0:
             return None
 
-        # Find entry candle (first candle after session open)
-        if session_candles.empty:
+        if exec_candles.empty:
             return None
 
         direction = decision["decision"].lower()
         is_buy = direction == "buy"
 
         # Simulate: entry at open of first candle in session
-        entry_price = float(session_candles.iloc[0]["open"])
+        entry_price = float(exec_candles.iloc[0]["open"])
 
-        # Recalculate SL/TP distances using actual entry (same logic as live executor)
+        # Recalculate SL/TP distances using actual entry
         ai_sl_dist = abs(entry - sl)
         ai_tp_dist = abs(tp - entry)
         if is_buy:
@@ -203,9 +255,9 @@ class SessionBacktestEngine:
             actual_sl = entry_price + ai_sl_dist
             actual_tp = entry_price - ai_tp_dist
 
-        # Walk forward through candles to find exit
-        for idx in range(1, len(session_candles)):
-            candle = session_candles.iloc[idx]
+        # Walk forward through execution candles only
+        for idx in range(1, len(exec_candles)):
+            candle = exec_candles.iloc[idx]
             if is_buy:
                 if candle["low"] <= actual_sl:
                     exit_price = actual_sl
@@ -230,11 +282,11 @@ class SessionBacktestEngine:
                     break
         else:
             # Session ended without hit — close at last price
-            exit_price = float(session_candles.iloc[-1]["close"])
+            exit_price = float(exec_candles.iloc[-1]["close"])
             pnl = (exit_price - entry_price) if is_buy else (entry_price - exit_price)
             close_reason = "session_end"
 
-        # Convert pips to USD (simplified: 1 pip = $10 per 0.1 lot / per pip)
+        # Convert pips to USD
         pip = 0.0001 if "JPY" not in symbol else 0.01
         pnl_pips = pnl / pip
 
@@ -243,11 +295,15 @@ class SessionBacktestEngine:
         sl_pips = abs(entry_price - actual_sl) / pip
         if sl_pips == 0:
             return None
-        # Risk $2: lot size = $2 / (sl_pips * $10/pip/0.01lot) = micro-lots
         lot_size = risk_amount / (sl_pips * 10.0)
-        lot_size = max(0.01, min(lot_size, 0.1))  # 0.01 to 0.1 lots
+        lot_size = max(0.01, min(lot_size, 0.1))
 
-        pnl_usd = pnl_pips * lot_size * 10.0  # $10 per pip per 0.1 lot
+        pnl_usd = pnl_pips * lot_size * 10.0
+
+        # Spread cost — charged on every trade regardless of outcome
+        spread_pips = SPREADS_PIPS.get(symbol, 2.0)
+        spread_cost_usd = spread_pips * lot_size * 10.0
+        pnl_usd -= spread_cost_usd
 
         return {
             "symbol": symbol,
@@ -262,38 +318,43 @@ class SessionBacktestEngine:
             "lot_size": lot_size,
             "confidence": decision.get("confidence", 0),
             "model_used": decision.get("lead_model", ""),
-            "timestamp": session_candles.iloc[0]["timestamp"] if not session_candles.empty else datetime.now(timezone.utc),
+            "spread_cost_usd": spread_cost_usd,
+            "timestamp": exec_candles.iloc[0]["timestamp"] if not exec_candles.empty else datetime.now(timezone.utc),
         }
 
     async def run_session(
         self, db, symbol: str, session_start: datetime, session_end: datetime,
-        strategy_mode: str = "scalping",
+        strategy_mode: str = "scalping", session_name: str = "asian",
     ) -> Optional[Dict[str, Any]]:
-        """Run a single session: load candles, get AI decision, simulate trade."""
+        """Run a single session: load context candles for AI, execution candles for simulation."""
         import redis.asyncio as aioredis
         from app.config import get_settings
         r = aioredis.from_url(get_settings().REDIS_URL, decode_responses=True)
 
-        # Check cache
+        # Load context + execution windows
+        ctx_5m  = await self._load_context(db, symbol, session_start, timedelta(hours=4),  "5m")
+        ctx_15m = await self._load_context(db, symbol, session_start, timedelta(hours=12), "15m")
+        exec_5m = await self._load_execution(db, symbol, session_start, session_end)
+
+        # Check cache (keyed by context, not execution)
         cached = await self._get_cached_decision(r, symbol, session_start)
         if cached:
             await r.aclose()
-            # Still need to simulate execution (candles matter)
-            candles = await self._load_candles_for_session(db, symbol, session_start, session_end)
             if cached.get("decision") in ("BUY", "SELL"):
-                return await self._simulate_trade(symbol, cached, candles)
+                return await self._simulate_trade(symbol, cached, exec_5m)
             return None
 
-        # Load 5m session candles + 15m context window
-        candles = await self._load_candles_for_session(db, symbol, session_start, session_end)
-        candles_15m = await self._load_candles_tf(db, symbol, session_start, session_end, "15m")
-        decision = await self._run_v2_decision(symbol, strategy_mode, candles, candles_15m)
+        if ctx_5m.empty:
+            await r.aclose()
+            return None
+
+        decision = await self._run_v2_decision(symbol, strategy_mode, ctx_5m, ctx_15m, session_name=session_name)
         if decision:
             await self._cache_decision(r, symbol, session_start, decision)
         await r.aclose()
 
         if decision and decision.get("decision") in ("BUY", "SELL"):
-            return await self._simulate_trade(symbol, decision, candles)
+            return await self._simulate_trade(symbol, decision, exec_5m)
         return None
 
     async def run_full_backtest(
@@ -335,7 +396,7 @@ class SessionBacktestEngine:
 
                 for symbol in symbols:
                     try:
-                        trade = await self.run_session(db, symbol, s_start, s_end, strategy_mode)
+                        trade = await self.run_session(db, symbol, s_start, s_end, strategy_mode, session_name=s_name)
                     except Exception as exc:
                         logger.warning("Session failed for %s %s: %s", symbol, s_name, str(exc)[:100])
                         trade = None

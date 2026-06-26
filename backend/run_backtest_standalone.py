@@ -53,6 +53,19 @@ ACTIVE_SYMBOLS = [
     "USDCHF", "NZDUSD", "EURGBP", "GBPJPY",
 ]
 
+# Typical retail spreads in pips (conservative estimates)
+SPREADS_PIPS = {
+    "EURUSD": 1.5,
+    "GBPUSD": 1.5,
+    "USDJPY": 1.5,
+    "AUDUSD": 1.5,
+    "NZDUSD": 2.0,
+    "USDCAD": 2.0,
+    "USDCHF": 2.0,
+    "EURGBP": 2.0,
+    "GBPJPY": 4.0,
+}
+
 
 class CheckpointManager:
     """Save and resume backtest state from disk."""
@@ -61,17 +74,22 @@ class CheckpointManager:
         self.run_id = run_id
         self.state_file = os.path.join(CHECKPOINT_DIR, f"{run_id}_state.json")
         self.trades_file = os.path.join(CHECKPOINT_DIR, f"{run_id}_trades.jsonl")
+        self._processed_keys: set = set()
 
     def load_state(self) -> Optional[Dict[str, Any]]:
         if not os.path.exists(self.state_file):
             return None
         try:
             with open(self.state_file, "r") as f:
-                return json.load(f)
+                state = json.load(f)
+            # Restore processed keys from prior run
+            self._processed_keys = set(state.get("processed_keys", []))
+            return state
         except Exception:
             return None
 
     def save_state(self, state: Dict[str, Any]):
+        state["processed_keys"] = list(self._processed_keys)
         tmp = self.state_file + ".tmp"
         with open(tmp, "w") as f:
             json.dump(state, f)
@@ -95,6 +113,15 @@ class CheckpointManager:
                         pass
         return trades
 
+    def session_key(self, symbol: str, session_start: datetime) -> str:
+        return f"{symbol}_{session_start.isoformat()}"
+
+    def is_processed(self, key: str) -> bool:
+        return key in self._processed_keys
+
+    def mark_processed(self, key: str):
+        self._processed_keys.add(key)
+
 
 class StandaloneBacktestEngine:
     """Backtest engine with checkpoint/resume support."""
@@ -113,10 +140,8 @@ class StandaloneBacktestEngine:
         self.hold_reasons: Dict[str, int] = {
             "no_candles": 0,
             "v2_failed": 0,
-            "veto": 0,
             "low_confidence": 0,
             "zero_prices": 0,
-            "tech_fallback_low": 0,
         }
 
     def _compute_atr_based_sl(self, candles: pd.DataFrame, entry_price: float, direction: str) -> Optional[float]:
@@ -206,30 +231,70 @@ class StandaloneBacktestEngine:
             return pd.DataFrame()
         return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-    async def _run_v2_decision(self, symbol: str, strategy_mode: str, candles_5m: pd.DataFrame, candles_15m: pd.DataFrame = None):
-        """Run the v2 AI team with multi-timeframe analysis.
+    async def _load_context(
+        self, db: AsyncSession, symbol: str, session_start: datetime,
+        lookback: timedelta, timeframe: str
+    ) -> pd.DataFrame:
+        """Load candles strictly BEFORE session_start. Never bleeds into the session."""
+        stmt = text("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM historical_candles
+            WHERE symbol = :symbol AND timeframe = :timeframe
+              AND timestamp >= :start
+              AND timestamp < :session_start        -- hard upper bound
+            ORDER BY timestamp DESC
+            LIMIT 100
+        """)
+        result = await db.execute(stmt, {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "start": session_start - lookback,
+            "session_start": session_start,
+        })
+        rows = result.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        return df.sort_values("timestamp").reset_index(drop=True)
 
-        Feeds both 5m (session candles) and 15m (context window) to the technical
-        analyst so the lead has stronger directional conviction and generates fewer
-        neutral/HOLD decisions.
+    async def _load_execution(
+        self, db: AsyncSession, symbol: str, session_start: datetime, session_end: datetime
+    ) -> pd.DataFrame:
+        """Load candles for walk-forward simulation ONLY. AI never sees these."""
+        stmt = text("""
+            SELECT timestamp, open, high, low, close, volume
+            FROM historical_candles
+            WHERE symbol = :symbol AND timeframe = '5m'
+              AND timestamp >= :start AND timestamp < :end
+            ORDER BY timestamp
+        """)
+        result = await db.execute(stmt, {"symbol": symbol, "start": session_start, "end": session_end})
+        rows = result.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
+    async def _run_v2_decision(self, symbol: str, strategy_mode: str, ctx_5m: pd.DataFrame, ctx_15m: pd.DataFrame = None, session_name: str = "london"):
+        """Run the v2 AI team with multi-timeframe analysis using ONLY pre-session context.
+
+        ctx_5m and ctx_15m are candles strictly BEFORE session_start.
         The verifier is disabled here for two reasons:
           1. In backtesting there is no live market risk to protect against.
-          2. The verifier was reducing conference by 15% on REVISE, causing many
+          2. The verifier was reducing confidence by 15% on REVISE, causing many
              borderline signals to fall below the 0.25 gate.
         """
-        if candles_5m.empty:
+        if ctx_5m.empty:
             return None, None
         from app.analysis.technical import TechnicalAnalyzer
         ta = TechnicalAnalyzer()
 
-        tech_5m = ta.analyze(candles_5m.to_dict("records"))
+        tech_5m = ta.analyze(ctx_5m.to_dict("records"))
 
         # Build timeframe map — include 15m context if available
         tf_map = {"5m": tech_5m}
         overall_signal = tech_5m.get("signal", "neutral")
-        if candles_15m is not None and not candles_15m.empty and len(candles_15m) >= 20:
-            tech_15m = ta.analyze(candles_15m.to_dict("records"))
+        if ctx_15m is not None and not ctx_15m.empty and len(ctx_15m) >= 20:
+            tech_15m = ta.analyze(ctx_15m.to_dict("records"))
             tf_map["15m"] = tech_15m
             # Weight 5m and 15m equally for overall signal
             scores = {"bullish": 0.0, "bearish": 0.0, "neutral": 0.0}
@@ -247,7 +312,7 @@ class StandaloneBacktestEngine:
             "sentiment": {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "historical backtest — no live sentiment data"},
             "macro": {"note": "historical backtest — no live macro data"},
             "regime": "unknown",
-            "session": "london",
+            "session": session_name,
         }
         from app.ai.team.orchestrator import TeamDecisionEngine
         from app.ai.suites import resolve_models
@@ -280,39 +345,22 @@ class StandaloneBacktestEngine:
             logger.warning("v2 decision failed for %s: %s", symbol, str(exc)[:80])
             return None, None
 
-    def _simulate_trade(self, symbol: str, decision: Dict, candles: pd.DataFrame, tech_signal: Optional[Dict] = None) -> Optional[Dict]:
+    def _simulate_trade(
+        self, symbol: str, decision: Dict, exec_candles: pd.DataFrame, ctx_candles: pd.DataFrame = None
+    ) -> Optional[Dict]:
         """Simulate trade execution from a team decision.
 
-        Gate logic (in priority order):
-          1. Lead gave BUY/SELL with confidence >= 0.25  → use lead decision
-          2. Lead gave HOLD but technical signal is strong (conf >= 0.6) → technical fallback
-          3. Otherwise → no trade
-
-        Bug fix: was using `decision["decision"]` for direction instead of
-        `use_decision["decision"]`, causing HOLD-direction trades when the tech
-        fallback kicked in.
+        Uses exec_candles for walk-forward simulation and ctx_candles (pre-session)
+        for ATR-based stop-loss computation.  No look-ahead bias.
         """
         lead_decision = decision.get("decision", "HOLD")
         lead_conf = float(decision.get("confidence", 0))
 
-        if lead_decision in ("BUY", "SELL") and lead_conf >= 0.25:
-            use_decision = decision
-            conf = lead_conf
-        elif tech_signal and tech_signal.get("signal") in ("bullish", "bearish"):
-            tech_conf = float(tech_signal.get("confidence", 0.5))
-            if tech_conf >= 0.6:
-                fallback = dict(decision)
-                fallback["decision"] = "BUY" if tech_signal["signal"] == "bullish" else "SELL"
-                fallback["confidence"] = tech_conf * 0.7  # discount for no-team consensus
-                fallback["lead_model"] = "technical_fallback"
-                use_decision = fallback
-                conf = tech_conf * 0.7
-            else:
-                self.hold_reasons["tech_fallback_low"] += 1
-                return None
-        else:
+        if lead_decision not in ("BUY", "SELL") or lead_conf < 0.25:
             self.hold_reasons["low_confidence"] += 1
             return None
+        use_decision = decision
+        conf = lead_conf
 
         entry = float(use_decision.get("entry_price", 0))
         sl = float(use_decision.get("stop_loss", 0))
@@ -321,21 +369,22 @@ class StandaloneBacktestEngine:
             self.hold_reasons["zero_prices"] += 1
             return None
 
-        if candles.empty or len(candles) < 2:
+        if exec_candles.empty or len(exec_candles) < 2:
             return None
 
-        # FIX: use use_decision (not original decision) so tech-fallback BUY/SELL
-        # direction is respected rather than the original HOLD being used.
         direction = use_decision["decision"].lower()
         is_buy = direction == "buy"
-        entry_price = float(candles.iloc[0]["open"])
+        entry_price = float(exec_candles.iloc[0]["open"])
 
         # Recalculate SL/TP from actual entry
         ai_sl_dist = abs(entry - sl)
         ai_tp_dist = abs(tp - entry)
-        
-        # Use ATR-based adaptive SL (tighter of AI SL and ATR-based)
-        atr_sl = self._compute_atr_based_sl(candles, entry_price, direction)
+
+        # ATR SL: use pre-session context, not session candles (no look-ahead)
+        atr_sl = self._compute_atr_based_sl(
+            ctx_candles if ctx_candles is not None else exec_candles,
+            entry_price, direction
+        )
         if atr_sl is not None:
             # Use the TIGHTER stop (closer to entry = smaller loss)
             if is_buy:
@@ -343,14 +392,13 @@ class StandaloneBacktestEngine:
             else:
                 actual_sl = min(atr_sl, entry_price + ai_sl_dist)
         else:
-            # Fallback to AI SL
             actual_sl = entry_price - ai_sl_dist if is_buy else entry_price + ai_sl_dist
-        
+
         actual_tp = entry_price + ai_tp_dist if is_buy else entry_price - ai_tp_dist
 
-        # Walk forward
-        for idx in range(1, len(candles)):
-            candle = candles.iloc[idx]
+        # Walk forward: iterate exec_candles only
+        for idx in range(1, len(exec_candles)):
+            candle = exec_candles.iloc[idx]
             if is_buy:
                 if candle["low"] <= actual_sl:
                     exit_price = actual_sl
@@ -374,14 +422,13 @@ class StandaloneBacktestEngine:
                     reason = "take_profit"
                     break
         else:
-            exit_price = float(candles.iloc[-1]["close"])
+            exit_price = float(exec_candles.iloc[-1]["close"])
             pnl = (exit_price - entry_price) if is_buy else (entry_price - exit_price)
             reason = "session_end"
 
         pip = 0.0001 if "JPY" not in symbol else 0.01
         pnl_pips = pnl / pip
         # Dynamic position sizing: 2% of current equity per trade
-        # Backtest validation: 75% WR, PF 3.36, max DD 2.48% supports 2% risk
         risk_amount = self.equity * 0.02
         risk_amount = max(2.0, min(risk_amount, 20.0))  # clamp $2-$20
         sl_pips = abs(entry_price - actual_sl) / pip
@@ -390,6 +437,11 @@ class StandaloneBacktestEngine:
         lot_size = risk_amount / (sl_pips * 10.0)
         lot_size = max(0.01, min(lot_size, 0.1))
         pnl_usd = pnl_pips * lot_size * 10.0
+
+        # Spread cost — charged on every trade regardless of outcome
+        spread_pips = SPREADS_PIPS.get(symbol, 2.0)
+        spread_cost_usd = spread_pips * lot_size * 10.0
+        pnl_usd -= spread_cost_usd
 
         return {
             "symbol": symbol,
@@ -404,34 +456,38 @@ class StandaloneBacktestEngine:
             "lot_size": lot_size,
             "confidence": conf,
             "model_used": decision.get("lead_model", ""),
-            "timestamp": candles.iloc[0]["timestamp"].isoformat() if hasattr(candles.iloc[0]["timestamp"], 'isoformat') else str(candles.iloc[0]["timestamp"]),
+            "spread_cost_usd": spread_cost_usd,
+            "timestamp": exec_candles.iloc[0]["timestamp"].isoformat() if hasattr(exec_candles.iloc[0]["timestamp"], 'isoformat') else str(exec_candles.iloc[0]["timestamp"]),
         }
 
-    async def run_session(self, db: AsyncSession, symbol: str, s_start: datetime, s_end: datetime, strategy_mode: str) -> Optional[Dict]:
+    async def run_session(self, db: AsyncSession, symbol: str, s_start: datetime, s_end: datetime, strategy_mode: str, s_name: str = "london") -> Optional[Dict]:
+        # Deduplicate: skip if this symbol+session was already processed in a prior run
+        key = self.checkpoint.session_key(symbol, s_start)
+        if self.checkpoint.is_processed(key):
+            return None
+
         try:
-            # Load 5m session candles (entry/exit timing) + 15m context window
-            candles_5m = await self._load_candles(db, symbol, s_start, s_end)
-            if candles_5m.empty:
+            # Context window — AI may see only candles BEFORE session_start
+            ctx_5m  = await self._load_context(db, symbol, s_start, timedelta(hours=4),  "5m")
+            ctx_15m = await self._load_context(db, symbol, s_start, timedelta(hours=12), "15m")
+            if ctx_5m.empty:
                 self.hold_reasons["no_candles"] += 1
                 return None
 
-            candles_15m = await self._load_candles_tf(db, symbol, s_start, s_end, "15m")
-            tech = self._run_technical(symbol, candles_5m)
-            v2_result, analysis = await self._run_v2_decision(symbol, strategy_mode, candles_5m, candles_15m)
+            # Execution window — simulator only, AI never sees these
+            exec_5m = await self._load_execution(db, symbol, s_start, s_end)
+
+            v2_result, analysis = await self._run_v2_decision(symbol, strategy_mode, ctx_5m, ctx_15m, session_name=s_name)
             if not v2_result:
                 self.hold_reasons["v2_failed"] += 1
                 return None
 
             decision = v2_result.get("decision", "HOLD")
-            verifier_verdict = v2_result.get("verifier_verdict", "SKIPPED")
             lead_conf = float(v2_result.get("confidence", 0.0) or 0.0)
             trade_dict = None
 
-            if verifier_verdict == "VETO":
-                self.hold_reasons["veto"] += 1
-
-            if decision in ("BUY", "SELL") or (tech and tech.get("confidence", 0) >= 0.6):
-                trade_dict = self._simulate_trade(symbol, v2_result, candles_5m, tech_signal=tech)
+            if decision in ("BUY", "SELL"):
+                trade_dict = self._simulate_trade(symbol, v2_result, exec_5m, ctx_candles=ctx_5m)
 
             # ------------------------------------------------------------------
             # Persist AIDecision + Trade to DB for meta-model training
@@ -509,6 +565,8 @@ class StandaloneBacktestEngine:
                 logger.warning("DB persist failed for %s %s: %s", symbol, s_start, str(db_exc)[:100])
                 await db.rollback()
 
+            # Mark this symbol+session as successfully processed
+            self.checkpoint.mark_processed(key)
             return trade_dict
         except Exception as exc:
             self.error_count += 1
@@ -524,9 +582,9 @@ class StandaloneBacktestEngine:
             self.equity = state.get("equity", self.initial_equity)
             self.max_equity = state.get("max_equity", self.initial_equity)
             self.max_drawdown_pct = state.get("max_drawdown_pct", 0.0)
-            self.trade_count = state.get("trade_count", 0)
-            self.error_count = state.get("error_count", 0)
             loaded_trades = self.checkpoint.load_trades()
+            self.trade_count = len(loaded_trades)  # authoritative count from file
+            self.error_count = state.get("error_count", 0)
             logger.info("Loaded %d trades from checkpoint file", len(loaded_trades))
         else:
             logger.info("Starting fresh backtest: %s to %s, %d symbols", start, end, len(symbols))
@@ -562,7 +620,7 @@ class StandaloneBacktestEngine:
                     await self._retrain(db, s_start)
 
                 for symbol in symbols:
-                    trade = await self.run_session(db, symbol, s_start, s_end, strategy_mode)
+                    trade = await self.run_session(db, symbol, s_start, s_end, strategy_mode, s_name)
                     if trade:
                         self.trade_count += 1
                         self.equity += trade["pnl_usd"]
@@ -612,15 +670,13 @@ class StandaloneBacktestEngine:
                         idx + 1, len(all_sessions), self.equity, self.trade_count, self.error_count, self.max_drawdown_pct,
                     )
                     logger.info(
-                        "HOLD breakdown (total=%d): no_candles=%d v2_failed=%d veto=%d "
-                        "low_conf=%d zero_prices=%d tech_low=%d",
+                        "HOLD breakdown (total=%d): no_candles=%d v2_failed=%d "
+                        "low_conf=%d zero_prices=%d",
                         total_holds,
                         self.hold_reasons["no_candles"],
                         self.hold_reasons["v2_failed"],
-                        self.hold_reasons["veto"],
                         self.hold_reasons["low_confidence"],
                         self.hold_reasons["zero_prices"],
-                        self.hold_reasons["tech_fallback_low"],
                     )
 
                 # Rate limit: small sleep between sessions
