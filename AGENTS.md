@@ -1,57 +1,67 @@
 
-## Backtest Monitoring
+## Backtest Validation Tool (NOT for Meta-Classifier Training)
 
-Full expanding-window backtest (task ID: `8008953e-abd0-40c9-86f7-d2aecd75cfd3`)
-- Date range: Oct 15, 2025 → Jun 19, 2026
-- Symbols: 9 pairs
-- Starting equity: $200
-- Decision frequency: once per session (4x/day)
+**Status:** The standalone backtest is now a **technical validation tool only**.
+It is NOT suitable for training a meta-classifier because the AI team requires
+live real-time data (news sentiment, retail positioning, economic calendar) to
+generate tradeable signals. With only stale pre-session candles + historical
+macro/COT, the AI correctly returns HOLD at near-zero confidence.
 
-Monitor progress:
+### Key Findings (2026-06-27)
+
+| Mode | Trades | Win Rate | P&L | Conclusion |
+|------|--------|----------|-----|------------|
+| Technical-only baseline | 217 | 27.2% | -$261 | Raw technical signal has **negative edge** |
+| Full AI (stale data) | 0 | N/A | $0 | AI correctly uncertain without live context |
+
+**Decision:** Use backtest only for:
+- Verifying indicator calculations on historical candles
+- Checking data pipeline integrity (macro, COT flows correctly)
+- Sanity-checking execution simulation (spreads, SL/TP, ATR sizing)
+
+**Do NOT use for:** Meta-classifier training, profitability backtesting, or
+strategy optimization. Those require live forward data.
+
+### Running the Validation Backtest
+
 ```bash
-docker compose exec backend python -c "
-from celery.result import AsyncResult
-from app.celery_app import celery_app
-r = AsyncResult('8008953e-abd0-40c9-86f7-d2aecd75cfd3', app=celery_app)
-print('status:', r.status)
-"
-
-# Watch live logs
-docker compose logs -f celery_worker 2>&1 | grep -E "backtest|Checkpoint|Month|equity"
-
-# Check all checkpoints
-docker compose logs celery_worker 2>&1 | grep Checkpoint
-```
-
-Expected runtime: 8–16 hours (free models with rate limiting).
-
-## Standalone Backtest (Active)
-
-Run ID: `20260619_055828`
-
-Status: **RUNNING** in backend container (NOT Celery)
-- Progress: 5/988 sessions (Oct 16, 2025)
-- Equity: $203.84 (up from $200)
-- Trades: 4 (3 wins, 1 loss — $2.73 + $1.41 + $1.78 - $2.08)
-- Max drawdown: 1.02%
-- Errors: 0 (all API failures handled gracefully)
-
-Monitor in real-time:
-```bash
-docker compose logs -f backend 2>&1 | grep -E "backtest_standalone|Checkpoint"
-```
-
-Check progress instantly:
-```bash
-docker compose exec backend cat /app/backtest_checkpoints/20260619_055828_state.json
-```
-
-View trades:
-```bash
-docker compose exec backend cat /app/backtest_checkpoints/20260619_055828_trades.jsonl
-```
-
-Resume if interrupted (automatic on restart):
-```bash
+# Full AI mode (stale data only — expect 100% HOLD)
 docker compose exec backend python /app/run_backtest_standalone.py
+
+# Technical-only baseline (no LLM calls — fast, for indicator validation)
+docker compose exec backend bash -c "BACKTEST_TECHNICAL_ONLY=true python3 /app/run_backtest_standalone.py"
 ```
+
+### Data Ingested for Backtest
+
+| Source | Rows | Date Range |
+|--------|------|------------|
+| FRED macro_series | 2,402 | Jun 2025 – Jun 2026 |
+| CFTC COT reports | 734 | 2025 + 2026 |
+
+### Files Modified
+
+- `backend/run_backtest_standalone.py` — engine fixes, validation modes
+- `backend/app/analysis/macro.py` — `as_of` param for historical queries
+- `backend/app/analysis/sentiment.py` — `as_of` param for COT queries
+- `backend/app/analysis/fundamental.py` — `as_of` param, DB calendar query
+- `backend/app/services/data/fred_client.py` — added missing series IDs
+- `backend/app/services/data/cot_client.py` — fixed date format, DB constraint
+- `backend/app/tasks/backtest_full.py` — same engine fixes
+
+### Implementation Plan
+
+See `docs/backtest_data_and_engine_plan.md` for the full plan.
+
+---
+
+## Live Forward Trading (Production)
+
+The AI team is designed for **live real-time data**:
+- Live economic calendar (ForexFactory API)
+- Live retail sentiment (Myfxbook scrape)
+- Live news headlines (NewsAPI)
+- Real-time macro (FRED daily updates)
+- Real-time execution (MT5 ZMQ)
+
+**The backtest cannot replicate this.** Evaluate the system in live paper mode.

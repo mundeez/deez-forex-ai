@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""Standalone expanding-window backtest with file-based checkpoints.
+"""Standalone backtest — TECHNICAL VALIDATION TOOL ONLY.
+
+WARNING: This backtest is NOT suitable for meta-classifier training or
+profitability evaluation. The AI team requires live real-time data
+(news sentiment, retail positioning, economic calendar) to generate
+tradeable signals. With only stale pre-session candles + historical
+macro/COT, the AI correctly returns HOLD at near-zero confidence.
+
+Use this tool for:
+  - Verifying indicator calculations on historical candles
+  - Checking data pipeline integrity (macro, COT flows correctly)
+  - Sanity-checking execution simulation (spreads, SL/TP, ATR sizing)
+  - Technical-only baseline: BACKTEST_TECHNICAL_ONLY=true (no LLM calls)
+
+Do NOT use for:
+  - Meta-classifier training
+  - Strategy profitability backtesting
+  - Parameter optimization
 
 Run directly in the backend container (NOT via Celery):
   docker compose exec backend python run_backtest_standalone.py
@@ -8,7 +25,6 @@ Features:
   - File-based checkpoints: resumes from last completed session
   - Handles all API errors gracefully per session
   - Prints progress to stdout (watch with docker logs -f)
-  - Expanding window: retrains models monthly
   - $200 starting equity, session-level decisions
 """
 import asyncio
