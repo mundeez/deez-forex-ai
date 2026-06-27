@@ -23,10 +23,13 @@ class SentimentAnalyzer:
     def __init__(self):
         self.news_api_key = settings.NEWS_API_KEY
 
-    async def analyze(self, symbol: str = "EURUSD", db: AsyncSession = None) -> Dict[str, Any]:
+    async def analyze(
+        self, symbol: str = "EURUSD", db: AsyncSession = None, as_of: datetime = None
+    ) -> Dict[str, Any]:
+        as_of = as_of or datetime.utcnow()
         retail = await self._fetch_retail_sentiment(symbol)
         news_sentiment = await self._analyze_news_sentiment(symbol)
-        cot = await self._fetch_cot_from_db(db, symbol) if db else self._fallback_cot()
+        cot = await self._fetch_cot_from_db(db, symbol, as_of) if db else self._fallback_cot()
 
         overall = 0.0
         count = 0
@@ -192,12 +195,16 @@ class SentimentAnalyzer:
             "source": "none",
         }
 
-    async def _fetch_cot_from_db(self, db: AsyncSession, symbol: str) -> Dict[str, Any]:
-        """Query the latest COT report for this symbol from our cot_reports table."""
+    async def _fetch_cot_from_db(
+        self, db: AsyncSession, symbol: str, as_of: datetime = None
+    ) -> Dict[str, Any]:
+        """Query the latest COT report for this symbol on or before `as_of`."""
+        as_of = as_of or datetime.utcnow()
         try:
             result = await db.execute(
                 select(models.COTReport)
                 .where(models.COTReport.symbol == symbol)
+                .where(models.COTReport.report_date <= as_of.date())
                 .order_by(models.COTReport.report_date.desc())
                 .limit(1)
             )

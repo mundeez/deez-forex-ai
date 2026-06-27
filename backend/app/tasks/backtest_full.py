@@ -107,7 +107,7 @@ class SessionBacktestEngine:
 
     async def _load_candles_tf(self, db, symbol: str, session_start: datetime, session_end: datetime, timeframe: str) -> pd.DataFrame:
         """Load candles for a specific timeframe with expanded lookback for context."""
-        lookback = {"15m": timedelta(hours=12), "1h": timedelta(hours=48)}
+        lookback = {"5m": timedelta(hours=24), "15m": timedelta(hours=48), "1h": timedelta(hours=48)}
         extra = lookback.get(timeframe, timedelta(0))
         stmt = text("""
             SELECT timestamp, open, high, low, close, volume
@@ -137,7 +137,7 @@ class SessionBacktestEngine:
               AND timestamp >= :start
               AND timestamp < :session_start        -- hard upper bound
             ORDER BY timestamp DESC
-            LIMIT 100
+            LIMIT 300
         """)
         result = await db.execute(stmt, {
             "symbol": symbol,
@@ -227,7 +227,7 @@ class SessionBacktestEngine:
         """Simulate trade execution on execution candles. No look-ahead bias."""
         if decision.get("decision") not in ("BUY", "SELL"):
             return None
-        if decision.get("confidence", 0) < 0.25:
+        if decision.get("confidence", 0) < 0.15:
             return None
 
         entry = float(decision.get("entry_price", 0))
@@ -332,8 +332,8 @@ class SessionBacktestEngine:
         r = aioredis.from_url(get_settings().REDIS_URL, decode_responses=True)
 
         # Load context + execution windows
-        ctx_5m  = await self._load_context(db, symbol, session_start, timedelta(hours=4),  "5m")
-        ctx_15m = await self._load_context(db, symbol, session_start, timedelta(hours=12), "15m")
+        ctx_5m  = await self._load_context(db, symbol, session_start, timedelta(hours=24), "5m")
+        ctx_15m = await self._load_context(db, symbol, session_start, timedelta(hours=48), "15m")
         exec_5m = await self._load_execution(db, symbol, session_start, session_end)
 
         # Check cache (keyed by context, not execution)
@@ -369,15 +369,16 @@ class SessionBacktestEngine:
         symbols = symbols or ACTIVE_SYMBOLS
         logger.info("Starting full backtest: %s to %s, %d symbols", start, end, len(symbols))
 
-        # Generate all session boundaries
+        # Generate all session boundaries (skip weekends — forex closed)
         sessions = []
         current = start.replace(hour=0, minute=0, second=0, microsecond=0)
         while current < end:
-            for name, h0, h1 in SESSIONS:
-                s_start = current.replace(hour=h0, minute=0)
-                s_end = current.replace(hour=h1, minute=0)
-                if s_start >= start and s_end <= end:
-                    sessions.append((s_start, s_end, name))
+            if current.weekday() < 5:  # 5 = Saturday, 6 = Sunday
+                for name, h0, h1 in SESSIONS:
+                    s_start = current.replace(hour=h0, minute=0)
+                    s_end = current.replace(hour=h1, minute=0)
+                    if s_start >= start and s_end <= end:
+                        sessions.append((s_start, s_end, name))
             current += timedelta(days=1)
 
         logger.info("Total sessions to evaluate: %d", len(sessions))

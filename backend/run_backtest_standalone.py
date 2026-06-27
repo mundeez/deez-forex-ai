@@ -126,7 +126,7 @@ class CheckpointManager:
 class StandaloneBacktestEngine:
     """Backtest engine with checkpoint/resume support."""
 
-    def __init__(self, initial_equity: float = 200.0, run_id: str = None):
+    def __init__(self, initial_equity: float = 200.0, run_id: str = None, technical_only: bool = False):
         self.initial_equity = initial_equity
         self.equity = initial_equity
         self.max_equity = initial_equity
@@ -136,13 +136,33 @@ class StandaloneBacktestEngine:
         self.session_count = 0
         self.trade_count = 0
         self.error_count = 0
+        self.technical_only = technical_only
         # HOLD-reason counters for diagnostics
         self.hold_reasons: Dict[str, int] = {
             "no_candles": 0,
             "v2_failed": 0,
+            "ai_hold": 0,
             "low_confidence": 0,
             "zero_prices": 0,
         }
+
+    @staticmethod
+    def _sanitize_json(obj):
+        """Recursively convert numpy types to native Python types for JSON serialization."""
+        import numpy as np
+        if isinstance(obj, dict):
+            return {k: StandaloneBacktestEngine._sanitize_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [StandaloneBacktestEngine._sanitize_json(v) for v in obj]
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return obj
 
     def _compute_atr_based_sl(self, candles: pd.DataFrame, entry_price: float, direction: str) -> Optional[float]:
         """Compute adaptive stop-loss based on 14-period ATR.
@@ -180,6 +200,21 @@ class StandaloneBacktestEngine:
         
         is_buy = direction.lower() == "buy"
         return entry_price - sl_dist if is_buy else entry_price + sl_dist
+
+    def _compute_atr(self, candles: pd.DataFrame) -> Optional[float]:
+        """Compute 14-period ATR and return in pips."""
+        if candles.empty or len(candles) < 14:
+            return None
+        high = candles["high"].values
+        low = candles["low"].values
+        close = candles["close"].values
+        tr1 = high[1:] - low[1:]
+        tr2 = np.abs(high[1:] - close[:-1])
+        tr3 = np.abs(low[1:] - close[:-1])
+        tr = np.maximum(np.maximum(tr1, tr2), tr3)
+        atr_14 = np.mean(tr[-14:]) if len(tr) >= 14 else np.mean(tr)
+        pip = 0.01 if "JPY" in candles.attrs.get("symbol", "") else 0.0001
+        return round(atr_14 / pip, 2) if pip else None
 
     def _run_technical(self, symbol: str, candles: pd.DataFrame) -> Optional[Dict]:
         if candles.empty or len(candles) < 20:
@@ -243,7 +278,7 @@ class StandaloneBacktestEngine:
               AND timestamp >= :start
               AND timestamp < :session_start        -- hard upper bound
             ORDER BY timestamp DESC
-            LIMIT 100
+            LIMIT 300
         """)
         result = await db.execute(stmt, {
             "symbol": symbol,
@@ -274,14 +309,117 @@ class StandaloneBacktestEngine:
             return pd.DataFrame()
         return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-    async def _run_v2_decision(self, symbol: str, strategy_mode: str, ctx_5m: pd.DataFrame, ctx_15m: pd.DataFrame = None, session_name: str = "london"):
+    async def _load_macro_snapshot(self, db: AsyncSession, session_start: datetime) -> Dict[str, Any]:
+        """Load the most recent macro data from macro_series before session_start."""
+        stmt = text("""
+            SELECT series_id, value
+            FROM macro_series
+            WHERE timestamp <= :session_start
+              AND series_id IN ('DTWEXBGS', 'VIXCLS', 'SP500', 'GOLDPMGBD228NLBM',
+                                'DCOILWTICO', 'DGS10', 'DGS2', 'DGS30',
+                                'DFEDTAR', 'FEDFUNDS', 'ECBDFR', 'T10Y2Y', 'T10YIE')
+            ORDER BY timestamp DESC
+        """)
+        result = await db.execute(stmt, {"session_start": session_start})
+        rows = result.fetchall()
+        # Take the most recent value per series_id
+        latest = {}
+        for series_id, value in rows:
+            if series_id not in latest:
+                latest[series_id] = value
+
+        dxy = latest.get("DTWEXBGS")
+        vix = latest.get("VIXCLS")
+        spx = latest.get("SP500")
+        gold = latest.get("GOLDPMGBD228NLBM")
+        oil = latest.get("DCOILWTICO")
+        us10y = latest.get("DGS10")
+        us02y = latest.get("DGS2")
+        us30y = latest.get("DGS30")
+        dfedtar = latest.get("DFEDTAR") or latest.get("FEDFUNDS")
+        ecbdfr = latest.get("ECBDFR")
+        t10y2y = latest.get("T10Y2Y")
+        t10yie = latest.get("T10YIE")
+
+        yield_spread = None
+        if us10y is not None and us02y is not None:
+            yield_spread = round(us10y - us02y, 2)
+        elif t10y2y is not None:
+            yield_spread = round(t10y2y, 2)
+
+        # Risk-on / risk-off composite (-1.0 to +1.0)
+        score = 0.0
+        weights = 0.0
+        if dxy is not None:
+            score += (-0.3 if dxy > 105 else 0.2 if dxy < 100 else 0.0)
+            weights += 1.0
+        if vix is not None:
+            score += (-0.4 if vix > 25 else 0.1 if vix < 15 else 0.0)
+            weights += 1.0
+        if yield_spread is not None:
+            score += (-0.4 if yield_spread < 0 else 0.2 if yield_spread > 1.0 else 0.0)
+            weights += 1.0
+        composite = round(score / weights, 2) if weights > 0 else 0.0
+        bias = "risk_on" if composite >= 0.3 else "risk_off" if composite <= -0.3 else "neutral"
+
+        return {
+            "dxy": round(dxy, 2) if dxy else None,
+            "vix": round(vix, 2) if vix else None,
+            "spx": round(spx, 2) if spx else None,
+            "gold": round(gold, 2) if gold else None,
+            "oil": round(oil, 2) if oil else None,
+            "us10y": round(us10y, 2) if us10y else None,
+            "us02y": round(us02y, 2) if us02y else None,
+            "us30y": round(us30y, 2) if us30y else None,
+            "yield_spread_10y_2y": yield_spread,
+            "risk_on_score": composite,
+            "bias": bias,
+            "fed_rate": round(dfedtar, 2) if dfedtar else None,
+            "ecb_rate": round(ecbdfr, 2) if ecbdfr else None,
+        }
+
+    async def _load_cot_snapshot(self, db: AsyncSession, symbol: str, session_start: datetime) -> Dict[str, Any]:
+        """Load the most recent COT report for the symbol before session_start."""
+        stmt = text("""
+            SELECT report_date, nc_net, spec_pct_oi, open_interest
+            FROM cot_reports
+            WHERE symbol = :symbol
+              AND report_date <= :session_start
+            ORDER BY report_date DESC
+            LIMIT 1
+        """)
+        try:
+            result = await db.execute(stmt, {"symbol": symbol, "session_start": session_start.date()})
+            row = result.fetchone()
+            if row:
+                report_date, nc_net, spec_pct_oi, open_interest = row
+                return {
+                    "report_date": report_date.isoformat() if report_date else None,
+                    "net_position": nc_net,
+                    "spec_pct_oi": round(spec_pct_oi, 2) if spec_pct_oi else None,
+                    "open_interest": open_interest,
+                    "institutional_bias": "bullish" if (nc_net or 0) > 0 else "bearish" if (nc_net or 0) < 0 else "neutral",
+                    "source": "cftc",
+                }
+        except Exception as exc:
+            logger.debug("Failed to load COT snapshot: %s", exc)
+        return {
+            "report_date": None,
+            "net_position": None,
+            "spec_pct_oi": None,
+            "open_interest": None,
+            "institutional_bias": "neutral",
+            "source": "none",
+        }
+
+    async def _run_v2_decision(self, symbol: str, strategy_mode: str, ctx_5m: pd.DataFrame, ctx_15m: pd.DataFrame = None, session_name: str = "london", db: AsyncSession = None):
         """Run the v2 AI team with multi-timeframe analysis using ONLY pre-session context.
 
         ctx_5m and ctx_15m are candles strictly BEFORE session_start.
         The verifier is disabled here for two reasons:
           1. In backtesting there is no live market risk to protect against.
           2. The verifier was reducing confidence by 15% on REVISE, causing many
-             borderline signals to fall below the 0.25 gate.
+             borderline signals to fall below the 0.15 gate.
         """
         if ctx_5m.empty:
             return None, None
@@ -302,18 +440,78 @@ class StandaloneBacktestEngine:
                 scores[sig_val] = scores.get(sig_val, 0.0) + w
             overall_signal = max(scores, key=scores.get)
 
+        # Load real macro data if DB session is available
+        macro_snapshot = {"note": "historical backtest — no live macro data"}
+        fundamental = {"event_risk": "low", "direction_bias": "neutral", "note": "historical backtest — no live fundamental data"}
+        cot_snapshot = {
+            "report_date": None, "net_position": None, "spec_pct_oi": None,
+            "open_interest": None, "institutional_bias": "neutral", "source": "none",
+        }
+        if db is not None:
+            try:
+                session_start = pd.to_datetime(ctx_5m.iloc[-1]["timestamp"]) if not ctx_5m.empty else datetime.now(timezone.utc)
+                macro_snapshot = await self._load_macro_snapshot(db, session_start)
+                cot_snapshot = await self._load_cot_snapshot(db, symbol, session_start)
+                # Compute interest rate spread direction from real fed/ecb rates
+                fed_rate = macro_snapshot.get("fed_rate")
+                ecb_rate = macro_snapshot.get("ecb_rate")
+                if fed_rate is not None and ecb_rate is not None:
+                    spread = fed_rate - ecb_rate
+                    fundamental["interest_rate_spread"] = round(spread, 2)
+                    fundamental["direction_bias"] = "bearish" if spread > 0 else "bullish"
+                    fundamental["note"] = f"historical: Fed={fed_rate}%, ECB={ecb_rate}%"
+            except Exception as exc:
+                logger.debug("Failed to load macro/COT snapshot: %s", exc)
+
+        # Build sentiment stub from COT data
+        cot_net = cot_snapshot.get("net_position")
+        sentiment_score = 0.0
+        if cot_net is not None:
+            sentiment_score = 0.5 if cot_net > 0 else -0.5 if cot_net < 0 else 0.0
+        sentiment = {
+            "overall_sentiment": cot_snapshot.get("institutional_bias", "neutral"),
+            "sentiment_score": round(sentiment_score, 2),
+            "institutional": cot_snapshot,
+            "note": f"COT net={cot_net}" if cot_net is not None else "no COT data",
+        }
+
         analysis = {
             "symbol": symbol,
             "technical": {"timeframes": tf_map, "overall_signal": overall_signal},
-            # Fundamental / sentiment / macro are not available from historical candles.
-            # We pass the weakest possible stubs so analysts still respond with a bias
-            # rather than refusing to answer.
-            "fundamental": {"event_risk": "low", "direction_bias": "neutral", "note": "historical backtest — no live fundamental data"},
-            "sentiment": {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "historical backtest — no live sentiment data"},
-            "macro": {"note": "historical backtest — no live macro data"},
+            "fundamental": fundamental,
+            "sentiment": sentiment,
+            "macro": macro_snapshot,
             "regime": "unknown",
             "session": session_name,
         }
+
+        # --- Technical-only baseline mode (Phase 4B) ---
+        if self.technical_only:
+            tech_signal = overall_signal
+            if tech_signal in ("bullish", "bearish"):
+                last_close = float(ctx_5m.iloc[-1]["close"])
+                atr = self._compute_atr(ctx_5m)
+                sl_pips = max(10, min(30, atr * 1.5)) if atr else 15
+                pip = 0.0001 if "JPY" not in symbol else 0.01
+                sl_dist = sl_pips * pip
+                direction = "BUY" if tech_signal == "bullish" else "SELL"
+                entry = last_close
+                sl = entry - sl_dist if direction == "BUY" else entry + sl_dist
+                tp = entry + sl_dist * 1.5 if direction == "BUY" else entry - sl_dist * 1.5
+                return {
+                    "decision": direction,
+                    "confidence": 0.5,
+                    "timeframe": "M5",
+                    "entry_price": round(entry, 5),
+                    "stop_loss": round(sl, 5),
+                    "take_profit": round(tp, 5),
+                    "position_size_pct": 1.0,
+                    "risk_reward": 1.5,
+                    "rationale": f"technical-only {tech_signal}",
+                    "lead_model": "technical_baseline",
+                }, analysis
+            return {"decision": "HOLD", "confidence": 0.0}, analysis
+
         from app.ai.team.orchestrator import TeamDecisionEngine
         from app.ai.suites import resolve_models
         models_map = resolve_models("production")
@@ -356,7 +554,7 @@ class StandaloneBacktestEngine:
         lead_decision = decision.get("decision", "HOLD")
         lead_conf = float(decision.get("confidence", 0))
 
-        if lead_decision not in ("BUY", "SELL") or lead_conf < 0.25:
+        if lead_decision not in ("BUY", "SELL") or lead_conf < 0.15:
             self.hold_reasons["low_confidence"] += 1
             return None
         use_decision = decision
@@ -468,8 +666,8 @@ class StandaloneBacktestEngine:
 
         try:
             # Context window — AI may see only candles BEFORE session_start
-            ctx_5m  = await self._load_context(db, symbol, s_start, timedelta(hours=4),  "5m")
-            ctx_15m = await self._load_context(db, symbol, s_start, timedelta(hours=12), "15m")
+            ctx_5m  = await self._load_context(db, symbol, s_start, timedelta(hours=24), "5m")
+            ctx_15m = await self._load_context(db, symbol, s_start, timedelta(hours=48), "15m")
             if ctx_5m.empty:
                 self.hold_reasons["no_candles"] += 1
                 return None
@@ -477,15 +675,18 @@ class StandaloneBacktestEngine:
             # Execution window — simulator only, AI never sees these
             exec_5m = await self._load_execution(db, symbol, s_start, s_end)
 
-            v2_result, analysis = await self._run_v2_decision(symbol, strategy_mode, ctx_5m, ctx_15m, session_name=s_name)
+            v2_result, analysis = await self._run_v2_decision(symbol, strategy_mode, ctx_5m, ctx_15m, session_name=s_name, db=db)
             if not v2_result:
                 self.hold_reasons["v2_failed"] += 1
                 return None
 
             decision = v2_result.get("decision", "HOLD")
             lead_conf = float(v2_result.get("confidence", 0.0) or 0.0)
-            trade_dict = None
 
+            if decision not in ("BUY", "SELL"):
+                self.hold_reasons["ai_hold"] += 1
+
+            trade_dict = None
             if decision in ("BUY", "SELL"):
                 trade_dict = self._simulate_trade(symbol, v2_result, exec_5m, ctx_candles=ctx_5m)
 
@@ -517,22 +718,22 @@ class StandaloneBacktestEngine:
                     position_size_pct=v2_result.get("position_size_pct", 1.0),
                     risk_reward=v2_result.get("risk_reward", 1.0),
                     rationale=v2_result.get("rationale", ""),
-                    technical_snapshot=analysis.get("technical"),
-                    fundamental_snapshot=analysis.get("fundamental"),
-                    sentiment_snapshot=analysis.get("sentiment"),
+                    technical_snapshot=self._sanitize_json(analysis.get("technical")),
+                    fundamental_snapshot=self._sanitize_json(analysis.get("fundamental")),
+                    sentiment_snapshot=self._sanitize_json(analysis.get("sentiment")),
                     model_used=v2_result.get("lead_model", ""),
                     provider=DataProvider.MT5_ZMQ,
                     engine_version="v2",
-                    analyst_opinions=v2_result.get("analyst_opinions"),
+                    analyst_opinions=self._sanitize_json(v2_result.get("analyst_opinions")),
                     lead_model=v2_result.get("lead_model"),
                     verifier_model=v2_result.get("verifier_model"),
                     verifier_verdict=v2_result.get("verifier_verdict"),
                     verifier_confidence=v2_result.get("verifier_confidence"),
-                    regime={
+                    regime=self._sanitize_json({
                         "strategy_mode": strategy_mode,
                         "session": analysis.get("session", "unknown"),
                         "detected": analysis.get("regime", "unknown"),
-                    },
+                    }),
                     daily_bias=v2_result.get("daily_bias"),
                 )
                 db.add(db_decision)
@@ -585,19 +786,21 @@ class StandaloneBacktestEngine:
             loaded_trades = self.checkpoint.load_trades()
             self.trade_count = len(loaded_trades)  # authoritative count from file
             self.error_count = state.get("error_count", 0)
+            self.hold_reasons.update(state.get("hold_reasons", {}))
             logger.info("Loaded %d trades from checkpoint file", len(loaded_trades))
         else:
             logger.info("Starting fresh backtest: %s to %s, %d symbols", start, end, len(symbols))
 
-        # Generate session list
+        # Generate session list (skip weekends — forex closed)
         all_sessions = []
         current = start.replace(hour=0, minute=0, second=0, microsecond=0)
         while current < end:
-            for name, h0, h1 in SESSIONS:
-                s_start = current.replace(hour=h0, minute=0)
-                s_end = current.replace(hour=h1, minute=0)
-                if s_start >= start and s_end <= end:
-                    all_sessions.append((s_start, s_end, name))
+            if current.weekday() < 5:  # 5 = Saturday, 6 = Sunday
+                for name, h0, h1 in SESSIONS:
+                    s_start = current.replace(hour=h0, minute=0)
+                    s_end = current.replace(hour=h1, minute=0)
+                    if s_start >= start and s_end <= end:
+                        all_sessions.append((s_start, s_end, name))
             current += timedelta(days=1)
 
         logger.info("Total sessions: %d", len(all_sessions))
@@ -648,6 +851,7 @@ class StandaloneBacktestEngine:
                         "budget_spent": estimated_cost,
                         "budget_limit": BUDGET_USD,
                         "status": "PAUSED_BUDGET_EXHAUSTED",
+                        "hold_reasons": dict(self.hold_reasons),
                     })
                     break
                 
@@ -660,6 +864,7 @@ class StandaloneBacktestEngine:
                     "trade_count": self.trade_count,
                     "error_count": self.error_count,
                     "last_session": s_start.isoformat(),
+                    "hold_reasons": dict(self.hold_reasons),
                 })
 
                 # Print progress every 10 sessions with HOLD breakdown
@@ -671,10 +876,11 @@ class StandaloneBacktestEngine:
                     )
                     logger.info(
                         "HOLD breakdown (total=%d): no_candles=%d v2_failed=%d "
-                        "low_conf=%d zero_prices=%d",
+                        "ai_hold=%d low_conf=%d zero_prices=%d",
                         total_holds,
                         self.hold_reasons["no_candles"],
                         self.hold_reasons["v2_failed"],
+                        self.hold_reasons["ai_hold"],
                         self.hold_reasons["low_confidence"],
                         self.hold_reasons["zero_prices"],
                     )
@@ -796,12 +1002,13 @@ def find_latest_checkpoint():
 async def main():
     # Try to resume from latest checkpoint
     latest_run = find_latest_checkpoint()
+    technical_only = os.environ.get("BACKTEST_TECHNICAL_ONLY", "").lower() in ("1", "true", "yes")
     if latest_run:
         logger.info('Resuming from checkpoint: %s', latest_run)
-        engine = StandaloneBacktestEngine(initial_equity=200.0, run_id=latest_run)
+        engine = StandaloneBacktestEngine(initial_equity=200.0, run_id=latest_run, technical_only=technical_only)
     else:
-        engine = StandaloneBacktestEngine(initial_equity=200.0)
-    start = datetime(2025, 10, 15, tzinfo=timezone.utc)
+        engine = StandaloneBacktestEngine(initial_equity=200.0, technical_only=technical_only)
+    start = datetime(2025, 10, 17, tzinfo=timezone.utc)
     end = datetime(2026, 6, 19, tzinfo=timezone.utc)
     symbols = ACTIVE_SYMBOLS
 
@@ -809,6 +1016,7 @@ async def main():
     logger.info("BACKTEST STARTING")
     logger.info("=" * 60)
     logger.info("Run ID: %s", engine.run_id)
+    logger.info("Mode: %s", "TECHNICAL_ONLY" if technical_only else "FULL_AI")
     logger.info("Date range: %s to %s", start, end)
     logger.info("Symbols: %s", symbols)
     logger.info("Starting equity: $%.2f", engine.initial_equity)

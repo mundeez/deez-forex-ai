@@ -105,7 +105,7 @@ def _parse_tff(csv_text: str) -> List[Dict[str, Any]]:
         spec_pct = (abs(nc_net) / oi * 100) if oi else 0.0
 
         records.append({
-            "report_date": report_date,
+            "report_date": datetime.combine(report_date, datetime.min.time()),
             "symbol": symbol,
             "nc_long": nc_long,
             "nc_short": nc_short,
@@ -144,7 +144,7 @@ def _parse_disagg(csv_text: str) -> List[Dict[str, Any]]:
         spec_pct = (abs(nc_net) / oi * 100) if oi else 0.0
 
         records.append({
-            "report_date": report_date,
+            "report_date": datetime.combine(report_date, datetime.min.time()),
             "symbol": symbol,
             "nc_long": nc_long,
             "nc_short": nc_short,
@@ -186,6 +186,10 @@ class COTClient:
             logger.warning("COT Disaggregated fetch failed for %d: %s", year, exc)
 
         return all_records
+
+    async def ingest_year(self, db: AsyncSession, year: int) -> int:
+        """Alias for ingest with explicit year."""
+        return await self.ingest(db, year=year)
 
     async def ingest(self, db: AsyncSession, year: Optional[int] = None) -> int:
         rows = await self.fetch_latest_report(year)

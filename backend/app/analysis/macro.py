@@ -17,22 +17,30 @@ logger = logging.getLogger("app.analysis.macro")
 class MacroAnalyzer:
     """Analyze macro conditions from persisted macro_series data."""
 
-    async def analyze(self, db: AsyncSession = None) -> Dict[str, Any]:
-        """Fetch latest macro readings and compute composite scores."""
+    async def analyze(self, db: AsyncSession = None, as_of: datetime = None) -> Dict[str, Any]:
+        """Fetch macro readings as of a specific date and compute composite scores.
+
+        Args:
+            db: Database session
+            as_of: If provided, fetch the most recent data on or before this datetime.
+                   If None, uses current time (live mode).
+        """
         if db is None:
             return {
                 "dxy": None, "vix": None, "spx": None, "gold": None,
                 "oil": None, "us10y": None, "us02y": None, "us30y": None,
                 "yield_spread_10y_2y": None, "risk_on_score": 0.0, "bias": "neutral",
             }
-        dxy = await self._latest_value(db, "DTWEXBGS")
-        vix = await self._latest_value(db, "VIXCLS")
-        spx = await self._latest_value(db, "SP500")
-        gold = await self._latest_value(db, "GOLDPMGBD228NLBM")
-        oil = await self._latest_value(db, "DCOILWTICO")
-        us10y = await self._latest_value(db, "DGS10")
-        us02y = await self._latest_value(db, "DGS2")
-        us30y = await self._latest_value(db, "DGS30")
+        if as_of is None:
+            as_of = datetime.utcnow()
+        dxy = await self._value_as_of(db, "DTWEXBGS", as_of)
+        vix = await self._value_as_of(db, "VIXCLS", as_of)
+        spx = await self._value_as_of(db, "SP500", as_of)
+        gold = await self._value_as_of(db, "GOLDPMGBD228NLBM", as_of)
+        oil = await self._value_as_of(db, "DCOILWTICO", as_of)
+        us10y = await self._value_as_of(db, "DGS10", as_of)
+        us02y = await self._value_as_of(db, "DGS2", as_of)
+        us30y = await self._value_as_of(db, "DGS30", as_of)
 
         # Yield curve spread (10Y - 2Y)
         yield_spread = None
@@ -103,17 +111,20 @@ class MacroAnalyzer:
             "bias": bias,
         }
 
-    async def _latest_value(self, db: AsyncSession, series_id: str) -> Optional[float]:
-        """Fetch the most recent observation for a macro series."""
+    async def _value_as_of(
+        self, db: AsyncSession, series_id: str, as_of: datetime
+    ) -> Optional[float]:
+        """Fetch the most recent observation for series_id on or before `as_of`."""
         try:
             result = await db.execute(
                 select(models.MacroSeries)
                 .where(models.MacroSeries.series_id == series_id)
+                .where(models.MacroSeries.timestamp <= as_of)
                 .order_by(models.MacroSeries.timestamp.desc())
                 .limit(1)
             )
             row = result.scalar_one_or_none()
             return row.value if row else None
         except Exception:
-            logger.warning("Failed to fetch macro series %s", series_id, exc_info=True)
+            logger.warning("Failed to fetch macro series %s as_of %s", series_id, as_of, exc_info=True)
             return None

@@ -14,9 +14,15 @@ class FundamentalAnalyzer:
         self.news_api_key = settings.NEWS_API_KEY
         self.fred_api_key = settings.FRED_API_KEY
 
-    async def analyze(self, symbol: str = "EURUSD") -> Dict[str, Any]:
-        events = await self._fetch_economic_calendar()
-        rate_diff = await self._fetch_interest_rate_spread()
+    async def analyze(
+        self, symbol: str = "EURUSD", db: AsyncSession = None, as_of: datetime = None
+    ) -> Dict[str, Any]:
+        as_of = as_of or datetime.utcnow()
+        if db is not None:
+            events = await self._fetch_calendar_from_db(db, as_of)
+        else:
+            events = await self._fetch_economic_calendar()
+        rate_diff = await self._fetch_interest_rate_spread(as_of=as_of)
         news = await self._fetch_news_headlines(symbol)
 
         high_impact_count = sum(1 for e in events if e.get("impact") == "high")
@@ -76,6 +82,38 @@ class FundamentalAnalyzer:
             logger.warning("Failed to fetch economic calendar", exc_info=True)
             return self._mock_events()
 
+    async def _fetch_calendar_from_db(
+        self, db: AsyncSession, as_of: datetime, window_hours: int = 24
+    ) -> List[Dict[str, Any]]:
+        """Return events within window_hours before/after as_of from economic_events table."""
+        from app import models
+        from sqlalchemy import select
+        lo = as_of - timedelta(hours=window_hours)
+        hi = as_of + timedelta(hours=window_hours)
+        try:
+            result = await db.execute(
+                select(models.EconomicEvent)
+                .where(models.EconomicEvent.timestamp >= lo)
+                .where(models.EconomicEvent.timestamp <= hi)
+                .order_by(models.EconomicEvent.timestamp)
+            )
+            rows = result.scalars().all()
+            return [
+                {
+                    "title": row.event_name,
+                    "country": row.currency,
+                    "date": row.timestamp.isoformat() if row.timestamp else None,
+                    "impact": row.impact,
+                    "actual": row.actual,
+                    "forecast": row.forecast,
+                    "previous": row.previous,
+                }
+                for row in rows
+            ]
+        except Exception:
+            logger.warning("Failed to fetch calendar from DB", exc_info=True)
+            return self._mock_events()
+
     def _mock_events(self) -> List[Dict[str, Any]]:
         return [
             {
@@ -88,12 +126,13 @@ class FundamentalAnalyzer:
             }
         ]
 
-    async def _fetch_interest_rate_spread(self) -> Optional[float]:
+    async def _fetch_interest_rate_spread(self, as_of: datetime = None) -> Optional[float]:
+        """Fetch interest rate spread from FRED API or fallback."""
         if not self.fred_api_key:
             return 1.25
         try:
-            us_rate = await self._fred_series("DFEDTAR")
-            eu_rate = await self._fred_series("ECBDFR")
+            us_rate = await self._fred_series("DFEDTAR", as_of=as_of)
+            eu_rate = await self._fred_series("ECBDFR", as_of=as_of)
             if us_rate and eu_rate:
                 return round(us_rate - eu_rate, 2)
         except Exception:

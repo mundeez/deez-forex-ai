@@ -27,11 +27,16 @@ FRED_SERIES = {
     "UNRATE": "US Unemployment Rate",
     "DGS10": "US 10-Year Treasury Yield",
     "DGS2": "US 2-Year Treasury Yield",
+    "DGS30": "US 30-Year Treasury Yield",
     "T10Y2Y": "US 10Y-2Y Yield Spread",
     "ECBDFR": "ECB Deposit Facility Rate",
     "VIXCLS": "VIX Close",
     "T10YIE": "US 10Y Breakeven Inflation",
     "BAMLH0A0HYM2": "US High Yield Spread",
+    "DTWEXBGS": "US Dollar Broad Index (DXY proxy)",
+    "DCOILWTICO": "WTI Crude Oil Price",
+    "GOLDPMGBD228NLBM": "Gold Price PM Fix",
+    "SP500": "S&P 500 Index",
 }
 
 
