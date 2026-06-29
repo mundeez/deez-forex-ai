@@ -18,6 +18,17 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 
 function getWsUrl(): string {
   if (typeof window === "undefined") return "";
+  // Derive WebSocket URL from API_URL so REST and WS use the same backend.
+  // Falls back to window.location if API_URL is not set.
+  if (API_URL) {
+    try {
+      const url = new URL(API_URL);
+      const protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      return `${protocol}//${url.host}/ws`;
+    } catch {
+      /* invalid URL, fall through */
+    }
+  }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws`;
 }

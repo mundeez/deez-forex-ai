@@ -2,6 +2,7 @@ import logging
 import httpx
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.utils.time import utc_now
 
