@@ -553,7 +553,12 @@ async def close_position(trade_id: int, db: AsyncSession = Depends(get_db)):
     if not current:
         raise HTTPException(status_code=503, detail="No price available")
     try:
-        trade = await executor.close_trade(db, trade_id, current)
+        trade = await executor.close_trade(db, trade_id, current, close_reason="manual")
+        if trade.status != models.TradeStatus.CLOSED:
+            raise HTTPException(
+                status_code=409,
+                detail="Close rejected: price sanity check failed (corrupt price detected). Trade remains open."
+            )
         return {"detail": "Position closed", "trade_id": trade.id, "exit_price": trade.exit_price, "pnl": trade.pnl}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

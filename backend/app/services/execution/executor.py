@@ -299,12 +299,14 @@ class ExecutionService:
             logger.info("Trade %s already closed (status=%s), skipping", trade_id, trade.status)
             return trade
 
-        # Sanity check: reject obviously corrupt exit prices
+        # Sanity check: reject obviously corrupt exit prices.
+        # Threshold set to 8% — high enough to allow normal forex volatility
+        # (JPY pairs can move 3-5% in a session) while still catching truly
+        # corrupt feed values (e.g., price=0 or off by 10x).
         entry = trade.entry_price
         if entry and exit_price:
             pct_move = abs(exit_price - entry) / entry * 100
-            # Reject if > 2% move on forex in a single tick (impossible)
-            if pct_move > 2.0 and trade.mode == models.TradeMode.PAPER.value:
+            if pct_move > 8.0 and trade.mode == models.TradeMode.PAPER.value:
                 logger.error(
                     "CORRUPT PRICE REJECTED for %s %s: entry=%.5f exit=%.5f (%.2f%% move). Keeping trade OPEN.",
                     trade.symbol, trade.direction, entry, exit_price, pct_move

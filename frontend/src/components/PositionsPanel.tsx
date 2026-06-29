@@ -95,9 +95,14 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
       if (res.ok) {
         fetchPositions();
         if (onRefresh) onRefresh();
+      } else {
+        const data = await res.json().catch(() => ({ detail: "Close failed" }));
+        console.error("Close position failed:", data.detail || res.statusText);
+        alert(`Close failed: ${data.detail || res.statusText}`);
       }
     } catch (e) {
       console.error("close error", e);
+      alert(`Close error: ${e}`);
     }
   }
 
