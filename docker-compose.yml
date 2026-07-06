@@ -41,26 +41,6 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
-  mt5:
-    build:
-      context: ./mt5
-      dockerfile: Dockerfile
-    container_name: deez-forex-mt5
-    restart: unless-stopped
-    privileged: true
-    volumes:
-      - mt5_config:/config
-    ports:
-      - "15555:5555"
-      - "15556:5556"
-      - "18812:18812"
-      - "16901:6901"
-    healthcheck:
-      test: ["CMD", "python3", "/app/health_check.py"]
-      interval: 30s
-      timeout: 25s
-      retries: 3
-      start_period: 180s
 
   backend:
     build:
@@ -82,11 +62,9 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
+      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
-      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -98,14 +76,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-      mt5:
-        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # Default worker — handles maintenance, data ingestion, dead-letter, and any
-  # tasks not yet claimed by a specialised worker.  Also acts as a catch-all
-  # fallback: it listens on ALL queues so nothing silently piles up if one of
-  # the specialised workers is not running.
   celery_worker:
     build:
       context: ./backend
@@ -113,7 +85,7 @@ services:
     container_name: deez-forex-celery
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping || exit 1"]
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination '*@*' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -130,11 +102,9 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
+      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
-      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
@@ -144,101 +114,7 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-      mt5:
-        condition: service_healthy
-    # Consumes all queues (catch-all) — concurrency 4 is fine for maintenance work
-    command: celery -A app.celery_app worker --pool=threads --concurrency=4 --loglevel=info -Q celery,data_ingestion,dead_letter,ai_analysis,execution
-
-  # Execution worker — dedicated to the high-priority 60-180 s position-management
-  # tasks.  Higher concurrency so SL/TP checks never queue behind a slow LLM call.
-  celery_worker_exec:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: deez-forex-celery-exec
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-deez_forex}
-      REDIS_URL: redis://redis:6379/0
-      QDRANT_URL: http://qdrant:6333
-      META_API_TOKEN: ${META_API_TOKEN:-}
-      META_API_ACCOUNT_ID: ${META_API_ACCOUNT_ID:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      NEWS_API_KEY: ${NEWS_API_KEY:-}
-      FRED_API_KEY: ${FRED_API_KEY:-}
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
-      MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
-      MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
-      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-      mt5:
-        condition: service_healthy
-    # 8 threads: position checks are I/O-bound (DB + MetaAPI), parallelize freely
-    command: celery -A app.celery_app worker --pool=threads --concurrency=8 --loglevel=info -Q execution
-
-  # AI analysis worker — dedicated to slow LLM calls.  Keep concurrency low (2)
-  # to avoid hammering the OpenRouter rate limits and running out of memory.
-  celery_worker_ai:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: deez-forex-celery-ai
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-deez_forex}
-      REDIS_URL: redis://redis:6379/0
-      QDRANT_URL: http://qdrant:6333
-      META_API_TOKEN: ${META_API_TOKEN:-}
-      META_API_ACCOUNT_ID: ${META_API_ACCOUNT_ID:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      NEWS_API_KEY: ${NEWS_API_KEY:-}
-      FRED_API_KEY: ${FRED_API_KEY:-}
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
-      MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
-      MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
-      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
-      mt5:
-        condition: service_healthy
-    # 2 threads: LLM calls block for seconds; more than 2 concurrent calls risks
-    # hitting OpenRouter rate limits and starving the analysis pipeline.
-    command: celery -A app.celery_app worker --pool=threads --concurrency=2 --loglevel=info -Q ai_analysis
+    command: celery -A app.celery_app worker --pool=threads --loglevel=info
 
   celery_beat:
     build:
@@ -247,7 +123,7 @@ services:
     container_name: deez-forex-beat
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping || exit 1"]
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination '*@*' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -264,11 +140,9 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
-      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-mt5}
+      MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
-      MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
-      MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
@@ -278,8 +152,6 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-      mt5:
-        condition: service_healthy
     command: celery -A app.celery_app beat --loglevel=info
 
   frontend:
@@ -298,41 +170,7 @@ services:
       - backend
     command: npm start
 
-  dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    container_name: deez-forex-dashboard
-    restart: unless-stopped
-    environment:
-      API_BASE_URL: http://backend:8000
-    ports:
-      - "28501:8501"
-    depends_on:
-      backend:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  nginx:
-    build:
-      context: ./nginx
-      dockerfile: Dockerfile
-    container_name: deez-forex-nginx
-    restart: unless-stopped
-    ports:
-      - "28080:80"
-    depends_on:
-      - mt5
-      - backend
-
 volumes:
   postgres_data:
   redis_data:
   qdrant_data:
-  mt5_config:
-

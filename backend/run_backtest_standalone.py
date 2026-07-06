@@ -456,48 +456,58 @@ class StandaloneBacktestEngine:
                 scores[sig_val] = scores.get(sig_val, 0.0) + w
             overall_signal = max(scores, key=scores.get)
 
-        # Load real macro data if DB session is available
-        macro_snapshot = {"note": "historical backtest — no live macro data"}
-        fundamental = {"event_risk": "low", "direction_bias": "neutral", "note": "historical backtest — no live fundamental data"}
-        cot_snapshot = {
-            "report_date": None, "net_position": None, "spec_pct_oi": None,
-            "open_interest": None, "institutional_bias": "neutral", "source": "none",
-        }
-        if db is not None:
-            try:
-                session_start = pd.to_datetime(ctx_5m.iloc[-1]["timestamp"]) if not ctx_5m.empty else datetime.now(timezone.utc)
-                macro_snapshot = await self._load_macro_snapshot(db, session_start)
-                cot_snapshot = await self._load_cot_snapshot(db, symbol, session_start)
-                # Compute interest rate spread direction from real fed/ecb rates
-                fed_rate = macro_snapshot.get("fed_rate")
-                ecb_rate = macro_snapshot.get("ecb_rate")
-                if fed_rate is not None and ecb_rate is not None:
-                    spread = fed_rate - ecb_rate
-                    fundamental["interest_rate_spread"] = round(spread, 2)
-                    fundamental["direction_bias"] = "bearish" if spread > 0 else "bullish"
-                    fundamental["note"] = f"historical: Fed={fed_rate}%, ECB={ecb_rate}%"
-            except Exception as exc:
-                logger.debug("Failed to load macro/COT snapshot: %s", exc)
+        # --- Fetch real historical fundamental/sentiment/macro data ---
+        # Use the real analysis modules with as_of=session_start to avoid look-ahead bias.
+        # In technical-only mode, skip analyzer calls (no LLM/API needed) and use stubs.
+        # Falls back to neutral stubs if DB is unavailable or analyzers fail.
+        session_start = pd.to_datetime(ctx_5m.iloc[-1]["timestamp"]) if not ctx_5m.empty else datetime.now(timezone.utc)
+        if self.technical_only:
+            # Technical-only mode: skip all analyzer calls, use neutral stubs
+            fundamental_data = {"event_risk": "low", "direction_bias": "neutral", "note": "technical-only"}
+            sentiment_data = {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "technical-only"}
+            macro_data = {"bias": "neutral", "risk_on_score": 0.0, "note": "technical-only"}
+        elif db is not None:
+            from app.analysis.fundamental import FundamentalAnalyzer
+            from app.analysis.sentiment import SentimentAnalyzer
+            from app.analysis.macro import MacroAnalyzer
 
-        # Build sentiment stub from COT data
-        cot_net = cot_snapshot.get("net_position")
-        sentiment_score = 0.0
-        if cot_net is not None:
-            sentiment_score = 0.5 if cot_net > 0 else -0.5 if cot_net < 0 else 0.0
-        sentiment = {
-            "overall_sentiment": cot_snapshot.get("institutional_bias", "neutral"),
-            "sentiment_score": round(sentiment_score, 2),
-            "institutional": cot_snapshot,
-            "note": f"COT net={cot_net}" if cot_net is not None else "no COT data",
-        }
+            fundamental = FundamentalAnalyzer()
+            sentiment = SentimentAnalyzer()
+            macro = MacroAnalyzer()
+
+            try:
+                fundamental_data = await fundamental.analyze(
+                    symbol, db=db, as_of=session_start
+                )
+            except Exception as exc:
+                logger.warning("Fundamental analysis failed for %s: %s", symbol, exc)
+                fundamental_data = {"event_risk": "low", "direction_bias": "neutral", "events": [], "news_headlines": []}
+
+            try:
+                sentiment_data = await sentiment.analyze(
+                    symbol, db=db, as_of=session_start
+                )
+            except Exception as exc:
+                logger.warning("Sentiment analysis failed for %s: %s", symbol, exc)
+                sentiment_data = {"overall_sentiment": "neutral", "sentiment_score": 0.0}
+
+            try:
+                macro_data = await macro.analyze(db=db, as_of=session_start)
+            except Exception as exc:
+                logger.warning("Macro analysis failed: %s", exc)
+                macro_data = {"bias": "neutral", "risk_on_score": 0.0}
+        else:
+            fundamental_data = {"event_risk": "low", "direction_bias": "neutral", "note": "no db"}
+            sentiment_data = {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "no db"}
+            macro_data = {"note": "no db"}
 
         analysis = {
             "symbol": symbol,
             "technical": {"timeframes": tf_map, "overall_signal": overall_signal},
-            "fundamental": fundamental,
-            "sentiment": sentiment,
-            "macro": macro_snapshot,
-            "regime": "unknown",
+            "fundamental": fundamental_data,
+            "sentiment": sentiment_data,
+            "macro": macro_data,
+            "regime": macro_data.get("bias", "unknown"),
             "session": session_name,
         }
 

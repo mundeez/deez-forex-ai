@@ -23,7 +23,7 @@ class FundamentalAnalyzer:
             events = await self._fetch_calendar_from_db(db, as_of)
         else:
             events = await self._fetch_economic_calendar()
-        rate_diff = await self._fetch_interest_rate_spread(as_of=as_of)
+        rate_diff = await self._fetch_interest_rate_spread(as_of=as_of, db=db)
         news = await self._fetch_news_headlines(symbol)
 
         high_impact_count = sum(1 for e in events if e.get("impact") == "high")
@@ -127,20 +127,35 @@ class FundamentalAnalyzer:
             }
         ]
 
-    async def _fetch_interest_rate_spread(self, as_of: datetime = None) -> Optional[float]:
+    async def _fetch_interest_rate_spread(self, as_of: datetime = None, db: "AsyncSession" = None) -> Optional[float]:
         """Fetch interest rate spread from FRED API or fallback."""
         if not self.fred_api_key:
             return 1.25
         try:
-            us_rate = await self._fred_series("DFEDTAR", as_of=as_of)
-            eu_rate = await self._fred_series("ECBDFR", as_of=as_of)
+            us_rate = await self._fred_series("DFEDTAR", as_of=as_of, db=db)
+            eu_rate = await self._fred_series("ECBDFR", as_of=as_of, db=db)
             if us_rate and eu_rate:
                 return round(us_rate - eu_rate, 2)
         except Exception:
             logger.warning("Failed to fetch interest rate spread from FRED", exc_info=True)
         return 1.25
 
-    async def _fred_series(self, series_id: str) -> Optional[float]:
+    async def _fred_series(self, series_id: str, as_of: datetime = None,
+                           db: "AsyncSession" = None) -> Optional[float]:
+        """Fetch a FRED series value, optionally point-in-time from DB."""
+        if as_of is not None and db is not None:
+            from sqlalchemy import text as _text
+            try:
+                result = await db.execute(
+                    _text("SELECT value FROM macro_series WHERE series_id = :sid "
+                          "AND timestamp <= :as_of ORDER BY timestamp DESC LIMIT 1"),
+                    {"sid": series_id, "as_of": as_of},
+                )
+                row = result.fetchone()
+                if row:
+                    return float(row[0])
+            except Exception:
+                pass  # fall through to API
         url = f"https://api.stlouisfed.org/fred/series/observations"
         params = {
             "series_id": series_id,
