@@ -169,9 +169,15 @@ class SessionBacktestEngine:
         return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
     async def _run_v2_decision(
-        self, symbol: str, strategy_mode: str, ctx_5m: pd.DataFrame, ctx_15m: pd.DataFrame = None, session_name: str = "asian",
+        self, symbol: str, strategy_mode: str, ctx_5m: pd.DataFrame, ctx_15m: pd.DataFrame = None,
+        session_name: str = "asian", db=None, session_start: datetime = None,
     ) -> Optional[Dict[str, Any]]:
-        """Run the v2 AI team with multi-timeframe analysis snapshot using ONLY pre-session context."""
+        """Run the v2 AI team with multi-timeframe analysis snapshot using ONLY pre-session context.
+
+        When db and session_start are provided, fetches real historical fundamental,
+        sentiment, and macro data from DB tables with point-in-time filtering (as_of=session_start).
+        Otherwise falls back to neutral stubs.
+        """
         if ctx_5m.empty:
             return None
 
@@ -189,13 +195,49 @@ class SessionBacktestEngine:
                 scores[sig_val] = scores.get(sig_val, 0.0) + w
             overall_signal = max(scores, key=scores.get)
 
+        # --- Fetch real historical fundamental/sentiment/macro data ---
+        if db is not None and session_start is not None:
+            from app.analysis.fundamental import FundamentalAnalyzer
+            from app.analysis.sentiment import SentimentAnalyzer
+            from app.analysis.macro import MacroAnalyzer
+
+            fundamental = FundamentalAnalyzer()
+            sentiment = SentimentAnalyzer()
+            macro = MacroAnalyzer()
+
+            try:
+                fundamental_data = await fundamental.analyze(
+                    symbol, db=db, as_of=session_start
+                )
+            except Exception as exc:
+                logger.warning("Fundamental analysis failed for %s: %s", symbol, exc)
+                fundamental_data = {"event_risk": "low", "direction_bias": "neutral", "events": [], "news_headlines": []}
+
+            try:
+                sentiment_data = await sentiment.analyze(
+                    symbol, db=db, as_of=session_start
+                )
+            except Exception as exc:
+                logger.warning("Sentiment analysis failed for %s: %s", symbol, exc)
+                sentiment_data = {"overall_sentiment": "neutral", "sentiment_score": 0.0}
+
+            try:
+                macro_data = await macro.analyze(db=db, as_of=session_start)
+            except Exception as exc:
+                logger.warning("Macro analysis failed: %s", exc)
+                macro_data = {"bias": "neutral", "risk_on_score": 0.0}
+        else:
+            fundamental_data = {"event_risk": "low", "direction_bias": "neutral", "note": "no db"}
+            sentiment_data = {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "no db"}
+            macro_data = {"note": "no db"}
+
         analysis = {
             "symbol": symbol,
             "technical": {"timeframes": tf_map, "overall_signal": overall_signal},
-            "fundamental": {"event_risk": "low", "direction_bias": "neutral", "note": "historical backtest"},
-            "sentiment": {"overall_sentiment": "neutral", "sentiment_score": 0.0, "note": "historical backtest"},
-            "macro": {"note": "historical backtest"},
-            "regime": "unknown",
+            "fundamental": fundamental_data,
+            "sentiment": sentiment_data,
+            "macro": macro_data,
+            "regime": macro_data.get("bias", "unknown"),
             "session": session_name,
         }
 
@@ -348,7 +390,7 @@ class SessionBacktestEngine:
             await r.aclose()
             return None
 
-        decision = await self._run_v2_decision(symbol, strategy_mode, ctx_5m, ctx_15m, session_name=session_name)
+        decision = await self._run_v2_decision(symbol, strategy_mode, ctx_5m, ctx_15m, session_name=session_name, db=db, session_start=session_start)
         if decision:
             await self._cache_decision(r, symbol, session_start, decision)
         await r.aclose()
