@@ -12,10 +12,16 @@ Use this tool for:
   - Checking data pipeline integrity (macro, COT flows correctly)
   - Sanity-checking execution simulation (spreads, SL/TP, ATR sizing)
   - Technical-only baseline: BACKTEST_TECHNICAL_ONLY=true (no LLM calls)
+  - ML filtering gates (match live trading):
+      BACKTEST_ENTRY_GATE=true        (XGBoost entry quality gate)
+      BACKTEST_ENTRY_GATE_THRESHOLD=0.40
+      BACKTEST_TEAM_META=true         (TeamMetaModel confidence adjuster)
+      BACKTEST_MEMORY_GUARD=true      (Qdrant pattern veto)
+      BACKTEST_MEMORY_GUARD_MIN_WR=0.35
+    Set any to "false" to disable that gate.
 
 Do NOT use for:
-  - Meta-classifier training
-  - Strategy profitability backtesting
+  - Strategy profitability backtesting (without ML gates)
   - Parameter optimization
 
 Run directly in the backend container (NOT via Celery):
@@ -153,6 +159,18 @@ class StandaloneBacktestEngine:
         self.trade_count = 0
         self.error_count = 0
         self.technical_only = technical_only
+        # --- ML filtering gates (match live trading behaviour) ---
+        # Entry gate: XGBoost model blocks low-quality entries before LLM call
+        self.entry_gate_enabled = os.environ.get("BACKTEST_ENTRY_GATE", "true").lower() in ("1", "true", "yes")
+        self.entry_gate_threshold = float(os.environ.get("BACKTEST_ENTRY_GATE_THRESHOLD", "0.40"))
+        # TeamMeta: adjusts confidence based on analyst agreement patterns
+        self.team_meta_enabled = os.environ.get("BACKTEST_TEAM_META", "true").lower() in ("1", "true", "yes")
+        # Memory guard: Qdrant veto on historically poor setups
+        self.memory_guard_enabled = os.environ.get("BACKTEST_MEMORY_GUARD", "true").lower() in ("1", "true", "yes")
+        self.memory_guard_min_winrate = float(os.environ.get("BACKTEST_MEMORY_GUARD_MIN_WR", "0.35"))
+        # Cached model instances (reloaded after retrain)
+        self._entry_model = None
+        self._team_meta_model = None
         # HOLD-reason counters for diagnostics
         self.hold_reasons: Dict[str, int] = {
             "no_candles": 0,
@@ -160,6 +178,8 @@ class StandaloneBacktestEngine:
             "ai_hold": 0,
             "low_confidence": 0,
             "zero_prices": 0,
+            "entry_gate": 0,
+            "memory_guard": 0,
         }
 
     @staticmethod
@@ -511,6 +531,17 @@ class StandaloneBacktestEngine:
             "session": session_name,
         }
 
+        # --- Entry Gate: XGBoost pre-filter (skip low-quality entries before LLM call) ---
+        if not self.technical_only and self.entry_gate_enabled:
+            entry_score = self._predict_entry_quality(analysis)
+            if entry_score is not None and entry_score < self.entry_gate_threshold:
+                self.hold_reasons["entry_gate"] += 1
+                logger.info("Entry gate blocked %s (score=%.2f < %.2f)",
+                           symbol, entry_score, self.entry_gate_threshold)
+                return {"decision": "HOLD", "confidence": 0.0,
+                        "rationale": f"Entry gate blocked (score={entry_score:.2f})",
+                        "lead_model": "xgb_entry_gate"}, analysis
+
         # --- Technical-only baseline mode (Phase 4B) ---
         if self.technical_only:
             tech_signal = overall_signal
@@ -555,6 +586,17 @@ class StandaloneBacktestEngine:
         )
         try:
             result = await team.decide(symbol, strategy_mode, analysis)
+            # --- TeamMetaModel: adjust confidence based on analyst agreement patterns ---
+            if result and self.team_meta_enabled and result.get("decision") in ("BUY", "SELL"):
+                meta_score = self._predict_team_meta(result)
+                if meta_score is not None:
+                    old_conf = float(result.get("confidence", 0.5))
+                    adjusted = min(old_conf * (0.70 + 0.60 * meta_score), 1.0)
+                    result["confidence"] = adjusted
+                    result["rationale"] = (result.get("rationale", "") +
+                                          f" | TeamMeta: score={meta_score:.2f}, conf {old_conf:.2f}->{adjusted:.2f}")
+                    logger.debug("TeamMeta adjusted %s: %.2f -> %.2f (meta=%.2f)",
+                                symbol, old_conf, adjusted, meta_score)
             # Sanitize confidence: models sometimes return lists
             if result and "confidence" in result:
                 c = result["confidence"]
@@ -568,6 +610,70 @@ class StandaloneBacktestEngine:
         except Exception as exc:
             logger.warning("v2 decision failed for %s: %s", symbol, str(exc)[:80])
             return None, None
+
+    # ------------------------------------------------------------------
+    # ML filtering helpers
+    # ------------------------------------------------------------------
+
+    def _predict_entry_quality(self, analysis: Dict[str, Any]) -> Optional[float]:
+        """Run EntryQualityModel on the analysis snapshot. Returns None if no model loaded."""
+        try:
+            if self._entry_model is None:
+                from app.services.ml.entry_model import EntryQualityModel
+                self._entry_model = EntryQualityModel()
+            if self._entry_model.model is None:
+                return None
+            from app.services.feature_store import FeatureStore
+            features = FeatureStore.compute_entry_features(analysis)
+            return self._entry_model.predict(features)
+        except Exception as exc:
+            logger.debug("Entry gate predict failed: %s", str(exc)[:80])
+            return None
+
+    def _predict_team_meta(self, result: Dict[str, Any]) -> Optional[float]:
+        """Run TeamMetaModel on the AI team's analyst opinions. Returns None if no model loaded."""
+        try:
+            if self._team_meta_model is None:
+                from app.services.ml.team_meta_model import TeamMetaModel
+                self._team_meta_model = TeamMetaModel()
+            if self._team_meta_model.model is None:
+                return None
+            return self._team_meta_model.predict(
+                result.get("analyst_opinions"),
+                result.get("verifier_verdict"),
+                result.get("lead_model"),
+            )
+        except Exception as exc:
+            logger.debug("TeamMeta predict failed: %s", str(exc)[:80])
+            return None
+
+    async def _memory_guard_check(
+        self, vs, analysis: Dict[str, Any], decision: str, session_start: datetime
+    ) -> tuple[bool, str]:
+        """Check Qdrant for historically similar setups. Returns (ok, reason)."""
+        if not self.memory_guard_enabled:
+            return True, ""
+        try:
+            # Set cutoff so we don't retrieve future trades (point-in-time)
+            os.environ["BACKTEST_DATE_CUTOFF"] = session_start.isoformat()
+            similar = await vs.search_similar(analysis.get("technical", {}), limit=20)
+        except Exception:
+            return True, ""
+        finally:
+            os.environ.pop("BACKTEST_DATE_CUTOFF", None)
+
+        same = [s for s in similar
+                if s.get("decision") == decision
+                and s.get("outcome_pnl") is not None]
+        if len(same) < 5:
+            return True, ""
+        wins = sum(1 for s in same if (s.get("outcome_pnl") or 0) > 0)
+        win_rate = wins / len(same)
+        avg_pnl = sum((s.get("outcome_pnl") or 0) for s in same) / len(same)
+        if win_rate < self.memory_guard_min_winrate and avg_pnl < 0:
+            return False, (f"Memory guard veto: {len(same)} similar {decision} setups "
+                          f"({win_rate:.0%} win, avg ${avg_pnl:.2f})")
+        return True, ""
 
     def _simulate_trade(
         self, symbol: str, decision: Dict, exec_candles: pd.DataFrame, ctx_candles: pd.DataFrame = None
@@ -714,7 +820,26 @@ class StandaloneBacktestEngine:
 
             trade_dict = None
             if decision in ("BUY", "SELL"):
-                trade_dict = self._simulate_trade(symbol, v2_result, exec_5m, ctx_candles=ctx_5m)
+                # --- Memory Guard: Qdrant veto on historically poor setups ---
+                if self.memory_guard_enabled:
+                    try:
+                        from app.services.vector_store import VectorStore
+                        vs = VectorStore()
+                        ok, veto_reason = await self._memory_guard_check(
+                            vs, analysis, decision, s_start
+                        )
+                        if not ok:
+                            self.hold_reasons["memory_guard"] += 1
+                            logger.info("Memory guard vetoed %s %s: %s", symbol, decision, veto_reason)
+                            v2_result["decision"] = "HOLD"
+                            v2_result["rationale"] = (v2_result.get("rationale", "") +
+                                                      f" | {veto_reason}")
+                            decision = "HOLD"
+                    except Exception as mg_exc:
+                        logger.debug("Memory guard failed for %s: %s", symbol, str(mg_exc)[:80])
+
+                if decision in ("BUY", "SELL"):
+                    trade_dict = self._simulate_trade(symbol, v2_result, exec_5m, ctx_candles=ctx_5m)
 
             # ------------------------------------------------------------------
             # Persist AIDecision + Trade to DB for meta-model training
@@ -788,6 +913,29 @@ class StandaloneBacktestEngine:
                     db.add(db_trade)
 
                 await db.commit()
+
+                # --- Store snapshot in Qdrant for memory guard ---
+                if self.memory_guard_enabled and trade_dict:
+                    try:
+                        from app.services.vector_store import VectorStore
+                        vs = VectorStore()
+                        point_id = str(db_decision.id)
+                        await vs.upsert_snapshot(
+                            point_id=point_id,
+                            snapshot=analysis.get("technical", {}),
+                            payload={
+                                "symbol": symbol,
+                                "decision": decision,
+                                "confidence": lead_conf,
+                                "outcome_pnl": trade_dict["pnl_usd"],
+                                "outcome_status": trade_dict.get("close_reason", "unknown"),
+                                "strategy_mode": strategy_mode,
+                                "timestamp": s_start.isoformat(),
+                            },
+                        )
+                    except Exception as qdrant_exc:
+                        logger.debug("Qdrant snapshot store failed: %s", str(qdrant_exc)[:80])
+
             except Exception as db_exc:
                 logger.warning("DB persist failed for %s %s: %s", symbol, s_start, str(db_exc)[:100])
                 await db.rollback()
@@ -902,13 +1050,15 @@ class StandaloneBacktestEngine:
                     )
                     logger.info(
                         "HOLD breakdown (total=%d): no_candles=%d v2_failed=%d "
-                        "ai_hold=%d low_conf=%d zero_prices=%d",
+                        "ai_hold=%d low_conf=%d zero_prices=%d entry_gate=%d memory_guard=%d",
                         total_holds,
                         self.hold_reasons["no_candles"],
                         self.hold_reasons["v2_failed"],
                         self.hold_reasons["ai_hold"],
                         self.hold_reasons["low_confidence"],
                         self.hold_reasons["zero_prices"],
+                        self.hold_reasons["entry_gate"],
+                        self.hold_reasons["memory_guard"],
                     )
 
                 # Rate limit: small sleep between sessions
@@ -966,9 +1116,15 @@ class StandaloneBacktestEngine:
             if len(entry_data) >= 100:
                 import pandas as pd
                 EntryQualityModel().train(FeatureStore.export_training_set(entry_data))
+                # Reload cached instance so subsequent predictions use the new model
+                self._entry_model = EntryQualityModel()
+                logger.info("Entry gate model reloaded")
             if len(team_data) >= 100:
                 import pandas as pd
                 TeamMetaModel().train(pd.DataFrame(team_data))
+                # Reload cached instance so subsequent predictions use the new model
+                self._team_meta_model = TeamMetaModel()
+                logger.info("TeamMeta model reloaded")
             logger.info("Retrained on %d trades", len(trades))
         except Exception as exc:
             logger.warning("Retrain failed: %s", str(exc)[:120])
