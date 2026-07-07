@@ -7,12 +7,13 @@ live real-time data (news sentiment, retail positioning, economic calendar) to
 generate tradeable signals. With only stale pre-session candles + historical
 macro/COT, the AI correctly returns HOLD at near-zero confidence.
 
-### Key Findings (2026-06-27)
+### Key Findings
 
-| Mode | Trades | Win Rate | P&L | Conclusion |
-|------|--------|----------|-----|------------|
-| Technical-only baseline | 217 | 27.2% | -$261 | Raw technical signal has **negative edge** |
-| Full AI (stale data) | 0 | N/A | $0 | AI correctly uncertain without live context |
+| Date | Mode | Trades | Win Rate | P&L | Errors | Conclusion |
+|------|------|--------|----------|-----|--------|------------|
+| 2026-06-27 | Technical-only (partial) | 217 | 27.2% | -$261 | 0 | Raw technical signal has **negative edge** |
+| 2026-06-27 | Full AI (stale data) | 0 | N/A | $0 | 0 | AI correctly uncertain without live context |
+| 2026-07-07 | Technical-only (full 700 sessions) | 6,399 | 33.4% | -$2,815 | 0 | Pipeline validated end-to-end, negative edge confirmed |
 
 **Decision:** Use backtest only for:
 - Verifying indicator calculations on historical candles
