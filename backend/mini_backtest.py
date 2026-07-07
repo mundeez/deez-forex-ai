@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Mini backtest: run 14 days to generate labeled production-suite data."""
+import os
+os.environ["BACKTEST_DISABLE_QDRANT"] = "1"
+
 import asyncio
 import sys
 sys.path.insert(0, "/app")

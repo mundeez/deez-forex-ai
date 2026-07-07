@@ -38,6 +38,9 @@ docker compose exec backend bash -c "BACKTEST_TECHNICAL_ONLY=true python3 /app/r
 |--------|------|------------|
 | FRED macro_series | 2,402 | Jun 2025 – Jun 2026 |
 | CFTC COT reports | 734 | 2025 + 2026 |
+| Retail sentiment (COT proxy) | 734 | Jan 2025 – Jun 2026 |
+| GDELT news headlines | 46,803 | Oct 2025 – Jun 2026 |
+| ForexFactory economic events | 996 | Oct 2025 – Jul 2026 |
 
 ### Files Modified
 
@@ -47,6 +50,9 @@ docker compose exec backend bash -c "BACKTEST_TECHNICAL_ONLY=true python3 /app/r
 - `backend/app/analysis/fundamental.py` — `as_of` param, DB calendar query
 - `backend/app/services/data/fred_client.py` — added missing series IDs
 - `backend/app/services/data/cot_client.py` — fixed date format, DB constraint
+- `backend/app/services/data/retail_client.py` — retail sentiment from COT proxy + Myfxbook scraper
+- `backend/app/services/data/gdelt_client.py` — GDELT news headline ingestion
+- `backend/app/services/data/ff_client.py` — ForexFactory economic calendar scraper
 - `backend/app/tasks/backtest_full.py` — same engine fixes
 
 ### Implementation Plan

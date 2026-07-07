@@ -5,6 +5,7 @@ Replaces all mocked data with real sources:
 - Institutional: CFTC COT from our cot_reports table
 - News: keyword-enhanced + headline caching for future FinBERT
 """
+import json
 import logging
 import httpx
 from datetime import datetime, timedelta
@@ -18,6 +19,13 @@ from app import models
 settings = get_settings()
 logger = logging.getLogger("app.analysis.sentiment")
 
+# Redis-backed cache keys for news headlines to avoid hitting the NewsAPI
+# free-tier rate limits (100 requests/day) with multiple workers/symbols.
+_NEWS_CACHE_KEY = "newsapi:headlines:all"
+_NEWS_LIMITER_KEY = "newsapi:limiter"
+_NEWS_CACHE_TTL_SECONDS = 3600 * 3  # 3 hours
+_NEWS_MAX_CALLS_PER_DAY = 90  # keep below 100 free-tier cap
+
 
 class SentimentAnalyzer:
     def __init__(self):
@@ -27,9 +35,17 @@ class SentimentAnalyzer:
         self, symbol: str = "EURUSD", db: AsyncSession = None, as_of: datetime = None
     ) -> Dict[str, Any]:
         as_of = as_of or datetime.utcnow()
-        retail = await self._fetch_retail_sentiment(symbol)
-        news_sentiment = await self._analyze_news_sentiment(symbol)
-        cot = await self._fetch_cot_from_db(db, symbol, as_of) if db else self._fallback_cot()
+
+        if db is not None:
+            # Backtest / point-in-time path — query DB tables
+            retail = await self._fetch_retail_from_db(db, symbol, as_of)
+            news_sentiment = await self._fetch_news_sentiment_from_db(db, symbol, as_of)
+            cot = await self._fetch_cot_from_db(db, symbol, as_of)
+        else:
+            # Live path — use live APIs (unchanged behaviour)
+            retail = await self._fetch_retail_sentiment(symbol)
+            news_sentiment = await self._analyze_news_sentiment(symbol)
+            cot = self._fallback_cot()
 
         overall = 0.0
         count = 0
@@ -160,23 +176,69 @@ class SentimentAnalyzer:
         }
 
     async def _fetch_headlines(self, symbol: str) -> List[str]:
+        """Fetch headlines with a shared Redis cache and global daily rate limiter.
+
+        NewsAPI's free tier only allows ~100 requests/day. Multiple workers and
+        pairs would exhaust this quickly, so we cache one global headline list for
+        several hours and reuse it for every symbol. If the API returns 429, we
+        cache an empty result for 1 hour so we stop hammering it.
+        """
+        import redis.asyncio as aioredis
+        from httpx import HTTPStatusError
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
         try:
+            cached = await r.get(_NEWS_CACHE_KEY)
+            if cached:
+                try:
+                    headlines = json.loads(cached)
+                    if isinstance(headlines, list):
+                        logger.debug("Using cached headlines for %s", symbol)
+                        return headlines
+                except json.JSONDecodeError:
+                    pass
+
+            # Global daily limiter: count calls made today. If over cap, skip.
+            today = datetime.utcnow().strftime("%Y%m%d")
+            limiter_key = f"{_NEWS_LIMITER_KEY}:{today}"
+            calls_today = int(await r.get(limiter_key) or 0)
+            if calls_today >= _NEWS_MAX_CALLS_PER_DAY:
+                logger.warning("NewsAPI daily call cap reached (%s); using cached/fallback headlines", calls_today)
+                return []
+
             url = "https://newsapi.org/v2/everything"
             params = {
-                "q": f"{symbol[:3]} {symbol[3:]} forex OR EUR/USD",
+                "q": "forex OR EUR/USD OR GBP/USD OR USD/JPY OR USD/CHF OR USD/CAD OR AUD/USD OR NZD/USD OR XAU/USD",
                 "apiKey": self.news_api_key,
                 "sortBy": "publishedAt",
-                "pageSize": 10,
+                "pageSize": 25,
                 "language": "en",
+                "from": (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d"),
             }
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
-            return [a["title"] for a in data.get("articles", [])]
+            # Always count the request toward the daily cap, even if it fails
+            calls_today = await r.incr(limiter_key)
+            await r.expire(limiter_key, 86400)
+
+            if resp.status_code == 429:
+                logger.warning("NewsAPI rate-limited (429); backing off for 1 hour")
+                await r.set(_NEWS_CACHE_KEY, json.dumps([]), ex=3600)
+                return []
+
+            resp.raise_for_status()
+            data = resp.json()
+            headlines = [a["title"] for a in data.get("articles", [])]
+
+            await r.set(_NEWS_CACHE_KEY, json.dumps(headlines), ex=_NEWS_CACHE_TTL_SECONDS)
+            return headlines
+        except HTTPStatusError as e:
+            logger.warning("NewsAPI request failed (%s): %s", e.response.status_code, e.response.text[:120])
+            return []
         except Exception:
             logger.warning("Failed to fetch news headlines", exc_info=True)
             return []
+        finally:
+            await r.close()
 
     # ------------------------------------------------------------------
     # COT data from our database (real CFTC data, not mocked)
@@ -239,3 +301,81 @@ class SentimentAnalyzer:
             "institutional_bias": "neutral",
             "source": "none",
         }
+
+    # ------------------------------------------------------------------
+    # Point-in-time DB queries (for backtest / historical analysis)
+    # ------------------------------------------------------------------
+
+    async def _fetch_retail_from_db(
+        self, db: AsyncSession, symbol: str, as_of: datetime
+    ) -> Dict[str, Any]:
+        """Fetch retail sentiment from retail_sentiment table as of `as_of`."""
+        try:
+            result = await db.execute(
+                select(models.RetailSentiment)
+                .where(models.RetailSentiment.symbol == symbol)
+                .where(models.RetailSentiment.timestamp <= as_of)
+                .order_by(models.RetailSentiment.timestamp.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                long_pct = row.long_pct or 50.0
+                short_pct = row.short_pct or 50.0
+                net = (long_pct - short_pct) / 100.0
+                return {
+                    "long_pct": round(long_pct, 1),
+                    "short_pct": round(short_pct, 1),
+                    "score": round(-net, 2),  # contrarian
+                    "contrarian_signal": "bearish" if long_pct > 55 else "bullish" if short_pct > 55 else "neutral",
+                    "source": row.source or "db",
+                }
+        except Exception:
+            logger.warning("Failed to fetch retail sentiment from DB for %s", symbol, exc_info=True)
+        return {
+            "long_pct": 50.0,
+            "short_pct": 50.0,
+            "score": 0.0,
+            "contrarian_signal": "neutral",
+            "source": "none",
+        }
+
+    async def _fetch_news_sentiment_from_db(
+        self, db: AsyncSession, symbol: str, as_of: datetime, window_hours: int = 24
+    ) -> Dict[str, Any]:
+        """Fetch news sentiment from news_headlines table within window of as_of."""
+        try:
+            lo = as_of - timedelta(hours=window_hours)
+            hi = as_of + timedelta(hours=window_hours)
+            result = await db.execute(
+                select(models.NewsHeadline)
+                .where(models.NewsHeadline.published_at >= lo)
+                .where(models.NewsHeadline.published_at <= hi)
+                .where(
+                    (models.NewsHeadline.symbol == symbol) |
+                    (models.NewsHeadline.symbol.is_(None))
+                )
+                .order_by(models.NewsHeadline.published_at.desc())
+                .limit(25)
+            )
+            rows = result.scalars().all()
+            if not rows:
+                return {"score": 0.0, "headlines": [], "source": "none"}
+
+            scored = []
+            total_score = 0.0
+            for row in rows:
+                # Use pre-computed composite_score if available, else 0
+                h_score = float(row.composite_score) if row.composite_score is not None else 0.0
+                total_score += h_score
+                scored.append({"headline": row.headline, "score": round(h_score, 2)})
+
+            total_score = max(-1.0, min(1.0, total_score))
+            return {
+                "score": round(total_score, 2),
+                "headlines": scored,
+                "source": "db",
+            }
+        except Exception:
+            logger.warning("Failed to fetch news sentiment from DB for %s", symbol, exc_info=True)
+            return {"score": 0.0, "headlines": [], "source": "none"}

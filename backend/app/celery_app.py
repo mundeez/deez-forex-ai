@@ -45,7 +45,6 @@ celery_app.conf.update(
         "app.tasks.execution_tasks.reevaluate_open_positions": {"queue": "execution"},
         "app.tasks.execution_tasks.close_eod_positions": {"queue": "execution"},
         "app.tasks.execution_tasks.close_weekend_positions": {"queue": "execution"},
-        # --- AI analysis tier: slow LLM calls, dedicate 2 workers max ---
         "app.tasks.analysis_tasks.run_full_analysis": {"queue": "ai_analysis"},
         "app.tasks.analysis_tasks.compute_daily_bias": {"queue": "ai_analysis"},
         # Pre-compute refresh tasks go to ai_analysis so they don't block execution
@@ -66,11 +65,6 @@ celery_app.conf.update(
             "schedule": 60.0,
             "options": {"time_limit": 30, "soft_time_limit": 20},
         },
-        "evaluate-exits": {
-            "task": "app.tasks.execution_tasks.evaluate_exits",
-            "schedule": 60.0,
-            "options": {"time_limit": 30, "soft_time_limit": 20},
-        },
         "auto-select-pairs": {
             "task": "app.tasks.analysis_tasks.auto_select_pairs",
             "schedule": 3600.0,
@@ -78,7 +72,7 @@ celery_app.conf.update(
         },
         "update-daily-pnl": {
             "task": "app.tasks.execution_tasks.update_daily_pnl",
-            "schedule": crontab(hour=0, minute=10),
+            "schedule": 3600.0,
             "options": {"time_limit": 60, "soft_time_limit": 45},
         },
         "close-eod-positions": {
@@ -93,7 +87,7 @@ celery_app.conf.update(
         },
         "compute-pair-performance": {
             "task": "app.tasks.execution_tasks.compute_pair_performance",
-            "schedule": 14400.0,  # every 4 hours
+            "schedule": 3600.0,
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "compute-pattern-priors": {
@@ -101,7 +95,11 @@ celery_app.conf.update(
             "schedule": 3600.0 * 6,  # every 6 hours
             "options": {"time_limit": 300, "soft_time_limit": 240},
         },
-
+        "update-model-performance": {
+            "task": "app.tasks.analysis_tasks.update_model_performance",
+            "schedule": 3600.0,  # hourly
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
         "rolling-backtest-30d": {
             "task": "app.tasks.analysis_tasks.rolling_backtest_30d",
             "schedule": 3600.0 * 24,  # daily
@@ -114,25 +112,12 @@ celery_app.conf.update(
         },
         "compute-daily-bias": {
             "task": "app.tasks.execution_tasks.compute_daily_bias",
-            "schedule": crontab(hour="6,10,14,18", minute=0, day_of_week="mon-fri"),
+            "schedule": 14400.0,
             "options": {"time_limit": 180, "soft_time_limit": 120},
-        },
-        # Pre-compute tasks — feed the Redis cache consumed by AnalysisAggregator.
-        # These run more frequently than run_full_analysis so each LLM cycle
-        # reads a fresh snapshot instead of fetching live data on-demand.
-        "refresh-technical-snapshots": {
-            "task": "app.tasks.analysis_tasks.refresh_technical_snapshots",
-            "schedule": 900.0,  # every 15 minutes
-            "options": {"time_limit": 120, "soft_time_limit": 90},
-        },
-        "refresh-sentiment-cache": {
-            "task": "app.tasks.analysis_tasks.refresh_sentiment_cache",
-            "schedule": 3600.0,  # every hour
-            "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "refresh-model-performance": {
             "task": "app.tasks.execution_tasks.refresh_model_performance",
-            "schedule": crontab(hour=0, minute=5),
+            "schedule": 3600.0,
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "reevaluate-open-positions": {

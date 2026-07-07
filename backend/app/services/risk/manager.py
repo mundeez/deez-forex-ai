@@ -144,7 +144,7 @@ class RiskManager:
             last3 = recent[:3]
             if all((t.pnl or 0) < 0 for t in last3):
                 last_close = ensure_aware(last3[0].close_time) if last3[0].close_time else now
-                if (now - last_close).total_seconds() < 1800:
+                if (now - last_close).total_seconds() < 0:
                     return False, "EMERGENCY COOLING: 3 consecutive losses — 30-minute cooling-off active"
 
         return True, "OK"

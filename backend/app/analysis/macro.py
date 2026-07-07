@@ -41,6 +41,8 @@ class MacroAnalyzer:
         us10y = await self._value_as_of(db, "DGS10", as_of)
         us02y = await self._value_as_of(db, "DGS2", as_of)
         us30y = await self._value_as_of(db, "DGS30", as_of)
+        fed_rate = await self._value_as_of(db, "DFEDTAR", as_of) or await self._value_as_of(db, "FEDFUNDS", as_of)
+        ecb_rate = await self._value_as_of(db, "ECBDFR", as_of)
 
         # Yield curve spread (10Y - 2Y)
         yield_spread = None
@@ -106,6 +108,8 @@ class MacroAnalyzer:
             "us10y": round(us10y, 2) if us10y else None,
             "us02y": round(us02y, 2) if us02y else None,
             "us30y": round(us30y, 2) if us30y else None,
+            "fed_rate": round(fed_rate, 2) if fed_rate else None,
+            "ecb_rate": round(ecb_rate, 2) if ecb_rate else None,
             "yield_spread_10y_2y": yield_spread,
             "risk_on_score": composite,
             "bias": bias,
@@ -114,7 +118,12 @@ class MacroAnalyzer:
     async def _value_as_of(
         self, db: AsyncSession, series_id: str, as_of: datetime
     ) -> Optional[float]:
-        """Fetch the most recent observation for series_id on or before `as_of`."""
+        """Fetch the most recent observation for series_id on or before `as_of`.
+
+        This is the point-in-time query used by both live and backtest paths.
+        In live mode, `as_of` defaults to datetime.utcnow() so it returns the
+        latest available row — identical to the old _latest_value() behaviour.
+        """
         try:
             result = await db.execute(
                 select(models.MacroSeries)
@@ -128,3 +137,7 @@ class MacroAnalyzer:
         except Exception:
             logger.warning("Failed to fetch macro series %s as_of %s", series_id, as_of, exc_info=True)
             return None
+
+    async def _latest_value(self, db: AsyncSession, series_id: str) -> Optional[float]:
+        """Fetch the most recent observation for a macro series (live mode only)."""
+        return await self._value_as_of(db, series_id, datetime.utcnow())

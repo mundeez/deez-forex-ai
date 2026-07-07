@@ -96,7 +96,7 @@ class AIDecision(Base):
     verifier_confidence = Column(Float)
     regime = Column(JSON)
     daily_bias = Column(JSON)
-    qdrant_point_id = Column(String(50))
+    qdrant_point_id = Column(Integer)
 
 
 class BacktestRun(Base):

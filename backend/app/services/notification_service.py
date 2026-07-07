@@ -43,6 +43,12 @@ class NotificationService:
         pnl: float, pnl_pct: float, close_reason: str = ""
     ):
         await self._load_settings(db)
+        symbol = symbol or "UNKNOWN"
+        direction = direction or "UNKNOWN"
+        entry_price = entry_price or 0
+        exit_price = exit_price or 0
+        pnl = pnl or 0
+        pnl_pct = pnl_pct or 0
         emoji = "🟢" if pnl >= 0 else "🔴"
         msg = (
             f"{emoji} Trade Closed: {symbol} {direction}\n"
