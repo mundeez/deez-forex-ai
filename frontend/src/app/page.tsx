@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { API_URL } from "@/utils/api";
+import { fetchJSON } from "@/hooks/usePolling";
 import Header from "@/components/Header";
 import ChartPanel from "@/components/ChartPanel";
 import MarketInfoBar from "@/components/MarketInfoBar";
@@ -42,16 +43,13 @@ export default function Home() {
   const [wsUrl, setWsUrl] = useState<string>("");
 
   useEffect(() => {
+    const controller = new AbortController();
     setWsUrl(getWsUrl());
     // Hydrate provider from backend settings so it persists across reloads
-    fetch(`${API_URL}/api/v1/settings`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.data_provider) {
-          setProvider(data.data_provider);
-        }
-      })
-      .catch(() => {});
+    fetchJSON<any>(`${API_URL}/api/v1/settings`, controller.signal).then((data) => {
+      if (data?.data_provider) setProvider(data.data_provider);
+    });
+    return () => controller.abort();
   }, []);
 
   const { prices, aiDecisions, connected } = useWebSocket(wsUrl, activePairs, provider);

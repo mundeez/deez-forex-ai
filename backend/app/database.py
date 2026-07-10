@@ -15,6 +15,7 @@ if not _is_sqlite:
     _engine_kwargs.update(
         pool_size=10,
         max_overflow=20,
+        pool_timeout=10,
         pool_recycle=3600,
         pool_pre_ping=True,
     )
@@ -29,6 +30,10 @@ async def get_db():
     async with AsyncSessionLocal() as session:
         try:
             yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
         finally:
             await session.close()
 

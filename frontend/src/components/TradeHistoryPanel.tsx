@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { History, TrendingUp, TrendingDown, Calendar, Eye } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, fetchJSON } from "@/hooks/usePolling";
 import { formatDateTime } from "@/utils/date";
 import { Trade } from "@/types";
 import TradeDetailModal from "./TradeDetailModal";
@@ -11,22 +12,10 @@ export default function TradeHistoryPanel({ limit = 10 }: { limit?: number }) {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
-  useEffect(() => {
-    fetchHistory();
-    const interval = setInterval(fetchHistory, 15000);
-    return () => clearInterval(interval);
-  }, []);
-
-  async function fetchHistory() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/trades?status=closed&limit=${limit}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setTrades(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("history fetch error", e);
-    }
-  }
+  usePolling(async (signal) => {
+    const data = await fetchJSON<Trade[]>(`${API_URL}/api/v1/trades?status=closed&limit=${limit}`, signal);
+    if (data) setTrades(Array.isArray(data) ? data : []);
+  }, 15000, [limit]);
 
   return (
     <div className="bg-forex-card rounded-xl border border-slate-700 p-4">

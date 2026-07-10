@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Plus, X, Settings, Zap, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
 interface PairSlot {
   id?: number;
@@ -25,42 +26,29 @@ export default function PairSelector({ onChange }: PairSelectorProps) {
   const [showAdd, setShowAdd] = useState(false);
   const [activePairs, setActivePairs] = useState<string[]>([]);
 
-  useEffect(() => {
-    fetchPairs();
+  useFetchOnce(async (signal) => {
+    const data = await fetchJSON<PairSlot[]>(`${API_URL}/api/v1/pairs/active`, signal);
+    if (!data) return;
+    const fetchedPairs: PairSlot[] = data || [];
+    setPairs(fetchedPairs);
+    setActivePairs(fetchedPairs.map((p) => p.symbol));
+    if (onChange) onChange(fetchedPairs.map((p) => p.symbol));
+
+    // Fetch signal strength for auto pairs (parallel, share signal)
+    const autoPairs = fetchedPairs.filter((p) => p.selection_mode === "auto");
+    const analyses = await Promise.all(
+      autoPairs.map((p) => fetchJSON<any>(`${API_URL}/api/v1/analysis/summary?symbol=${p.symbol}`, signal))
+    );
+    autoPairs.forEach((p, i) => {
+      const analysis = analyses[i];
+      if (analysis) {
+        const strength = analysis.combined_signal === "bullish" ? 0.7 : analysis.combined_signal === "bearish" ? -0.7 : 0;
+        setPairs((prev) => prev.map((pair) =>
+          pair.symbol === p.symbol ? { ...pair, signal_strength: strength } : pair
+        ));
+      }
+    });
   }, []);
-
-  async function fetchPairs() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/pairs/active`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const fetchedPairs: PairSlot[] = data || [];
-      setPairs(fetchedPairs);
-      setActivePairs(fetchedPairs.map((p) => p.symbol));
-      if (onChange) onChange(fetchedPairs.map((p) => p.symbol));
-
-      // Fetch signal strength for auto pairs
-      fetchedPairs.forEach(async (p) => {
-        if (p.selection_mode === "auto") {
-          try {
-            const analysisRes = await fetch(`${API_URL}/api/v1/analysis/summary?symbol=${p.symbol}`);
-            if (analysisRes.ok) {
-              const analysis = await analysisRes.json();
-              // Simple signal strength based on combined signal
-              const strength = analysis.combined_signal === "bullish" ? 0.7 : analysis.combined_signal === "bearish" ? -0.7 : 0;
-              setPairs((prev) => prev.map((pair) =>
-                pair.symbol === p.symbol ? { ...pair, signal_strength: strength } : pair
-              ));
-            }
-          } catch {
-            // ignore
-          }
-        }
-      });
-    } catch (e) {
-      console.error("pairs fetch error", e);
-    }
-  }
 
   async function updateActivePairs(newPairs: PairSlot[]) {
     try {
@@ -75,7 +63,12 @@ export default function PairSelector({ onChange }: PairSelectorProps) {
         body: JSON.stringify(payload),
       });
       if (res.ok) {
-        fetchPairs();
+        const data = await fetchJSON<PairSlot[]>(`${API_URL}/api/v1/pairs/active`);
+        if (data) {
+          setPairs(data);
+          setActivePairs(data.map((p) => p.symbol));
+          if (onChange) onChange(data.map((p) => p.symbol));
+        }
         setShowAdd(false);
       }
     } catch (e) {

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Bot, CheckCircle, XCircle, AlertTriangle, TrendingUp, TrendingDown } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, fetchJSON } from "@/hooks/usePolling";
 
 interface AIDecision {
   id: number;
@@ -23,15 +24,25 @@ export default function AIDecisionPanel({ newDecisions = [] }: { newDecisions?: 
   const [decisions, setDecisions] = useState<AIDecision[]>([]);
   const [manualOverride, setManualOverride] = useState(false);
 
-  useEffect(() => {
-    fetchDecisions();
-    fetchOverride();
-    const interval = setInterval(() => {
-      fetchDecisions();
-      fetchOverride();
-    }, 15000);
-    return () => clearInterval(interval);
-  }, []);
+  usePolling(async (signal) => {
+    const [decData, overrideData] = await Promise.all([
+      fetchJSON<AIDecision[]>(`${API_URL}/api/v1/ai/decisions?limit=5`, signal),
+      fetchJSON<{ manual_override: boolean }>(`${API_URL}/api/v1/manual-override`, signal),
+    ]);
+    if (decData) {
+      setDecisions((prev) => {
+        const fetched = decData || [];
+        const merged = [...fetched, ...prev];
+        const seen = new Set();
+        return merged.filter((d) => {
+          if (seen.has(d.id)) return false;
+          seen.add(d.id);
+          return true;
+        }).slice(0, 10);
+      });
+    }
+    if (overrideData) setManualOverride(overrideData.manual_override);
+  }, 15000, []);
 
   // Merge WebSocket decisions
   useEffect(() => {
@@ -48,37 +59,6 @@ export default function AIDecisionPanel({ newDecisions = [] }: { newDecisions?: 
       });
     }
   }, [newDecisions]);
-
-  async function fetchDecisions() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/ai/decisions?limit=5`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setDecisions((prev) => {
-        const fetched = data || [];
-        const merged = [...fetched, ...prev];
-        const seen = new Set();
-        return merged.filter((d) => {
-          if (seen.has(d.id)) return false;
-          seen.add(d.id);
-          return true;
-        }).slice(0, 10);
-      });
-    } catch (e) {
-      console.error("ai decisions fetch error", e);
-    }
-  }
-
-  async function fetchOverride() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/manual-override`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setManualOverride(data.manual_override);
-    } catch (e) {
-      console.error("override fetch error", e);
-    }
-  }
 
   async function approveDecision(decision: AIDecision) {
     try {

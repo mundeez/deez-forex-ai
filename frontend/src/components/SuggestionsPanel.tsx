@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Lightbulb, TrendingUp, Clock, Calendar, BarChart3 } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, fetchJSON } from "@/hooks/usePolling";
 
 interface Suggestion {
   symbol: string;
@@ -25,39 +26,15 @@ export default function SuggestionsPanel() {
   const [todayTimeline, setTodayTimeline] = useState<HourlySuggestion[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchBestNow();
-    fetchToday();
-    const interval = setInterval(() => {
-      fetchBestNow();
-      fetchToday();
-    }, 60000);
-    return () => clearInterval(interval);
-  }, []);
-
-  async function fetchBestNow() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/suggestions/best-now`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setBestNow(data.suggestions || []);
-    } catch (e) {
-      console.error("best-now fetch error", e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchToday() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/suggestions/today`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setTodayTimeline(data.timeline || []);
-    } catch (e) {
-      console.error("today fetch error", e);
-    }
-  }
+  usePolling(async (signal) => {
+    const [bestData, todayData] = await Promise.all([
+      fetchJSON<{ suggestions: Suggestion[] }>(`${API_URL}/api/v1/suggestions/best-now`, signal),
+      fetchJSON<{ timeline: HourlySuggestion[] }>(`${API_URL}/api/v1/suggestions/today`, signal),
+    ]);
+    if (bestData) setBestNow(bestData.suggestions || []);
+    if (todayData) setTodayTimeline(todayData.timeline || []);
+    setLoading(false);
+  }, 60000, []);
 
   function formatHour(h: number) {
     return `${h.toString().padStart(2, "0")}:00 UTC`;

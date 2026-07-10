@@ -1,16 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { API_URL } from "@/utils/api";
+import { useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
 export default function PaperTradingPage() {
   const [report, setReport] = useState<any>({});
   const [goNoGo, setGoNoGo] = useState<any>({});
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetch(`${API_URL}/api/v1/paper-trading/report?days=30`).then(r => r.json()).then(setReport).catch(() => {});
-    fetch(`${API_URL}/api/v1/paper-trading/go-no-go?days=30`).then(r => r.json()).then(setGoNoGo).then(() => setLoading(false)).catch(() => setLoading(false));
+  useFetchOnce(async (signal) => {
+    const [reportData, goNoGoData] = await Promise.all([
+      fetchJSON<any>(`${API_URL}/api/v1/paper-trading/report?days=30`, signal),
+      fetchJSON<any>(`${API_URL}/api/v1/paper-trading/go-no-go?days=30`, signal),
+    ]);
+    if (reportData) setReport(reportData);
+    if (goNoGoData) setGoNoGo(goNoGoData);
+    setLoading(false);
   }, []);
 
   if (loading) return <div className="p-8 text-slate-300">Loading paper trading metrics...</div>;

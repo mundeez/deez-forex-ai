@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield, Timer, Calendar, AlertTriangle, Lock, Zap } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, fetchJSON } from "@/hooks/usePolling";
 import { formatDateTime } from "@/utils/date";
 
 interface ExitRec {
@@ -41,59 +42,38 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
   const [settings, setSettings] = useState<any>({});
   const [exitRecs, setExitRecs] = useState<Record<number, ExitRec>>({});
 
-  useEffect(() => {
-    fetchPositions();
-    fetchSettings();
-    const interval = setInterval(() => {
-      fetchPositions();
-      positions.forEach((p) => fetchExitRec(p.id));
-    }, 15000);
-    return () => clearInterval(interval);
-  }, []);
+  usePolling(async (signal) => {
+    // Fetch positions
+    const posData = await fetchJSON<{ positions: Position[] }>(`${API_URL}/api/v1/positions`, signal);
+    if (!posData) return;
+    const newPositions = posData.positions || [];
+    setPositions(newPositions);
 
-  async function fetchExitRec(id: number) {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/positions/${id}/exit-recommendation`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.action && data.action !== "hold") {
-        setExitRecs((prev) => ({ ...prev, [id]: data }));
-      } else {
-        setExitRecs((prev) => { const copy = { ...prev }; delete copy[id]; return copy; });
+    // Fetch exit recommendations for each position (parallel, all share the same signal)
+    const recs = await Promise.all(
+      newPositions.map((p) => fetchJSON<ExitRec>(`${API_URL}/api/v1/positions/${p.id}/exit-recommendation`, signal))
+    );
+    const newRecs: Record<number, ExitRec> = {};
+    newPositions.forEach((p, i) => {
+      const rec = recs[i];
+      if (rec && rec.action && rec.action !== "hold") {
+        newRecs[p.id] = rec;
       }
-    } catch (e) {
-      // silent fail
-    }
-  }
+    });
+    setExitRecs(newRecs);
 
-  async function fetchPositions() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/positions`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setPositions(data.positions || []);
-      (data.positions || []).forEach((p: Position) => fetchExitRec(p.id));
-    } catch (e) {
-      console.error("positions fetch error", e);
-    }
-  }
-
-  async function fetchSettings() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/settings`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setSettings(data.settings || data);
-    } catch (e) {
-      console.error("settings fetch error", e);
-    }
-  }
+    // Fetch settings
+    const settingsData = await fetchJSON<any>(`${API_URL}/api/v1/settings`, signal);
+    if (settingsData) setSettings(settingsData.settings || settingsData);
+  }, 15000, []);
 
   async function closePosition(id: number) {
     try {
       const res = await fetch(`${API_URL}/api/v1/positions/${id}/close`, { method: "POST" });
       if (res.ok) {
-        fetchPositions();
+        // Manually refresh positions after close
+        const data = await fetchJSON<{ positions: Position[] }>(`${API_URL}/api/v1/positions`);
+        if (data) setPositions(data.positions || []);
         if (onRefresh) onRefresh();
       } else {
         const data = await res.json().catch(() => ({ detail: "Close failed" }));

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ArrowUpCircle, ArrowDownCircle, AlertTriangle } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
 interface ManualTradePanelProps {
   symbol: string;
@@ -23,20 +24,10 @@ export default function ManualTradePanel({ symbol, onTrade, visible = true, prov
   const [loading, setLoading] = useState(false);
   const [manualOverride, setManualOverride] = useState(false);
 
-  useEffect(() => {
-    fetchOverride();
+  useFetchOnce(async (signal) => {
+    const data = await fetchJSON<{ manual_override: boolean }>(`${API_URL}/api/v1/manual-override`, signal);
+    if (data) setManualOverride(data.manual_override);
   }, []);
-
-  async function fetchOverride() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/manual-override`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setManualOverride(data.manual_override);
-    } catch (e) {
-      console.error("override fetch error", e);
-    }
-  }
 
   async function submitTrade() {
     setLoading(true);

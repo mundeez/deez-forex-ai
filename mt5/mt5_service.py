@@ -88,7 +88,7 @@ class MT5Service(rpyc.Service):
         tf = TIMEFRAME_MAP.get(timeframe, mt5.TIMEFRAME_H1)
         limit = max(1, min(int(limit), 2000))
         rates = mt5.copy_rates_from_pos(symbol, tf, 0, limit)
-        if not rates or len(rates) == 0:
+        if rates is None or len(rates) == 0:
             return {"error": "No candle data available"}
         candles = []
         for r in rates:
@@ -224,7 +224,7 @@ class MT5Service(rpyc.Service):
         if ticket == 0:
             return {"error": "Invalid ticket"}
         pos = mt5.positions_get(ticket=ticket)
-        if not pos or len(pos) == 0:
+        if pos is None or len(pos) == 0:
             return {"error": f"Position {ticket} not found"}
         p = pos[0]
         symbol = p.symbol
@@ -258,7 +258,7 @@ class MT5Service(rpyc.Service):
         if not _ensure_mt5():
             return {"error": "MT5 not initialized"}
         pos = mt5.positions_get(ticket=ticket)
-        if not pos or len(pos) == 0:
+        if pos is None or len(pos) == 0:
             return {"error": f"Position {ticket} not found"}
         p = pos[0]
         request = {

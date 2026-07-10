@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, AlertTriangle, Bot, Globe, BarChart3, Shield, Bell, Zap, Clock, Server, Plus, Trash2, RotateCcw, CheckCircle2, AlertCircle } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
 interface SettingsData {
   [key: string]: any;
@@ -170,34 +171,15 @@ export default function SettingsPage() {
   const [message, setMessage] = useState("");
   const [activeTab, setActiveTab] = useState("risk");
 
-  useEffect(() => {
-    fetchSettings();
-    fetchActivePairs();
+  useFetchOnce(async (signal) => {
+    const [settingsData, pairsData] = await Promise.all([
+      fetchJSON<any>(`${API_URL}/api/v1/settings`, signal),
+      fetchJSON<any[]>(`${API_URL}/api/v1/pairs/active`, signal),
+    ]);
+    if (settingsData) setSettings(settingsData.settings || settingsData);
+    if (pairsData) setActivePairs(pairsData || []);
+    setLoading(false);
   }, []);
-
-  async function fetchSettings() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/settings`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setSettings(data.settings || data);
-    } catch (e) {
-      console.error("settings fetch error", e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchActivePairs() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/pairs/active`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setActivePairs(data || []);
-    } catch (e) {
-      console.error("pairs fetch error", e);
-    }
-  }
 
   function updateField(key: string, value: any) {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -244,7 +226,8 @@ export default function SettingsPage() {
       });
       if (res.ok) {
         setMessage("Active pairs updated.");
-        fetchActivePairs();
+        const data = await fetchJSON<any[]>(`${API_URL}/api/v1/pairs/active`);
+        if (data) setActivePairs(data || []);
       }
     } catch (e) {
       console.error("save pairs error", e);
@@ -1261,29 +1244,19 @@ function MT5BrokerSettings() {
   const [message, setMessage] = useState("");
   const [form, setForm] = useState({ name: "", broker: "", login: "", password: "", server: "", is_demo: true });
 
-  const fetchStatus = async () => {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/mt5/status`);
-      if (res.ok) setStatus(await res.json());
-    } catch {
+  usePolling(async (signal) => {
+    const data = await fetchJSON<any>(`${API_URL}/api/v1/mt5/status`, signal);
+    if (data) {
+      setStatus(data);
+    } else {
       setStatus({ container_running: false, mt5_terminal_running: false, zmq_bridge_running: false, mt5_initialized: false, message: "Unreachable" });
     }
-  };
+  }, 10000, []);
 
-  const fetchAccounts = async () => {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/mt5/accounts`);
-      if (res.ok) setAccounts(await res.json());
-    } catch {
-      setAccounts([]);
-    }
-  };
-
-  useEffect(() => {
-    fetchStatus();
-    fetchAccounts();
-    const iv = setInterval(fetchStatus, 10000);
-    return () => clearInterval(iv);
+  useFetchOnce(async (signal) => {
+    const data = await fetchJSON<any[]>(`${API_URL}/api/v1/mt5/accounts`, signal);
+    if (data) setAccounts(data);
+    else setAccounts([]);
   }, []);
 
   const createAccount = async () => {
@@ -1299,7 +1272,8 @@ function MT5BrokerSettings() {
       setMessage("Account created successfully");
       setShowForm(false);
       setForm({ name: "", broker: "", login: "", password: "", server: "", is_demo: true });
-      await fetchAccounts();
+      const accData = await fetchJSON<any[]>(`${API_URL}/api/v1/mt5/accounts`);
+      if (accData) setAccounts(accData);
     } catch (e: any) {
       setError(e.message || "Failed to create account");
     } finally {
@@ -1311,7 +1285,8 @@ function MT5BrokerSettings() {
     if (!confirm("Delete this account?")) return;
     try {
       await fetch(`${API_URL}/api/v1/mt5/accounts/${id}`, { method: "DELETE" });
-      await fetchAccounts();
+      const accData = await fetchJSON<any[]>(`${API_URL}/api/v1/mt5/accounts`);
+      if (accData) setAccounts(accData);
       setMessage("Account deleted");
     } catch {
       setError("Failed to delete account");
@@ -1322,8 +1297,10 @@ function MT5BrokerSettings() {
     setLoading(true);
     try {
       await fetch(`${API_URL}/api/v1/mt5/accounts/${id}/activate`, { method: "PUT" });
-      await fetchAccounts();
-      await fetchStatus();
+      const accData = await fetchJSON<any[]>(`${API_URL}/api/v1/mt5/accounts`);
+      if (accData) setAccounts(accData);
+      const statusData = await fetchJSON<any>(`${API_URL}/api/v1/mt5/status`);
+      if (statusData) setStatus(statusData);
       setMessage("Account activated");
     } catch {
       setError("Failed to activate account");

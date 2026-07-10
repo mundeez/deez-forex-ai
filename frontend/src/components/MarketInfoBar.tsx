@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { TrendingUp, TrendingDown, Clock, Globe } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, fetchJSON } from "@/hooks/usePolling";
 
 interface MarketInfoBarProps {
   symbol: string;
@@ -20,25 +21,11 @@ export default function MarketInfoBar({ symbol, livePrice }: MarketInfoBarProps)
   const [summary, setSummary] = useState<any>(null);
   const [now, setNow] = useState(new Date());
 
-  useEffect(() => {
-    fetchSummary();
-    const interval = setInterval(() => {
-      fetchSummary();
-      setNow(new Date());
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [symbol]);
-
-  async function fetchSummary() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/market/summary?symbol=${symbol}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setSummary(data);
-    } catch (e) {
-      console.error("market summary error", e);
-    }
-  }
+  usePolling(async (signal) => {
+    const data = await fetchJSON<any>(`${API_URL}/api/v1/market/summary?symbol=${symbol}`, signal);
+    if (data) setSummary(data);
+    setNow(new Date());
+  }, 10000, [symbol]);
 
   const currentHour = now.getUTCHours();
   const activeSessions = SESSIONS.filter((s) => {

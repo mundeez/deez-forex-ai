@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { X, TrendingUp, TrendingDown, BarChart3, PieChart, Activity, Target, Shield, Clock, Calendar, Zap, Award, AlertTriangle } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 import { formatDateTime } from "@/utils/date";
 
 interface PortfolioStats {
@@ -37,29 +38,15 @@ export default function PortfolioIndicatorModal({ onClose }: PortfolioIndicatorM
   const [dailyHistory, setDailyHistory] = useState<DailyRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchData();
+  useFetchOnce(async (signal) => {
+    const [statsData, dailyData] = await Promise.all([
+      fetchJSON<PortfolioStats>(`${API_URL}/api/v1/trades/stats`, signal),
+      fetchJSON<{ records: DailyRecord[] }>(`${API_URL}/api/v1/portfolio/daily?days=30`, signal),
+    ]);
+    if (statsData) setStats(statsData);
+    if (dailyData) setDailyHistory(dailyData.records || []);
+    setLoading(false);
   }, []);
-
-  async function fetchData() {
-    try {
-      const [statsRes, dailyRes] = await Promise.all([
-        fetch(`${API_URL}/api/v1/trades/stats`),
-        fetch(`${API_URL}/api/v1/portfolio/daily?days=30`),
-      ]);
-      if (statsRes.ok) {
-        setStats(await statsRes.json());
-      }
-      if (dailyRes.ok) {
-        const dailyData = await dailyRes.json();
-        setDailyHistory(dailyData.records || []);
-      }
-    } catch (e) {
-      console.error("portfolio detail fetch error", e);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   if (loading) {
     return (

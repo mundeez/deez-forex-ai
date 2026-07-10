@@ -171,6 +171,9 @@ class StandaloneBacktestEngine:
         # Cached model instances (reloaded after retrain)
         self._entry_model = None
         self._team_meta_model = None
+        # Trade-count-based retrain tracking
+        self._trades_since_retrain = 0
+        self._retrain_interval = 100  # retrain every 100 closed trades
         # HOLD-reason counters for diagnostics
         self.hold_reasons: Dict[str, int] = {
             "no_candles": 0,
@@ -991,15 +994,20 @@ class StandaloneBacktestEngine:
                 self.session_count = idx
                 os.environ["BACKTEST_DATE_CUTOFF"] = s_start.isoformat()
 
-                # Monthly model retrain
-                if retrain_monthly and s_start.day == 1 and s_start.hour == 0:
-                    logger.info("Month boundary: %s — retraining models", s_start)
+                # Trade-count-based retrain (replaces calendar-based month boundary)
+                if retrain_monthly and self._trades_since_retrain >= self._retrain_interval:
+                    logger.info(
+                        "Retrain trigger: %d trades since last retrain — retraining models",
+                        self._trades_since_retrain,
+                    )
                     await self._retrain(db, s_start)
+                    self._trades_since_retrain = 0
 
                 for symbol in symbols:
                     trade = await self.run_session(db, symbol, s_start, s_end, strategy_mode, s_name)
                     if trade:
                         self.trade_count += 1
+                        self._trades_since_retrain += 1
                         self.equity += trade["pnl_usd"]
                         self.max_equity = max(self.max_equity, self.equity)
                         dd = (self.max_equity - self.equity) / self.max_equity * 100
@@ -1083,8 +1091,8 @@ class StandaloneBacktestEngine:
                 .limit(3000)
             )
             trades = result.scalars().all()
-            if len(trades) < 100:
-                logger.info("Retrain skipped: %d trades", len(trades))
+            if len(trades) < 50:
+                logger.info("Retrain skipped: %d trades (need >=50)", len(trades))
                 return
 
             entry_data = []
@@ -1113,13 +1121,13 @@ class StandaloneBacktestEngine:
                 tf["label"] = label
                 team_data.append(tf)
 
-            if len(entry_data) >= 100:
+            if len(entry_data) >= 50:
                 import pandas as pd
                 EntryQualityModel().train(FeatureStore.export_training_set(entry_data))
                 # Reload cached instance so subsequent predictions use the new model
                 self._entry_model = EntryQualityModel()
                 logger.info("Entry gate model reloaded")
-            if len(team_data) >= 100:
+            if len(team_data) >= 50:
                 import pandas as pd
                 TeamMetaModel().train(pd.DataFrame(team_data))
                 # Reload cached instance so subsequent predictions use the new model

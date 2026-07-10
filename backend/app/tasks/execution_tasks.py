@@ -497,11 +497,19 @@ def reevaluate_open_positions():
 
             from app.services.data.metaapi_client import MetaApiClient
             from app.services.data.mt5_zmq_client import MT5ZMQClient
+            from app.services.data.mt5_rpyc_client import MT5RPyCClient
             metaapi = MetaApiClient()
             mt5_zmq = MT5ZMQClient()
+            mt5_rpyc = MT5RPyCClient()
             from app.config import get_settings as _gs
+            from app.enums import DataProvider as _DP
             _settings = _gs()
-            client = mt5_zmq if _settings.DATA_PROVIDER.value == "mt5_zmq" else metaapi
+            if _settings.DATA_PROVIDER == _DP.MT5_ZMQ:
+                client = mt5_zmq
+            elif _settings.DATA_PROVIDER == _DP.MT5_RPYC:
+                client = mt5_rpyc
+            else:
+                client = metaapi
 
             closed_count = 0
             alert_count = 0
@@ -593,12 +601,15 @@ def evaluate_exits():
                 from app.ai.team.trade_manager import TradeManagerAgent
                 from app.services.data.metaapi_client import MetaApiClient
                 from app.services.data.mt5_zmq_client import MT5ZMQClient
+                from app.services.data.mt5_rpyc_client import MT5RPyCClient
                 from app.config import get_settings
                 from app.enums import DataProvider
                 tm = TradeManagerAgent()
                 settings = get_settings()
                 if settings.DATA_PROVIDER == DataProvider.MT5_ZMQ:
                     price_client = MT5ZMQClient()
+                elif settings.DATA_PROVIDER == DataProvider.MT5_RPYC:
+                    price_client = MT5RPyCClient()
                 else:
                     price_client = MetaApiClient()
 

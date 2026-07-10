@@ -1,16 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { API_URL } from "@/utils/api";
+import { useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
 export default function SystemPage() {
   const [intelligence, setIntelligence] = useState<any>({});
   const [learning, setLearning] = useState<any>({});
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetch(`${API_URL}/api/v1/system/intelligence`).then(r => r.json()).then(setIntelligence).catch(() => {});
-    fetch(`${API_URL}/api/v1/system/learning`).then(r => r.json()).then(setLearning).then(() => setLoading(false)).catch(() => setLoading(false));
+  useFetchOnce(async (signal) => {
+    const [intelData, learningData] = await Promise.all([
+      fetchJSON<any>(`${API_URL}/api/v1/system/intelligence`, signal),
+      fetchJSON<any>(`${API_URL}/api/v1/system/learning`, signal),
+    ]);
+    if (intelData) setIntelligence(intelData);
+    if (learningData) setLearning(learningData);
+    setLoading(false);
   }, []);
 
   if (loading) return <div className="p-8 text-slate-300">Loading system intelligence...</div>;

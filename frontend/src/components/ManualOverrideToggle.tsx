@@ -1,27 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ToggleLeft, ToggleRight, Bot, Hand } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
 export default function ManualOverrideToggle() {
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    fetchStatus();
+  useFetchOnce(async (signal) => {
+    const data = await fetchJSON<{ manual_override: boolean }>(`${API_URL}/api/v1/manual-override`, signal);
+    if (data) setEnabled(data.manual_override);
   }, []);
-
-  async function fetchStatus() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/manual-override`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setEnabled(data.manual_override);
-    } catch (e) {
-      console.error("override fetch error", e);
-    }
-  }
 
   async function toggle() {
     if (loading) return;

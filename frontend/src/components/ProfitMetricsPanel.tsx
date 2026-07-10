@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity, RotateCcw, AlertTriangle, Eye } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 import { formatDateTime } from "@/utils/date";
 import PortfolioIndicatorModal from "./PortfolioIndicatorModal";
 
@@ -18,45 +19,22 @@ export default function ProfitMetricsPanel() {
   const [resetLoading, setResetLoading] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
 
-  useEffect(() => {
-    fetchStats();
-    fetchEquityHistory();
-    const interval = setInterval(() => {
-      fetchStats();
-    }, 15000);
-    return () => clearInterval(interval);
+  usePolling(async (signal) => {
+    const data = await fetchJSON<any>(`${API_URL}/api/v1/trades/stats`, signal);
+    if (data) setStats(data);
+  }, 15000, []);
+
+  useFetchOnce(async (signal) => {
+    await fetchJSON<any>(`${API_URL}/api/v1/portfolio/summary`, signal);
   }, []);
-
-  async function fetchStats() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/trades/stats`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setStats(data);
-    } catch (e) {
-      console.error("stats fetch error", e);
-    }
-  }
-
-  async function fetchEquityHistory() {
-    try {
-      const res = await fetch(`${API_URL}/api/v1/portfolio/summary`);
-      if (!res.ok) return;
-      const data = await res.json();
-      // In a real app, you'd fetch historical equity from a dedicated endpoint
-      // For now, we'll generate a simple sparkline from available data
-    } catch (e) {
-      console.error("equity history fetch error", e);
-    }
-  }
 
   async function handleReset() {
     setResetLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/v1/portfolio/reset`, { method: "POST" });
       if (res.ok) {
-        await fetchStats();
-        await fetchEquityHistory();
+        const statsData = await fetchJSON<any>(`${API_URL}/api/v1/trades/stats`);
+        if (statsData) setStats(statsData);
       }
     } catch (e) {
       console.error("portfolio reset error", e);

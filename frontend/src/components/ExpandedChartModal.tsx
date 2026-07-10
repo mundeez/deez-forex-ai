@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createChart, IChartApi, ISeriesApi, CandlestickData, Time } from "lightweight-charts";
 import { X, Maximize2, ZoomIn, ZoomOut } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { usePolling, fetchJSON } from "@/hooks/usePolling";
 
 interface ExpandedChartModalProps {
   symbol: string;
@@ -24,27 +25,15 @@ export default function ExpandedChartModal({ symbol, timeframe, livePrice, onClo
   const [candles, setCandles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchCandles();
-    const interval = setInterval(fetchCandles, 30000);
-    return () => clearInterval(interval);
-  }, [symbol, timeframe]);
-
-  async function fetchCandles() {
+  usePolling(async (signal) => {
     setLoading(true);
-    try {
-      const res = await fetch(
-        `${API_URL}/api/v1/market/historical?symbol=${symbol}&timeframe=${timeframe}&limit=1000`
-      );
-      if (!res.ok) return;
-      const data = await res.json();
-      setCandles(data.candles || []);
-    } catch (e) {
-      console.error("candles fetch error", e);
-    } finally {
-      setLoading(false);
-    }
-  }
+    const data = await fetchJSON<{ candles: any[] }>(
+      `${API_URL}/api/v1/market/historical?symbol=${symbol}&timeframe=${timeframe}&limit=1000`,
+      signal
+    );
+    if (data) setCandles(data.candles || []);
+    setLoading(false);
+  }, 30000, [symbol, timeframe]);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;

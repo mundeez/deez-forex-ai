@@ -2,6 +2,7 @@ import json
 import logging
 
 from app.services.data.metaapi_client import MetaApiClient
+from app.services.data.mt5_rpyc_client import MT5RPyCClient
 from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.analysis.technical import TechnicalAnalyzer
 from app.analysis.fundamental import FundamentalAnalyzer
@@ -41,6 +42,8 @@ class AnalysisAggregator:
         self.provider = provider or settings.DATA_PROVIDER
         if self.provider == DataProvider.MT5_ZMQ:
             self.client = MT5ZMQClient()
+        elif self.provider == DataProvider.MT5_RPYC:
+            self.client = MT5RPyCClient()
         else:
             self.client = MetaApiClient()
         self.technical = TechnicalAnalyzer()

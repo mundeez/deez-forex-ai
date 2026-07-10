@@ -141,7 +141,13 @@ class TeamMetaModel:
         feats.update(_extract_verifier_features(verdict=verifier_verdict, lead_model=lead_model))
         return feats
 
-    def train(self, df: pd.DataFrame, label_col: str = "label", test_size: float = 0.2, seed: int = 42) -> Dict[str, Any]:
+    def train(self, df: pd.DataFrame, label_col: str = "label", test_size: float = 0.2, seed: int = 42, win_weight: float = 2.0) -> Dict[str, Any]:
+        """Train the meta-classifier.
+
+        Args:
+            win_weight: Weight multiplier for winning trades (default 2.0).
+                        Winners get weight=win_weight, losers get weight=1.0.
+        """
         xgb, joblib = _lazy_imports()
 
         drop_cols = [label_col, "symbol", "direction"]
@@ -150,10 +156,14 @@ class TeamMetaModel:
         y = df[label_col].copy()
         X = X.fillna(X.median())
 
+        # Sample weights: winners weighted more heavily
+        sample_weights = np.where(y == 1, win_weight, 1.0)
+
         # Time-based split
         split_idx = int(len(X) * (1 - test_size))
         X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
         y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+        sw_train = sample_weights[:split_idx]
 
         pos = (y_train == 1).sum()
         neg = (y_train == 0).sum()
@@ -173,7 +183,7 @@ class TeamMetaModel:
             n_jobs=2,
         )
 
-        model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+        model.fit(X_train, y_train, sample_weight=sw_train, eval_set=[(X_test, y_test)], verbose=False)
 
         train_pred = model.predict_proba(X_train)[:, 1]
         test_pred = model.predict_proba(X_test)[:, 1]

@@ -57,8 +57,15 @@ class EntryQualityModel:
         label_col: str = "label",
         test_size: float = 0.2,
         seed: int = 42,
+        win_weight: float = 2.0,
     ) -> Dict[str, Any]:
-        """Train the XGBoost classifier and return evaluation metrics."""
+        """Train the XGBoost classifier and return evaluation metrics.
+
+        Args:
+            win_weight: Weight multiplier for winning trades (default 2.0).
+                        Winners get weight=win_weight, losers get weight=1.0.
+                        This biases the model to learn winning patterns more strongly.
+        """
         xgb, joblib = _lazy_imports()
 
         # Drop non-feature columns
@@ -70,10 +77,14 @@ class EntryQualityModel:
         # Handle any remaining NaNs
         X = X.fillna(X.median())
 
+        # Sample weights: winners weighted more heavily to learn winning patterns
+        sample_weights = np.where(y == 1, win_weight, 1.0)
+
         # Time-based split: last 20% as OOS
         split_idx = int(len(X) * (1 - test_size))
         X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
         y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+        sw_train = sample_weights[:split_idx]
 
         # Scale-Pos-Weight for imbalanced data
         pos = (y_train == 1).sum()
@@ -95,6 +106,7 @@ class EntryQualityModel:
 
         model.fit(
             X_train, y_train,
+            sample_weight=sw_train,
             eval_set=[(X_test, y_test)],
             verbose=False,
         )

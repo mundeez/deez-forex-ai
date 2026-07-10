@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Activity, Globe, Newspaper, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import { API_URL } from "@/utils/api";
+import { useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
 interface AnalysisPanelProps {
   symbol: string;
@@ -13,23 +14,12 @@ export default function AnalysisPanel({ symbol }: AnalysisPanelProps) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ tech: true, fund: false, sent: false });
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    fetchAnalysis();
-  }, [symbol]);
-
-  async function fetchAnalysis() {
+  useFetchOnce(async (signal) => {
     setLoading(true);
-    try {
-      const res = await fetch(`${API_URL}/api/v1/analysis/summary?symbol=${symbol}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setAnalysis(data);
-    } catch (e) {
-      console.error("analysis fetch error", e);
-    } finally {
-      setLoading(false);
-    }
-  }
+    const data = await fetchJSON<any>(`${API_URL}/api/v1/analysis/summary?symbol=${symbol}`, signal);
+    if (data) setAnalysis(data);
+    setLoading(false);
+  }, [symbol]);
 
   const toggle = (key: string) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
 

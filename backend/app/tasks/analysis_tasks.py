@@ -1321,6 +1321,104 @@ def train_entry_model():
 
 
 @celery_app.task
+def retrain_all_models():
+    """Scheduled task: retrain both EntryQualityModel and TeamMetaModel.
+
+    Trains on all closed trades with AI decisions from the last 90 days.
+    Winners are weighted 2x more than losers to bias learning toward
+    winning patterns.
+    """
+    async def _train():
+        async with get_celery_session()() as db:
+            from datetime import datetime, timedelta, timezone
+            from app import models
+            from app.services.feature_store import FeatureStore
+            from app.services.ml.entry_model import EntryQualityModel
+            from app.services.ml.team_meta_model import (
+                TeamMetaModel,
+                _extract_analyst_features,
+                _extract_verifier_features,
+            )
+            from app.services.ml.multitimeframe_features import compute_multitimeframe_features
+            import pandas as pd
+
+            since = datetime.now(timezone.utc) - timedelta(days=90)
+            result = await db.execute(
+                select(models.Trade)
+                .where(models.Trade.status == models.TradeStatus.CLOSED)
+                .where(models.Trade.close_time >= since)
+                .where(models.Trade.ai_decision_id.isnot(None))
+                .order_by(models.Trade.close_time)
+                .limit(3000)
+            )
+            trades = result.scalars().all()
+            logger.info("retrain_all_models: %d closed trades found", len(trades))
+
+            if len(trades) < 50:
+                logger.warning("retrain_all_models: insufficient data (%d samples), skipping", len(trades))
+                return
+
+            entry_data = []
+            team_data = []
+            for t in trades:
+                d_result = await db.execute(
+                    select(models.AIDecision).where(models.AIDecision.id == t.ai_decision_id)
+                )
+                decision = d_result.scalar_one_or_none()
+                if not decision:
+                    continue
+                label = 1 if (t.pnl or 0) > 0 else 0
+                try:
+                    mt = await compute_multitimeframe_features(db, t.symbol, decision.created_at or t.created_at)
+                except Exception:
+                    mt = {}
+                analysis = {
+                    "technical": decision.technical_snapshot or {},
+                    "fundamental": decision.fundamental_snapshot or {},
+                    "sentiment": decision.sentiment_snapshot or {},
+                    "macro": decision.daily_bias or {},
+                }
+                base = FeatureStore.compute_entry_features(analysis)
+                entry_data.append({
+                    "features": {**base, **mt},
+                    "label": label,
+                    "symbol": t.symbol,
+                    "direction": t.direction,
+                })
+                tf = {}
+                tf.update(_extract_analyst_features(decision.analyst_opinions))
+                tf.update(_extract_verifier_features(decision.verifier_verdict, decision.lead_model))
+                tf["label"] = label
+                team_data.append(tf)
+
+            # Train EntryQualityModel (win_weight=2.0 biases toward winning patterns)
+            if len(entry_data) >= 50:
+                df_entry = FeatureStore.export_training_set(entry_data)
+                entry_model = EntryQualityModel()
+                entry_metrics = entry_model.train(df_entry, win_weight=2.0)
+                logger.info(
+                    "retrain_all_models: EntryQualityModel trained — train_auc=%.3f test_auc=%.3f n=%d",
+                    entry_metrics.get("train_auc", 0),
+                    entry_metrics.get("test_auc", 0),
+                    len(entry_data),
+                )
+
+            # Train TeamMetaModel (win_weight=2.0)
+            if len(team_data) >= 50:
+                df_team = pd.DataFrame(team_data)
+                team_model = TeamMetaModel()
+                team_metrics = team_model.train(df_team, win_weight=2.0)
+                logger.info(
+                    "retrain_all_models: TeamMetaModel trained — train_auc=%.3f test_auc=%.3f n=%d",
+                    team_metrics.get("train_auc", 0),
+                    team_metrics.get("test_auc", 0),
+                    len(team_data),
+                )
+
+    asyncio.run(_train())
+
+
+@celery_app.task
 def rolling_backtest_30d():
     """Nightly task: run rolling 30-day backtest on recent closed trades."""
     async def _run():

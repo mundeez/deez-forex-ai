@@ -25,6 +25,11 @@ apiClient.interceptors.response.use(
     const config = error.config;
     if (!config) return Promise.reject(error);
 
+    // Don't retry aborted requests (AbortController)
+    if (error.code === "ERR_CANCELED" || error.name === "AbortError" || error.name === "CanceledError") {
+      return Promise.reject(error);
+    }
+
     // Initialize retry count
     config.retryCount = config.retryCount ?? 0;
     const maxRetries = 3;
