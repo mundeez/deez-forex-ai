@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, text, case
 import redis.asyncio as aioredis
@@ -93,6 +94,60 @@ async def lifespan(app: FastAPI):
 # Build CORS origins list from env
 _cors_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 
+# --- Redis response cache for expensive endpoints ---
+import json as _json
+from functools import wraps
+
+_CACHE_TTL_FAST = 15   # seconds — price-like endpoints
+_CACHE_TTL_MED = 60    # seconds — trade/stats-like endpoints
+_CACHE_TTL_SLOW = 300  # seconds — suggestion engine (5 min)
+
+def _redis_cache(ttl: int = 30):
+    """Cache the JSON response of an async endpoint in Redis."""
+    def decorator(fn):
+        import inspect as _inspect
+        sig = _inspect.signature(fn)
+
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            # Build cache key from function name + bound arguments (skip db injection)
+            try:
+                bound = sig.bind(*args, **kwargs)
+                bound.apply_defaults()
+                key_parts = [fn.__name__]
+                for k, v in sorted(bound.arguments.items()):
+                    if hasattr(v, 'execute'):  # skip AsyncSession
+                        continue
+                    key_parts.append(f"{k}={v}")
+            except Exception:
+                key_parts = [fn.__name__]
+            cache_key = "api_cache:" + ":".join(str(p) for p in key_parts)
+            try:
+                cached = await app.state.redis.get(cache_key)
+                if cached:
+                    return _json.loads(cached)
+            except Exception:
+                pass  # cache miss is fine
+            result = await fn(*args, **kwargs)
+            # Don't cache error responses
+            if isinstance(result, JSONResponse) and result.status_code >= 400:
+                return result
+            try:
+                # Handle Pydantic models by converting to dict first
+                if hasattr(result, 'model_dump'):
+                    serializable = result.model_dump(mode='json')
+                elif isinstance(result, list) and result and hasattr(result[0], 'model_dump'):
+                    serializable = [r.model_dump(mode='json') for r in result]
+                else:
+                    serializable = result
+                await app.state.redis.setex(cache_key, ttl, _json.dumps(serializable, default=str))
+            except Exception:
+                pass
+            return result
+        wrapper.__signature__ = sig  # preserve signature for FastAPI Depends
+        return wrapper
+    return decorator
+
 app = FastAPI(
     title="deez-forex-ai",
     description="Intelligent 24/7 Forex Trading Platform",
@@ -119,6 +174,7 @@ app.add_middleware(RateLimitMiddleware)
 async def log_requests(request: Request, call_next):
     """Log all incoming HTTP requests with timing."""
     logger = logging.getLogger("app.main")
+
     start = pytime.time()
     method = request.method
     path = request.url.path
@@ -148,6 +204,7 @@ async def health_check():
     Returns 503 if any dependency is down.
     """
     logger = logging.getLogger("app.main")
+
     start = pytime.time()
     checks = {}
     status = "ok"
@@ -257,6 +314,7 @@ async def _get_data_client(provider: schemas.DataProvider = None):
 async def _safe_get_price(symbol: str, provider: schemas.DataProvider = None):
     """Try the requested provider first, fall back to the other if it fails."""
     logger = logging.getLogger("app.main")
+
     primary = await _get_data_client(provider)
     try:
         return await primary.get_current_price(symbol)
@@ -288,6 +346,7 @@ async def _safe_get_price(symbol: str, provider: schemas.DataProvider = None):
 async def _safe_get_candles(symbol: str, timeframe: str, limit: int, provider: schemas.DataProvider = None):
     """Try the requested provider first, fall back to the other if it fails."""
     logger = logging.getLogger("app.main")
+
     primary = await _get_data_client(provider)
     try:
         return await primary.get_historical_candles(symbol, timeframe, limit)
@@ -316,6 +375,7 @@ async def _safe_get_candles(symbol: str, timeframe: str, limit: int, provider: s
 
 
 @app.get("/api/v1/market/current")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_current_market(
     symbol: str = settings.DEFAULT_PAIR,
     provider: schemas.DataProvider = None,
@@ -334,6 +394,7 @@ async def get_current_market(
 
 
 @app.get("/api/v1/market/historical")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_historical_candles(
     symbol: str = settings.DEFAULT_PAIR,
     timeframe: str = "1h",
@@ -349,6 +410,7 @@ async def get_historical_candles(
 
 
 @app.get("/api/v1/market/summary")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_market_summary(
     symbol: str = settings.DEFAULT_PAIR,
     provider: schemas.DataProvider = None,
@@ -395,6 +457,7 @@ async def get_market_summary(
         raise
     except Exception as e:
         logger = logging.getLogger("app.main")
+
         logger.error("Market summary failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(status_code=503, detail="Market data temporarily unavailable")
 
@@ -405,6 +468,7 @@ async def get_available_pairs():
 
 
 @app.get("/api/v1/pairs/active")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_active_pairs(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(models.ActivePair).order_by(models.ActivePair.priority))
     pairs = result.scalars().all()
@@ -429,6 +493,7 @@ async def set_active_pairs(pairs: list[schemas.ActivePairCreate], db: AsyncSessi
 
 
 @app.get("/api/v1/trades")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_trades(
     status: str = None,
     limit: int = 50,
@@ -472,6 +537,7 @@ async def create_manual_trade(
 
 
 @app.get("/api/v1/positions")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_open_positions(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN).order_by(desc(models.Trade.open_time))
@@ -479,6 +545,7 @@ async def get_open_positions(db: AsyncSession = Depends(get_db)):
     trades = result.scalars().all()
     positions = []
     logger = logging.getLogger("app.main")
+
     for t in trades:
         try:
             price = await _safe_get_price(t.symbol, schemas.DataProvider(t.provider))
@@ -548,6 +615,7 @@ async def close_position(trade_id: int, db: AsyncSession = Depends(get_db)):
         raise
     except Exception as e:
         logger = logging.getLogger("app.main")
+
         logger.error("Failed to fetch price to close trade %s: %s", trade_id, e, exc_info=True)
         raise HTTPException(status_code=503, detail="Unable to fetch current price")
     if not current:
@@ -592,6 +660,7 @@ async def get_exit_recommendation(trade_id: int, db: AsyncSession = Depends(get_
     }
 
 @app.get("/api/v1/portfolio/summary")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_portfolio_summary(db: AsyncSession = Depends(get_db)):
     reset_at_str = await get_setting(db, "portfolio_reset_at")
     reset_at = _parse_reset_at(reset_at_str)
@@ -684,6 +753,7 @@ async def reset_portfolio(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/trades/stats")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_trade_stats(db: AsyncSession = Depends(get_db)):
     reset_at_str = await get_setting(db, "portfolio_reset_at")
     reset_at = _parse_reset_at(reset_at_str)
@@ -770,6 +840,7 @@ async def get_trade_stats(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/portfolio/daily")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_daily_pnl_history(
     days: int = 30,
     db: AsyncSession = Depends(get_db)
@@ -797,6 +868,7 @@ async def get_daily_pnl_history(
 
 
 @app.get("/api/v1/ai/models")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_ai_models(db: AsyncSession = Depends(get_db)):
     """Model rotation status: pool, per-model cooldowns, availability, recent usage."""
     from app.ai.model_router import ModelRouter, parse_pool, DEFAULT_FREE_POOL
@@ -823,6 +895,7 @@ async def get_ai_models(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/ai/suites")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_ai_suites():
     """Return all available model suites with latency-tier annotations."""
     from app.ai.suites import suite_info
@@ -890,6 +963,7 @@ async def get_analytics_breakdown(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/ai/decisions")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_ai_decisions(
     limit: int = 20,
     db: AsyncSession = Depends(get_db)
@@ -1006,6 +1080,7 @@ async def get_fundamental_analysis(symbol: str = settings.DEFAULT_PAIR, db: Asyn
         }
     except Exception as e:
         logger = logging.getLogger("app.main")
+
         logger.error("Fundamental analysis failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(status_code=503, detail="Fundamental analysis unavailable")
 
@@ -1030,18 +1105,29 @@ async def download_historical_data(
 
 
 @app.get("/api/v1/data/health")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_data_health(db: AsyncSession = Depends(get_db)):
-    """Health check for data providers: MT5 ZMQ, MetaAPI, and paper fallback status."""
+    """Health check for data providers: MT5 RPyC, ZMQ, MetaAPI, and paper fallback status."""
     from app.services.data.mt5_zmq_client import MT5ZMQClient
     from app.services.data.metaapi_client import MetaApiClient
+    from app.services.data.mt5_rpyc_client import MT5RPyCClient
 
+    rpyc_client = MT5RPyCClient()
     mt5 = MT5ZMQClient()
     metaapi = MetaApiClient()
+
+    rpyc_healthy = False
+    rpyc_error = None
+    try:
+        price = await asyncio.wait_for(rpyc_client.get_current_price("EURUSD"), timeout=5)
+        rpyc_healthy = price.get("bid") is not None
+    except Exception as exc:
+        rpyc_error = str(exc)
 
     mt5_healthy = False
     mt5_error = None
     try:
-        price = await mt5.get_current_price("EURUSD")
+        price = await asyncio.wait_for(mt5.get_current_price("EURUSD"), timeout=5)
         mt5_healthy = price.get("bid") is not None
     except Exception as exc:
         mt5_error = str(exc)
@@ -1049,7 +1135,7 @@ async def get_data_health(db: AsyncSession = Depends(get_db)):
     metaapi_healthy = False
     metaapi_error = None
     try:
-        price = await metaapi.get_current_price("EURUSD")
+        price = await asyncio.wait_for(metaapi.get_current_price("EURUSD"), timeout=5)
         metaapi_healthy = price.get("bid") is not None
     except Exception as exc:
         metaapi_error = str(exc)
@@ -1058,11 +1144,12 @@ async def get_data_health(db: AsyncSession = Depends(get_db)):
     paper_fallback_allowed = await get_setting_bool(db, "allow_paper_fallback")
 
     return {
+        "mt5_rpyc": {"healthy": rpyc_healthy, "error": rpyc_error},
         "mt5_zmq": {"healthy": mt5_healthy, "error": mt5_error},
         "metaapi": {"healthy": metaapi_healthy, "error": metaapi_error},
         "mt5_feed_default": mt5_default,
         "paper_fallback_allowed": paper_fallback_allowed,
-        "recommended_provider": "mt5_zmq" if mt5_healthy else ("metaapi" if metaapi_healthy else "paper_mock"),
+        "recommended_provider": "mt5_rpyc" if rpyc_healthy else ("mt5_zmq" if mt5_healthy else ("metaapi" if metaapi_healthy else "paper_mock")),
     }
 
 
@@ -1115,6 +1202,7 @@ async def get_sentiment_analysis(symbol: str = settings.DEFAULT_PAIR, db: AsyncS
         }
     except Exception as e:
         logger = logging.getLogger("app.main")
+
         logger.error("Sentiment analysis failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(status_code=503, detail="Sentiment analysis unavailable")
 
@@ -1125,6 +1213,7 @@ async def get_analysis_full(symbol: str = settings.DEFAULT_PAIR, db: AsyncSessio
 
 
 @app.get("/api/v1/analysis/summary")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_analysis_summary(symbol: str = settings.DEFAULT_PAIR, db: AsyncSession = Depends(get_db)):
     aggregator: AnalysisAggregator = app.state.aggregator
     try:
@@ -1151,6 +1240,7 @@ async def get_analysis_summary(symbol: str = settings.DEFAULT_PAIR, db: AsyncSes
             latest_ai = ai_result.scalar_one_or_none()
         except Exception as e:
             logger = logging.getLogger("app.main")
+
             logger.warning("Failed to fetch latest AI decision for %s: %s", symbol, e)
 
         return {
@@ -1166,6 +1256,7 @@ async def get_analysis_summary(symbol: str = settings.DEFAULT_PAIR, db: AsyncSes
         raise
     except Exception as e:
         logger = logging.getLogger("app.main")
+
         logger.error("Analysis summary failed for %s: %s", symbol, e, exc_info=True)
         raise HTTPException(status_code=503, detail="Analysis service temporarily unavailable")
 
@@ -1179,6 +1270,7 @@ async def get_backtests(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/account/info")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_account_info(provider: schemas.DataProvider = None):
     try:
         client = await _get_data_client(provider)
@@ -1186,6 +1278,7 @@ async def get_account_info(provider: schemas.DataProvider = None):
         return schemas.AccountInfoOut(**info)
     except Exception as e:
         logger = logging.getLogger("app.main")
+
         logger.warning("Account info unavailable from provider, returning fallback: %s", e)
         return schemas.AccountInfoOut(
             balance=100.0,
@@ -1198,6 +1291,7 @@ async def get_account_info(provider: schemas.DataProvider = None):
 
 
 @app.get("/api/v1/settings")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_app_settings(db: AsyncSession = Depends(get_db)):
     return await build_settings_response(db)
 
@@ -1214,6 +1308,7 @@ async def update_app_settings(payload: schemas.AppSettingsUpdate, db: AsyncSessi
 
 
 @app.get("/api/v1/suggestions/best-now")
+@_redis_cache(ttl=_CACHE_TTL_SLOW)
 async def get_best_now(db: AsyncSession = Depends(get_db)):
     from app.suggestion_engine.engine import SuggestionEngine
     strategy_mode = await get_setting(db, "strategy_mode")
@@ -1223,6 +1318,7 @@ async def get_best_now(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/suggestions/today")
+@_redis_cache(ttl=_CACHE_TTL_SLOW)
 async def get_today_timeline(db: AsyncSession = Depends(get_db)):
     from app.suggestion_engine.engine import SuggestionEngine
     strategy_mode = await get_setting(db, "strategy_mode")
@@ -1232,6 +1328,7 @@ async def get_today_timeline(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/suggestions/weekly")
+@_redis_cache(ttl=_CACHE_TTL_SLOW)
 async def get_weekly_outlook(db: AsyncSession = Depends(get_db)):
     from app.suggestion_engine.engine import SuggestionEngine
     strategy_mode = await get_setting(db, "strategy_mode")
@@ -1250,6 +1347,7 @@ async def get_pair_deep_dive(symbol: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/manual-override")
+@_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_manual_override(db: AsyncSession = Depends(get_db)):
     val = await get_setting_bool(db, "manual_override")
     return {"manual_override": val}
@@ -1287,6 +1385,7 @@ class ConnectionManager:
                 await connection.send_text(json.dumps(message))
             except Exception as e:
                 logger = logging.getLogger("app.main")
+
                 logger.debug("WebSocket broadcast error, disconnecting client: %s", e)
                 disconnected.append(connection)
         for d in disconnected:
@@ -1302,6 +1401,7 @@ class ConnectionManager:
                     await connection.send_text(json.dumps(message))
                 except Exception as e:
                     logger = logging.getLogger("app.main")
+
                     logger.debug("WebSocket topic broadcast error, disconnecting client: %s", e)
                     disconnected.append(connection)
         for d in disconnected:
@@ -1325,6 +1425,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def redis_listener():
         logger = logging.getLogger("app.main")
+
         try:
             import redis.asyncio as aioredis
             redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -1369,6 +1470,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         pass  # _safe_get_price already logged
                     except Exception as e:
                         logger = logging.getLogger("app.main")
+
                         logger.debug("Initial price send failed for %s: %s", sym, e)
             elif action == "subscribe_topics":
                 topics = msg.get("topics", ["prices", "trades", "ai_decisions", "settings"])
@@ -1441,6 +1543,7 @@ async def broadcast_settings_change(settings_data: dict):
 # =============================================================================
 
 @app.get("/api/v1/mt5/status", response_model=schemas.MT5StatusOut)
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_mt5_status(db: AsyncSession = Depends(get_db)):
     """Check MT5 container, ZMQ bridge, and RPyC service status."""
     import zmq
@@ -1449,45 +1552,55 @@ async def get_mt5_status(db: AsyncSession = Depends(get_db)):
     rpyc_reachable = False
     mt5_initialized = False
 
-    # Check ZMQ (legacy)
+    # Check ZMQ (legacy) — run in thread to not block event loop
+    def _check_zmq():
+        try:
+            ctx = zmq.Context()
+            sock = ctx.socket(zmq.REQ)
+            sock.setsockopt(zmq.RCVTIMEO, 3000)
+            sock.setsockopt(zmq.SNDTIMEO, 2000)
+            sock.setsockopt(zmq.LINGER, 0)
+            sock.connect(f"tcp://{settings.MT5_ZMQ_HOST}:{settings.MT5_ZMQ_REQ_PORT}")
+            sock.send_string(json.dumps({"action": "GET_ACCOUNT"}))
+            resp = sock.recv_string()
+            data = json.loads(resp)
+            sock.close()
+            ctx.term()
+            return True, ("error" not in data or "not initialized" not in data.get("error", ""))
+        except Exception:
+            return False, False
+
     try:
-        ctx = zmq.Context()
-        sock = ctx.socket(zmq.REQ)
-        sock.setsockopt(zmq.RCVTIMEO, 12000)
-        sock.setsockopt(zmq.SNDTIMEO, 2000)
-        sock.setsockopt(zmq.LINGER, 0)
-        sock.connect(f"tcp://{settings.MT5_ZMQ_HOST}:{settings.MT5_ZMQ_REQ_PORT}")
-        sock.send_string(json.dumps({"action": "GET_ACCOUNT"}))
-        resp = sock.recv_string()
-        data = json.loads(resp)
-        zmq_reachable = True
-        mt5_initialized = "error" not in data or "not initialized" not in data.get("error", "")
-        sock.close()
-        ctx.term()
-    except zmq.Again:
-        pass
+        zmq_reachable, zmq_mt5_ok = await asyncio.to_thread(_check_zmq)
+        if zmq_reachable:
+            mt5_initialized = mt5_initialized or zmq_mt5_ok
     except Exception:
         container_running = False
 
-    # Check RPyC MT5Service (new primary)
-    try:
-        import rpyc
-        conn = rpyc.connect(
-            settings.MT5_RPYC_HOST,
-            settings.MT5_RPYC_PORT,
-            config={"sync_request_timeout": 8},
-        )
-        result = conn.root.exposed_get_price("EURUSD")
-        rpyc_reachable = True
-        # Check result BEFORE closing conn — result may be a netref requiring remote access
-        has_error = False
+    # Check RPyC MT5Service (new primary) — run in thread
+    def _check_rpyc():
         try:
-            has_error = result and "error" in result
+            import rpyc
+            conn = rpyc.connect(
+                settings.MT5_RPYC_HOST,
+                settings.MT5_RPYC_PORT,
+                config={"sync_request_timeout": 5},
+            )
+            result = conn.root.exposed_get_price("EURUSD")
+            has_error = False
+            try:
+                has_error = result and "error" in result
+            except Exception:
+                pass
+            conn.close()
+            return True, (result and not has_error)
         except Exception:
-            pass
-        if result and not has_error:
+            return False, False
+
+    try:
+        rpyc_reachable, rpyc_mt5_ok = await asyncio.to_thread(_check_rpyc)
+        if rpyc_mt5_ok:
             mt5_initialized = True
-        conn.close()
     except Exception:
         pass
 
@@ -1511,10 +1624,12 @@ async def get_mt5_status(db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/mt5/accounts", response_model=list[schemas.BrokerAccountOut])
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def list_broker_accounts(db: AsyncSession = Depends(get_db)):
     """List all stored MT5 broker accounts."""
     result = await db.execute(select(models.BrokerAccount).order_by(models.BrokerAccount.created_at.desc()))
-    return result.scalars().all()
+    accounts = result.scalars().all()
+    return [schemas.BrokerAccountOut.model_validate(a) for a in accounts]
 
 
 @app.post("/api/v1/mt5/accounts", response_model=schemas.BrokerAccountOut)
@@ -1663,6 +1778,7 @@ async def trigger_ingestion(request: Request):
 
 
 @app.get("/api/v1/data/ingestion-state")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_ingestion_state():
     """Return current ingestion state for all symbols."""
     service = IngestionService()
@@ -1700,6 +1816,7 @@ async def trigger_backfill(symbol: str, source: str = "dukascopy"):
 
 
 @app.get("/api/v1/data/pipeline-status")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_pipeline_status():
     """High-level pipeline status overview."""
     service = IngestionService()
@@ -1723,6 +1840,7 @@ orch = PipelineOrchestrator()
 
 
 @app.get("/api/v1/data/pipeline/jobs")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def list_pipeline_jobs(status: str = None, source: str = None, limit: int = 100):
     """List ingestion jobs filtered by status and/or source."""
     status_enum = PipelineStatus(status) if status else None
@@ -1763,6 +1881,7 @@ async def trigger_kill_stale_jobs(stale_minutes: int = 30):
 
 
 @app.get("/api/v1/data/pipeline/summary")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_pipeline_summary():
     """High-level pipeline summary with counts per status."""
     all_jobs = await orch.list_jobs(limit=1000)
@@ -1777,6 +1896,7 @@ async def get_pipeline_summary():
 
 
 @app.get("/api/v1/system/live-readiness")
+@_redis_cache(ttl=_CACHE_TTL_MED)
 async def get_live_readiness(db: AsyncSession = Depends(get_db)):
     """Live deployment readiness check — verify all safety systems are active."""
     from app.services.settings_service import get_setting, get_setting_bool

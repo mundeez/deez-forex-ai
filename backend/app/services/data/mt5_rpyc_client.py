@@ -59,7 +59,10 @@ class MT5RPyCClient:
         exposed_method = getattr(root, f"exposed_{method}", None)
         if exposed_method is None:
             raise AttributeError(f"MT5Service does not expose method: {method}")
-        return await asyncio.to_thread(exposed_method, *args, **kwargs)
+        return await asyncio.wait_for(
+            asyncio.to_thread(exposed_method, *args, **kwargs),
+            timeout=10,
+        )
 
     async def get_current_price(self, symbol: str = "EURUSD") -> Dict[str, Any]:
         resp = await self._call("get_price", symbol)
@@ -81,7 +84,20 @@ class MT5RPyCClient:
         resp = await self._call("get_candles", symbol, timeframe, limit)
         if resp.get("error"):
             raise RuntimeError(resp["error"])
-        return resp.get("candles", [])
+        # Convert RPyC netrefs to plain Python dicts to avoid network round-trips
+        # on every attribute access during pandas operations
+        raw_candles = resp.get("candles", [])
+        return [
+            {
+                "timestamp": int(c["timestamp"]),
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+                "volume": int(c["volume"]),
+            }
+            for c in raw_candles
+        ]
 
     async def place_trade(self, order: Dict[str, Any]) -> Dict[str, Any]:
         resp = await self._call("place_trade", order)
@@ -120,13 +136,13 @@ class MT5RPyCClient:
         resp = await self._call("get_positions")
         if resp.get("error"):
             raise RuntimeError(resp["error"])
-        return resp.get("positions", [])
+        return [dict(p) for p in resp.get("positions", [])]
 
     async def get_pending_orders(self) -> List[Dict[str, Any]]:
         resp = await self._call("get_orders")
         if resp.get("error"):
             raise RuntimeError(resp["error"])
-        return resp.get("orders", [])
+        return [dict(o) for o in resp.get("orders", [])]
 
     async def modify_position(
         self, ticket: int, sl: float = None, tp: float = None
@@ -142,7 +158,7 @@ class MT5RPyCClient:
         resp = await self._call("get_history_deals", date_from, date_to, group)
         if resp.get("error"):
             raise RuntimeError(resp["error"])
-        return resp.get("deals", [])
+        return [dict(d) for d in resp.get("deals", [])]
 
     async def get_history_orders(
         self, date_from: str = "", date_to: str = ""
@@ -150,7 +166,7 @@ class MT5RPyCClient:
         resp = await self._call("get_history_orders", date_from, date_to)
         if resp.get("error"):
             raise RuntimeError(resp["error"])
-        return resp.get("orders", [])
+        return [dict(o) for o in resp.get("orders", [])]
 
     async def login(self, login: int, password: str, server: str, timeout: int = 60000) -> Dict[str, Any]:
         resp = await self._call("login", login, password, server, timeout)
