@@ -277,9 +277,21 @@ class RiskManager:
         if not atr or atr <= 0:
             return True, "OK"
 
-        # Fetch current price to get spread
+        # Fetch current price using the configured data provider
+        from app.config import get_settings
+        from app.enums import DataProvider
+        from app.services.data.mt5_rpyc_client import MT5RPyCClient
+        from app.services.data.mt5_zmq_client import MT5ZMQClient
         from app.services.data.metaapi_client import MetaApiClient
-        client = MetaApiClient()
+
+        settings = get_settings()
+        if settings.DATA_PROVIDER == DataProvider.MT5_RPYC:
+            client = MT5RPyCClient()
+        elif settings.DATA_PROVIDER == DataProvider.MT5_ZMQ:
+            client = MT5ZMQClient()
+        else:
+            client = MetaApiClient()
+
         try:
             price = await client.get_current_price(symbol)
             spread = abs((price.get("ask") or 0) - (price.get("bid") or 0))
@@ -289,6 +301,15 @@ class RiskManager:
 
         ratio = spread / atr
         max_ratio = await get_setting_float(db, "max_spread_to_atr_ratio")
+
+        # Strategy-aware spread limits: scalping uses smaller TFs with smaller ATR,
+        # so the spread/ATR ratio is naturally higher. Relax the limit for scalping.
+        strategy_mode = await self._get_strategy_mode(db)
+        strategy_max = {"scalping": 1.5, "day_trading": 1.0, "swing": 0.5}
+        effective_max = strategy_max.get(strategy_mode, max_ratio)
+        # Use the more permissive of the two (DB setting vs strategy default)
+        max_ratio = max(max_ratio, effective_max)
+
         if ratio > max_ratio:
             return False, f"Spread {spread:.5f} is {ratio:.2f}x ATR (max {max_ratio}x)"
         return True, "OK"

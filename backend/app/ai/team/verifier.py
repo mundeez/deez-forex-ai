@@ -31,10 +31,14 @@ class Verifier:
     """
 
     _SYSTEM_PROMPT = (
-        "You are a ruthless risk manager reviewing a proposed forex trade. "
-        "Your job is to find the flaws in this setup across fundamental and technical lines. "
-        "Consider: conflicting analyst opinions, poor risk/reward, news proximity, "
-        "overleveraging, counter-trend positioning, and macro contradictions. "
+        "You are a balanced risk manager reviewing a proposed forex paper trade. "
+        "Review the setup across fundamental and technical lines. "
+        "Only VETO if there are CRITICAL flaws: missing entry/SL/TP, extreme news risk, "
+        "or clear signal contradiction (e.g., BUY when all analysts say SELL). "
+        "Use REVISE for moderate concerns (tighten SL, reduce size, adjust entry). "
+        "APPROVE when the trade has a reasonable thesis with defined risk parameters. "
+        "Remember: this is paper trading — favor allowing trades with managed risk "
+        "over blocking them entirely. Missing parameters on a HOLD proposal is not a flaw. "
         "Return ONLY a JSON object with keys: verdict (APPROVE|REVISE|VETO), "
         "confidence (0.0-1.0), concerns (string), suggested_changes (string or empty)."
     )

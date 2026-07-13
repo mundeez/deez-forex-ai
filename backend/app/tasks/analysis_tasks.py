@@ -40,11 +40,12 @@ def _clean_numpy(obj):
     return obj
 
 
-async def _should_run_analysis(r, symbol: str, current_price: float, threshold: float = 0.001) -> bool:
+async def _should_run_analysis(r, symbol: str, current_price: float, threshold: float = 0.0002) -> bool:
     """Skip analysis if price hasn't moved meaningfully since last run.
 
     Returns True if we should proceed with analysis, False if price is flat.
     Falls back to True (run analysis) if Redis is unavailable.
+    Threshold: 0.02% — low enough for scalping to catch small moves.
     """
     try:
         last = await r.get(f"last_analysis_price:{symbol}")
@@ -167,29 +168,63 @@ def _generate_rule_based_decision(analysis: Dict[str, Any], strategy_mode: str) 
     support = primary_tf.get("support", close * 0.995)
     resistance = primary_tf.get("resistance", close * 1.005)
 
-    # Rule-based decision logic
+    # Rule-based decision logic — relaxed thresholds for paper trading
     decision = "HOLD"
     entry = close
     sl = 0.0
     tp = 0.0
     rationale = ""
 
-    if adx >= 20 and ema9 > 0 and ema21 > 0:
-        if ema9 > ema21 and signal == "bullish" and rsi < 70:
+    # Ensure ATR is valid; fall back to a small fraction of price
+    if not atr or atr <= 0:
+        atr = close * 0.001  # 0.1% of price as fallback
+
+    # Lower ADX threshold for scalping (trends are weaker on 1m/5m)
+    adx_threshold = 15 if strategy_mode == "scalping" else 20
+
+    if adx >= adx_threshold and ema9 > 0 and ema21 > 0:
+        if ema9 > ema21 and signal in ("bullish", "neutral") and rsi < 75:
             decision = "BUY"
-            sl = max(support, close - atr * 1.5)
-            tp = min(resistance, close + atr * 2.5)
+            sl = close - atr * 1.5
+            tp = close + atr * 2.5
+            # Only use support/resistance if they provide wider stops
+            if support > 0 and support < sl:
+                sl = support  # tighter SL at support
+            if resistance > 0 and resistance > tp:
+                tp = resistance  # wider TP at resistance
             rationale = f"Rule-based BUY: EMA9({ema9:.5f})>EMA21({ema21:.5f}), ADX={adx:.0f}, RSI={rsi:.0f}, ATR={atr:.5f}"
-        elif ema9 < ema21 and signal == "bearish" and rsi > 30:
+        elif ema9 < ema21 and signal in ("bearish", "neutral") and rsi > 25:
             decision = "SELL"
-            sl = min(resistance, close + atr * 1.5)
-            tp = max(support, close - atr * 2.5)
+            sl = close + atr * 1.5
+            tp = close - atr * 2.5
+            # Only use support/resistance if they provide wider stops
+            if resistance > 0 and resistance < sl:
+                sl = resistance  # tighter SL at resistance
+            if support > 0 and support < tp:
+                tp = support  # wider TP at support
             rationale = f"Rule-based SELL: EMA9({ema9:.5f})<EMA21({ema21:.5f}), ADX={adx:.0f}, RSI={rsi:.0f}, ATR={atr:.5f}"
     else:
-        rationale = f"Rule-based HOLD: ADX={adx:.0f} (<20 no trend), EMA alignment inconclusive"
+        rationale = f"Rule-based HOLD: ADX={adx:.0f} (<{adx_threshold} no trend), EMA alignment inconclusive"
 
     if not rationale:
         rationale = f"Rule-based {decision}: signal={signal}, confidence={confidence:.0%}"
+
+    # For rule-based overrides, ensure minimum confidence and R:R
+    if decision in ("BUY", "SELL"):
+        # Set a minimum confidence of 0.5 for rule-based overrides
+        confidence = max(confidence, 0.5)
+        # Ensure R:R is at least 1.5 by adjusting TP if needed
+        if sl and tp and entry:
+            sl_dist = abs(entry - sl)
+            tp_dist = abs(tp - entry)
+            if sl_dist > 0:
+                current_rr = tp_dist / sl_dist
+                if current_rr < 1.5:
+                    # Extend TP to achieve 1.5 R:R
+                    if decision == "BUY":
+                        tp = entry + sl_dist * 1.5
+                    else:
+                        tp = entry - sl_dist * 1.5
 
     return TradeDecision(
         decision=decision,
@@ -417,7 +452,7 @@ def run_full_analysis():
                 symbol = pair.symbol
                 # Stagger symbol analyses to avoid OpenRouter rate-limit spikes
                 if idx > 0:
-                    await asyncio.sleep(90)
+                    await asyncio.sleep(15)
                 analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode, db=db)
 
                 # Price gate: skip if market hasn't moved meaningfully since last analysis
@@ -428,7 +463,7 @@ def run_full_analysis():
                 except Exception:
                     pass
                 if current_price and not await _should_run_analysis(r, symbol, float(current_price)):
-                    reason = "Price gate: market flat since last analysis (<0.1% move)"
+                    reason = "Price gate: market flat since last analysis (<0.02% move)"
                     results.append({"symbol": symbol, "decision": "HOLD", "confidence": 0.0, "reason": reason})
                     db_decision = models.AIDecision(
                         symbol=symbol,
@@ -791,7 +826,7 @@ def run_full_analysis():
                     await db.rollback()
 
                 # Store market state snapshot to Qdrant vector DB + SQL table
-                point_id = f"{_decision_id}"
+                point_id = int(_decision_id)
                 try:
                     await vs.upsert_snapshot(
                         point_id=point_id,
@@ -876,7 +911,62 @@ def run_full_analysis():
                         ind = first_tf.get("indicators", {})
                         atr = ind.get("atr_14", 0.0)
 
-                        # 1. ATR-based SL/TP validation
+                        # Clamp SL/TP to ATR-based limits instead of blocking
+                        if atr and atr > 0 and decision.entry_price:
+                            strategy_mode_val = await risk._get_strategy_mode(db)
+                            limits = {
+                                "scalping": {"sl_min": 0.3, "sl_max": 2.0, "tp_min": 0.5, "tp_max": 3.0},
+                                "day_trading": {"sl_min": 0.3, "sl_max": 3.0, "tp_min": 0.8, "tp_max": 5.0},
+                                "swing": {"sl_min": 0.5, "sl_max": 5.0, "tp_min": 1.0, "tp_max": 8.0},
+                            }
+                            lim = limits.get(strategy_mode_val, limits["scalping"])
+                            entry = decision.entry_price
+                            sl = decision.stop_loss
+                            tp = decision.take_profit
+                            sl_dist = abs(entry - sl) if sl else 0
+                            tp_dist = abs(tp - entry) if tp else 0
+                            sl_atr = sl_dist / atr if sl_dist > 0 else 0
+                            tp_atr = tp_dist / atr if tp_dist > 0 else 0
+
+                            # Clamp SL to [sl_min, sl_max] ATR
+                            if sl_atr > lim["sl_max"]:
+                                new_sl_dist = atr * lim["sl_max"]
+                                if decision.decision == "BUY":
+                                    decision.stop_loss = round(entry - new_sl_dist, 5)
+                                else:
+                                    decision.stop_loss = round(entry + new_sl_dist, 5)
+                                logger.info("[CLAMP] %s: SL adjusted from %.2fx to %.2fx ATR", symbol, sl_atr, lim["sl_max"])
+                            elif sl_atr < lim["sl_min"] and sl_atr > 0:
+                                new_sl_dist = atr * lim["sl_min"]
+                                if decision.decision == "BUY":
+                                    decision.stop_loss = round(entry - new_sl_dist, 5)
+                                else:
+                                    decision.stop_loss = round(entry + new_sl_dist, 5)
+                                logger.info("[CLAMP] %s: SL adjusted from %.2fx to %.2fx ATR", symbol, sl_atr, lim["sl_min"])
+
+                            # Clamp TP to [tp_min, tp_max] ATR
+                            if tp_atr > lim["tp_max"]:
+                                new_tp_dist = atr * lim["tp_max"]
+                                if decision.decision == "BUY":
+                                    decision.take_profit = round(entry + new_tp_dist, 5)
+                                else:
+                                    decision.take_profit = round(entry - new_tp_dist, 5)
+                                logger.info("[CLAMP] %s: TP adjusted from %.2fx to %.2fx ATR", symbol, tp_atr, lim["tp_max"])
+                            elif tp_atr < lim["tp_min"] and tp_atr > 0:
+                                new_tp_dist = atr * lim["tp_min"]
+                                if decision.decision == "BUY":
+                                    decision.take_profit = round(entry + new_tp_dist, 5)
+                                else:
+                                    decision.take_profit = round(entry - new_tp_dist, 5)
+                                logger.info("[CLAMP] %s: TP adjusted from %.2fx to %.2fx ATR", symbol, tp_atr, lim["tp_min"])
+
+                            # Recalculate R:R
+                            new_sl_dist = abs(entry - decision.stop_loss)
+                            new_tp_dist = abs(decision.take_profit - entry)
+                            if new_sl_dist > 0:
+                                decision.risk_reward = round(new_tp_dist / new_sl_dist, 2)
+
+                        # 1. ATR-based SL/TP validation (after clamping, should pass)
                         ok2, reason2 = await risk.validate_sl_tp_atr(
                             db, decision.entry_price, decision.stop_loss, decision.take_profit, atr
                         )

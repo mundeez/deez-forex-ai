@@ -217,8 +217,9 @@ def kill_stale_jobs(self, stale_minutes: int = 30):
     Monitor task: mark ingestion jobs stuck in RUNNING for too long as FAILED.
     Runs every 10 minutes via Celery beat.
     """
+    from app.database import get_celery_session
     async def _run():
-        orch = PipelineOrchestrator()
+        orch = PipelineOrchestrator(session_factory=get_celery_session())
         return await orch.kill_stale_jobs(stale_minutes=stale_minutes)
     count = asyncio.run(_run())
     return {"killed": count}
