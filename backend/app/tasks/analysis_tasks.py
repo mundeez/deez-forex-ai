@@ -60,8 +60,8 @@ async def _should_run_analysis(r, symbol: str, current_price: float, threshold: 
         return True
 
 
-async def _store_last_price(r, symbol: str, price: float, ttl: int = 14400):
-    """Store current price in Redis after analysis. TTL = 4h (one trading session)."""
+async def _store_last_price(r, symbol: str, price: float, ttl: int = 3600):
+    """Store current price in Redis after analysis. TTL = 1h (covers 2 analysis cycles)."""
     try:
         await r.setex(f"last_analysis_price:{symbol}", ttl, str(price))
     except Exception:
@@ -452,7 +452,7 @@ def run_full_analysis():
                 symbol = pair.symbol
                 # Stagger symbol analyses to avoid OpenRouter rate-limit spikes
                 if idx > 0:
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(5)
                 analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode, db=db)
 
                 # Price gate: skip if market hasn't moved meaningfully since last analysis
@@ -811,6 +811,7 @@ def run_full_analysis():
                 # Persist regime label to market_regimes table
                 try:
                     mr = models.MarketRegime(
+                        timestamp=utc_now(),
                         symbol=symbol,
                         timeframe=decision.timeframe or "1h",
                         regime=regime_info["regime"],
@@ -849,7 +850,7 @@ def run_full_analysis():
                         strategy_mode=strategy_mode,
                         decision=decision.decision,
                         confidence=decision.confidence,
-                        qdrant_point_id=point_id,
+                        qdrant_point_id=str(point_id),
                     )
                     db.add(mss)
                     await db.commit()

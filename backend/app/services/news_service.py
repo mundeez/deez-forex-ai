@@ -62,7 +62,10 @@ class NewsService:
         return []
 
     def _parse_event_time(self, event: Dict[str, Any]) -> Optional[datetime]:
-        """Parse event datetime from ForexFactory JSON format."""
+        """Parse event datetime from ForexFactory JSON format.
+
+        Returns a timezone-aware UTC datetime to match utc_now().
+        """
         import pytz
         date_str = event.get("date")
         time_str = event.get("time")
@@ -78,7 +81,7 @@ class NewsService:
                 dt = datetime.fromisoformat(date_str)
                 if dt.tzinfo is None:
                     dt = eastern.localize(dt)
-                return dt.astimezone(pytz.utc).replace(tzinfo=None)
+                return dt.astimezone(pytz.utc)
             else:
                 # Simple date format — combine with time_str
                 dt_str = f"{date_str} {time_str or '00:00'}"
@@ -87,7 +90,7 @@ class NewsService:
                 except ValueError:
                     naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
                 localized_dt = eastern.localize(naive_dt)
-                return localized_dt.astimezone(pytz.utc).replace(tzinfo=None)
+                return localized_dt.astimezone(pytz.utc)
         except Exception:
             logger.warning("Failed to parse event time", exc_info=True)
             return None
