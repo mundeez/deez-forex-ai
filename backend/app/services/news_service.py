@@ -69,18 +69,25 @@ class NewsService:
         if not date_str:
             return None
         try:
-            # ForexFactory format: "2024-01-15" and "08:30"
-            # They use US Eastern Time (EST/EDT) - must use pytz for correct DST handling
-            dt_str = f"{date_str} {time_str or '00:00'}"
             eastern = pytz.timezone("US/Eastern")
-            # Try ISO 8601 format first (e.g. "2026-05-21T09:45:00-04:00")
-            try:
-                naive_dt = datetime.fromisoformat(dt_str)
-            except ValueError:
-                # Fall back to simple format
-                naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-            localized_dt = eastern.localize(naive_dt)
-            return localized_dt.astimezone(pytz.utc).replace(tzinfo=None)
+            # ForexFactory can return date in two formats:
+            # 1. Full ISO: "2026-07-13T05:25:00-04:00" (date already has time+tz)
+            # 2. Simple: "2024-01-15" (need time_str separately)
+            if "T" in date_str:
+                # Full ISO format — parse directly (already has timezone offset)
+                dt = datetime.fromisoformat(date_str)
+                if dt.tzinfo is None:
+                    dt = eastern.localize(dt)
+                return dt.astimezone(pytz.utc).replace(tzinfo=None)
+            else:
+                # Simple date format — combine with time_str
+                dt_str = f"{date_str} {time_str or '00:00'}"
+                try:
+                    naive_dt = datetime.fromisoformat(dt_str)
+                except ValueError:
+                    naive_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                localized_dt = eastern.localize(naive_dt)
+                return localized_dt.astimezone(pytz.utc).replace(tzinfo=None)
         except Exception:
             logger.warning("Failed to parse event time", exc_info=True)
             return None

@@ -40,12 +40,12 @@ def _clean_numpy(obj):
     return obj
 
 
-async def _should_run_analysis(r, symbol: str, current_price: float, threshold: float = 0.0002) -> bool:
+async def _should_run_analysis(r, symbol: str, current_price: float, threshold: float = 0.00005) -> bool:
     """Skip analysis if price hasn't moved meaningfully since last run.
 
     Returns True if we should proceed with analysis, False if price is flat.
     Falls back to True (run analysis) if Redis is unavailable.
-    Threshold: 0.02% — low enough for scalping to catch small moves.
+    Threshold: 0.005% — minimal gate to skip truly identical prices (broker returning same tick).
     """
     try:
         last = await r.get(f"last_analysis_price:{symbol}")
@@ -463,7 +463,7 @@ def run_full_analysis():
                 except Exception:
                     pass
                 if current_price and not await _should_run_analysis(r, symbol, float(current_price)):
-                    reason = "Price gate: market flat since last analysis (<0.02% move)"
+                    reason = "Price gate: market flat since last analysis (<0.005% move)"
                     results.append({"symbol": symbol, "decision": "HOLD", "confidence": 0.0, "reason": reason})
                     db_decision = models.AIDecision(
                         symbol=symbol,
@@ -928,37 +928,37 @@ def run_full_analysis():
                             sl_atr = sl_dist / atr if sl_dist > 0 else 0
                             tp_atr = tp_dist / atr if tp_dist > 0 else 0
 
-                            # Clamp SL to [sl_min, sl_max] ATR
+                            # Clamp SL to [sl_min, sl_max] ATR (use 95% of max to avoid float boundary)
                             if sl_atr > lim["sl_max"]:
-                                new_sl_dist = atr * lim["sl_max"]
+                                new_sl_dist = atr * lim["sl_max"] * 0.95
                                 if decision.decision == "BUY":
                                     decision.stop_loss = round(entry - new_sl_dist, 5)
                                 else:
                                     decision.stop_loss = round(entry + new_sl_dist, 5)
-                                logger.info("[CLAMP] %s: SL adjusted from %.2fx to %.2fx ATR", symbol, sl_atr, lim["sl_max"])
+                                logger.info("[CLAMP] %s: SL adjusted from %.2fx to %.2fx ATR", symbol, sl_atr, lim["sl_max"] * 0.95)
                             elif sl_atr < lim["sl_min"] and sl_atr > 0:
-                                new_sl_dist = atr * lim["sl_min"]
+                                new_sl_dist = atr * lim["sl_min"] * 1.05
                                 if decision.decision == "BUY":
                                     decision.stop_loss = round(entry - new_sl_dist, 5)
                                 else:
                                     decision.stop_loss = round(entry + new_sl_dist, 5)
-                                logger.info("[CLAMP] %s: SL adjusted from %.2fx to %.2fx ATR", symbol, sl_atr, lim["sl_min"])
+                                logger.info("[CLAMP] %s: SL adjusted from %.2fx to %.2fx ATR", symbol, sl_atr, lim["sl_min"] * 1.05)
 
-                            # Clamp TP to [tp_min, tp_max] ATR
+                            # Clamp TP to [tp_min, tp_max] ATR (use 95% of max to avoid float boundary)
                             if tp_atr > lim["tp_max"]:
-                                new_tp_dist = atr * lim["tp_max"]
+                                new_tp_dist = atr * lim["tp_max"] * 0.95
                                 if decision.decision == "BUY":
                                     decision.take_profit = round(entry + new_tp_dist, 5)
                                 else:
                                     decision.take_profit = round(entry - new_tp_dist, 5)
-                                logger.info("[CLAMP] %s: TP adjusted from %.2fx to %.2fx ATR", symbol, tp_atr, lim["tp_max"])
+                                logger.info("[CLAMP] %s: TP adjusted from %.2fx to %.2fx ATR", symbol, tp_atr, lim["tp_max"] * 0.95)
                             elif tp_atr < lim["tp_min"] and tp_atr > 0:
-                                new_tp_dist = atr * lim["tp_min"]
+                                new_tp_dist = atr * lim["tp_min"] * 1.05
                                 if decision.decision == "BUY":
                                     decision.take_profit = round(entry + new_tp_dist, 5)
                                 else:
                                     decision.take_profit = round(entry - new_tp_dist, 5)
-                                logger.info("[CLAMP] %s: TP adjusted from %.2fx to %.2fx ATR", symbol, tp_atr, lim["tp_min"])
+                                logger.info("[CLAMP] %s: TP adjusted from %.2fx to %.2fx ATR", symbol, tp_atr, lim["tp_min"] * 1.05)
 
                             # Recalculate R:R
                             new_sl_dist = abs(entry - decision.stop_loss)

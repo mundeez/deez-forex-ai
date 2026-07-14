@@ -87,7 +87,7 @@ services:
     container_name: deez-forex-celery
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination '*@*' || exit 1"]
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -127,7 +127,7 @@ services:
     container_name: deez-forex-beat
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination '*@*' || exit 1"]
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

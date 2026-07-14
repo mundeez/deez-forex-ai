@@ -137,7 +137,7 @@ class LeadStrategist:
         return {
             "decision": normalize_decision(parsed.get("decision")),
             "confidence": _safe_float_conf(parsed.get("confidence")),
-            "timeframe": parsed.get("timeframe", "M5" if strategy_mode == "scalping" else "H1"),
+            "timeframe": (parsed.get("timeframe") or ("M5" if strategy_mode == "scalping" else "H1"))[:10],
             "entry_zone": parsed.get("entry_zone", [0.0, 0.0]),
             "sl_zone": parsed.get("sl_zone", [0.0, 0.0]),
             "tp_zone": parsed.get("tp_zone", [0.0, 0.0]),

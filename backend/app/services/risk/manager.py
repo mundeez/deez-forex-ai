@@ -259,13 +259,14 @@ class RiskManager:
         }
         lim = limits.get(strategy_mode, limits["scalping"])
 
-        if sl_atr < lim["sl_min"]:
+        epsilon = 0.01  # 1% tolerance for floating point boundaries
+        if sl_atr < lim["sl_min"] * (1 - epsilon):
             return False, f"SL too tight: {sl_atr:.2f}x ATR (min {lim['sl_min']}x)"
-        if sl_atr > lim["sl_max"]:
+        if sl_atr > lim["sl_max"] * (1 + epsilon):
             return False, f"SL too wide: {sl_atr:.2f}x ATR (max {lim['sl_max']}x)"
-        if tp_atr < lim["tp_min"]:
+        if tp_atr < lim["tp_min"] * (1 - epsilon):
             return False, f"TP too close: {tp_atr:.2f}x ATR (min {lim['tp_min']}x)"
-        if tp_atr > lim["tp_max"]:
+        if tp_atr > lim["tp_max"] * (1 + epsilon):
             return False, f"TP too far: {tp_atr:.2f}x ATR (max {lim['tp_max']}x)"
         return True, "OK"
 
