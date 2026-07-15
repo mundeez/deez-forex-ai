@@ -92,7 +92,7 @@ celery_app.conf.update(
         },
         "compute-pattern-priors": {
             "task": "app.tasks.analysis_tasks.compute_pattern_priors",
-            "schedule": 3600.0 * 6,  # every 6 hours
+            "schedule": 3600.0,  # every 1 hour — fast learning loop
             "options": {"time_limit": 300, "soft_time_limit": 240},
         },
         "update-model-performance": {

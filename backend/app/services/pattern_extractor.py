@@ -81,6 +81,31 @@ class PatternExtractor:
                 "avg_pnl": round(np.mean([t["pnl"] for t in subset]), 2) if subset else 0.0,
             }
 
+        # By symbol
+        symbol_stats = {}
+        symbols = set(t.get("symbol", "unknown") for t in trades)
+        for sym in symbols:
+            subset = [t for t in trades if t.get("symbol") == sym]
+            s_wins = [t for t in subset if t.get("pnl", 0) > 0]
+            symbol_stats[sym] = {
+                "count": len(subset),
+                "win_rate": round(len(s_wins) / len(subset), 3) if subset else 0.0,
+                "avg_pnl": round(np.mean([t["pnl"] for t in subset]), 2) if subset else 0.0,
+            }
+
+        # By symbol + direction
+        pair_dir_stats = {}
+        for sym in symbols:
+            for direction in ("BUY", "SELL"):
+                subset = [t for t in trades if t.get("symbol") == sym and t.get("direction", "").upper() == direction]
+                if subset:
+                    s_wins = [t for t in subset if t.get("pnl", 0) > 0]
+                    pair_dir_stats[f"{sym}_{direction}"] = {
+                        "count": len(subset),
+                        "win_rate": round(len(s_wins) / len(subset), 3),
+                        "avg_pnl": round(np.mean([t["pnl"] for t in subset]), 2),
+                    }
+
         priors = {
             "computed_at": datetime.now(timezone.utc).isoformat(),
             "total_trades": total,
@@ -91,6 +116,8 @@ class PatternExtractor:
             "by_regime": regime_stats,
             "by_session": session_stats,
             "by_pattern_tag": tag_stats,
+            "by_symbol": symbol_stats,
+            "by_symbol_direction": pair_dir_stats,
         }
 
         logger.info(

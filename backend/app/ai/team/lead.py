@@ -52,6 +52,7 @@ class LeadStrategist:
         daily_bias: Optional[Dict[str, Any]],
         similar_setups: list,
         analyst_weights: Optional[Dict[str, float]] = None,
+        pattern_priors: Optional[Dict[str, Any]] = None,
     ) -> str:
         prompt = (
             f"Symbol: {symbol}\n"
@@ -80,6 +81,24 @@ class LeadStrategist:
                     f"  decision={s.get('decision')}, outcome={s.get('outcome_status','unknown')}, "
                     f"pnl={s.get('outcome_pnl','N/A')}, confidence={s.get('confidence','N/A')}\n"
                 )
+
+        if pattern_priors:
+            prompt += "\n\nHistorical Performance (LEARNED from past trades):\n"
+            prompt += f"  Overall win rate: {pattern_priors.get('overall_win_rate', 0):.0%} ({pattern_priors.get('total_trades', 0)} trades)\n"
+            prompt += f"  Avg win: +${pattern_priors.get('avg_win', 0)}, Avg loss: ${pattern_priors.get('avg_loss', 0)}\n"
+            prompt += f"  Expectancy: ${pattern_priors.get('expectancy', 0)}/trade\n"
+            by_session = pattern_priors.get('by_session', {})
+            if by_session:
+                prompt += "  By session:\n"
+                for sess, stats in by_session.items():
+                    wr = stats.get('win_rate', 0)
+                    prompt += f"    {sess}: {wr:.0%} win rate ({stats.get('count', 0)} trades, avg ${stats.get('avg_pnl', 0)})\n"
+            prompt += (
+                "\nIMPORTANT: Use this historical data to calibrate your confidence. "
+                "If the current session has <30% win rate, lean toward HOLD unless signals are very strong. "
+                "If a setup matches past winning patterns (high MFE, good exit quality), increase confidence. "
+                "If it matches losing patterns (quick SL hits, low exit quality), decrease confidence or HOLD.\n"
+            )
 
         prompt += (
             "\n\nReturn ONLY a JSON object with exactly these keys:\n"
@@ -111,7 +130,16 @@ class LeadStrategist:
         except Exception as exc:
             logger.warning("RAG search failed for lead: %s", exc)
 
-        prompt = self._build_prompt(symbol, strategy_mode, analyst_opinions, daily_bias, similar, analyst_weights)
+        # Fetch pattern priors (learned win/loss stats from past trades)
+        pattern_priors = None
+        try:
+            from app.services.pattern_extractor import PatternExtractor
+            pe = PatternExtractor()
+            pattern_priors = await pe.get_cached_priors()
+        except Exception as exc:
+            logger.warning("Pattern priors fetch failed for lead: %s", exc)
+
+        prompt = self._build_prompt(symbol, strategy_mode, analyst_opinions, daily_bias, similar, analyst_weights, pattern_priors)
         payload = {
             "temperature": 0.15,
             "max_tokens": 384,

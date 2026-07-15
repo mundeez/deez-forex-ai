@@ -497,10 +497,50 @@ def run_full_analysis():
             except Exception:
                 pass
 
+            # Pattern-based learning filter: skip pairs/sessions with poor historical win rates
+            pattern_priors = None
+            try:
+                from app.services.pattern_extractor import PatternExtractor
+                pe = PatternExtractor()
+                pattern_priors = await pe.get_cached_priors()
+            except Exception:
+                pass
+
             # Check news halt for each pair
             allowed_analyses = []
             for analysis in analyses:
                 symbol = analysis["symbol"]
+
+                # Learning filter: skip if this pair or session has poor historical win rates
+                if pattern_priors:
+                    from app.services.sessions import classify_session
+                    current_session = classify_session(utc_now()) or "unknown"
+                    session_stats = pattern_priors.get("by_session", {})
+                    symbol_stats = pattern_priors.get("by_symbol", {})
+                    pair_dir_stats = pattern_priors.get("by_symbol_direction", {})
+                    skip_reason = None
+
+                    # Check session win rate (need 5+ trades to be confident)
+                    sess_key = current_session.replace("asian", "asia").replace("london_ny_overlap", "ny")
+                    for sk in [sess_key, current_session]:
+                        if sk in session_stats:
+                            stats = session_stats[sk]
+                            if stats.get("count", 0) >= 5 and stats.get("win_rate", 1.0) < 0.25:
+                                skip_reason = f"{sk} session win rate {stats['win_rate']:.0%} over {stats['count']} trades"
+                                break
+
+                    # Check per-pair win rate (need 8+ trades to be confident)
+                    if not skip_reason and symbol in symbol_stats:
+                        stats = symbol_stats[symbol]
+                        if stats.get("count", 0) >= 8 and stats.get("win_rate", 1.0) < 0.30:
+                            skip_reason = f"{symbol} pair win rate {stats['win_rate']:.0%} over {stats['count']} trades"
+
+                    if skip_reason:
+                        reason = f"Pattern filter: {skip_reason} — skipping"
+                        results.append({"symbol": symbol, "decision": "HOLD", "confidence": 0.0, "reason": reason})
+                        logger.info("[PATTERN] %s: %s", symbol, reason)
+                        continue
+
                 if news_halt_enabled:
                     news_halted, news_reason = await news.is_trading_halted(
                         symbol,
@@ -1233,7 +1273,7 @@ def compute_pattern_priors():
                 session = "london" if 7 <= hour < 16 else "ny" if 12 <= hour < 21 else "asia"
                 trade_dicts.append({
                     "symbol": t.symbol,
-                    "direction": t.direction,
+                    "direction": t.direction.value if hasattr(t.direction, "value") else str(t.direction),
                     "pnl": t.pnl or 0,
                     "regime": session,
                     "session": session,
@@ -1396,7 +1436,7 @@ def train_entry_model():
                     "features": features,
                     "label": label,
                     "symbol": t.symbol,
-                    "direction": t.direction,
+                    "direction": t.direction.value if hasattr(t.direction, "value") else str(t.direction),
                 })
 
             if len(decisions_data) < 50:
@@ -1474,7 +1514,7 @@ def retrain_all_models():
                     "features": {**base, **mt},
                     "label": label,
                     "symbol": t.symbol,
-                    "direction": t.direction,
+                    "direction": t.direction.value if hasattr(t.direction, "value") else str(t.direction),
                 })
                 tf = {}
                 tf.update(_extract_analyst_features(decision.analyst_opinions))
@@ -1538,7 +1578,7 @@ def rolling_backtest_30d():
                 {
                     "timestamp": t.close_time,
                     "pnl": t.pnl or 0,
-                    "direction": t.direction,
+                    "direction": t.direction.value if hasattr(t.direction, "value") else str(t.direction),
                 }
                 for t in trades
             ]

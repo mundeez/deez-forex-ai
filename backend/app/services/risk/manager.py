@@ -103,8 +103,8 @@ class RiskManager:
         except Exception:
             daily_loss = 0
         daily_loss_pct = daily_loss / max(equity_balance, 1.0) * 100
-        if daily_loss_pct > 3.0:
-            return False, f"EMERGENCY HALT: daily loss {daily_loss_pct:.1f}% > 3% — paused 24h"
+        if daily_loss_pct > 5.0:
+            return False, f"EMERGENCY HALT: daily loss {daily_loss_pct:.1f}% > 5% — paused until next UTC midnight"
 
         # 2) Weekly loss > 6%
         week_start = now - timedelta(days=now.weekday())

@@ -392,6 +392,47 @@ class ExecutionService:
         except Exception:
             logger.warning("Failed to compute exit_quality_score for trade %s", trade.id, exc_info=True)
 
+        # Extract and store trade pattern for learning
+        try:
+            from app.services.feature_store import FeatureStore
+            from app import models as m
+            # Fetch the AI decision to get features
+            if trade.ai_decision_id:
+                dec_result = await db.execute(
+                    select(m.AIDecision).where(m.AIDecision.id == trade.ai_decision_id)
+                )
+                ai_dec = dec_result.scalar_one_or_none()
+                if ai_dec:
+                    # Determine outcome
+                    outcome = "win" if (trade.pnl or 0) > 0 else "loss"
+                    r_multiple = ((trade.exit_price - trade.entry_price) if trade.direction == "BUY"
+                                  else (trade.entry_price - trade.exit_price)) / max(abs(trade.entry_price - trade.stop_loss), 0.00001)
+                    pattern = m.TradePattern(
+                        trade_id=trade.id,
+                        symbol=trade.symbol,
+                        entry_session=trade.session_at_open or "unknown",
+                        strategy_mode=trade.strategy_mode or "scalping",
+                        entry_regime="unknown",  # Would need to fetch from MarketRegime
+                        analyst_consensus=ai_dec.decision,
+                        analyst_combination=ai_dec.lead_model or "",
+                        daily_bias_aligned=False,  # Would need to check
+                        verifier_verdict=ai_dec.verifier_verdict or "",
+                        mfe_pips=trade.mfe_pips or 0,
+                        mae_pips=trade.mae_pips or 0,
+                        mfe_mae_ratio=(trade.mfe_pips / max(abs(trade.mae_pips), 0.01)) if trade.mfe_pips else 0,
+                        outcome=outcome,
+                        pnl=trade.pnl or 0,
+                        r_multiple=round(r_multiple, 2),
+                        exit_quality_score=trade.exit_quality_score or 0,
+                        holding_min=trade.actual_holding_min or 0,
+                        optimal_hold_min=trade.actual_holding_min or 0,  # TODO: compute optimal
+                    )
+                    db.add(pattern)
+                    await db.commit()
+                    logger.info("Stored trade pattern for trade %s: outcome=%s, r_multiple=%.2f", trade.id, outcome, r_multiple)
+        except Exception:
+            logger.warning("Failed to store trade pattern for trade %s", trade.id, exc_info=True)
+
         return trade
 
     async def _fetch_prices_batch(self, client, symbols: list) -> dict:
