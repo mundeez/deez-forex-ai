@@ -394,8 +394,8 @@ class ExecutionService:
 
         # Extract and store trade pattern for learning
         try:
-            from app.services.feature_store import FeatureStore
             from app import models as m
+            from app.enums import TradeDirection
             # Fetch the AI decision to get features
             if trade.ai_decision_id:
                 dec_result = await db.execute(
@@ -405,7 +405,8 @@ class ExecutionService:
                 if ai_dec:
                     # Determine outcome
                     outcome = "win" if (trade.pnl or 0) > 0 else "loss"
-                    r_multiple = ((trade.exit_price - trade.entry_price) if trade.direction == "BUY"
+                    is_buy_dir = trade.direction == TradeDirection.BUY
+                    r_multiple = ((trade.exit_price - trade.entry_price) if is_buy_dir
                                   else (trade.entry_price - trade.exit_price)) / max(abs(trade.entry_price - trade.stop_loss), 0.00001)
                     pattern = m.TradePattern(
                         trade_id=trade.id,
@@ -413,10 +414,10 @@ class ExecutionService:
                         entry_session=trade.session_at_open or "unknown",
                         strategy_mode=trade.strategy_mode or "scalping",
                         entry_regime="unknown",  # Would need to fetch from MarketRegime
-                        analyst_consensus=ai_dec.decision,
-                        analyst_combination=ai_dec.lead_model or "",
+                        analyst_consensus=ai_dec.confidence or 0.0,
+                        analyst_combination=(ai_dec.lead_model or "")[:50],
                         daily_bias_aligned=False,  # Would need to check
-                        verifier_verdict=ai_dec.verifier_verdict or "",
+                        verifier_verdict=(ai_dec.verifier_verdict or "")[:10],
                         mfe_pips=trade.mfe_pips or 0,
                         mae_pips=trade.mae_pips or 0,
                         mfe_mae_ratio=(trade.mfe_pips / max(abs(trade.mae_pips), 0.01)) if trade.mfe_pips else 0,

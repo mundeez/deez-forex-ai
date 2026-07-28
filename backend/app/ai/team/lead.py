@@ -93,9 +93,22 @@ class LeadStrategist:
                 for sess, stats in by_session.items():
                     wr = stats.get('win_rate', 0)
                     prompt += f"    {sess}: {wr:.0%} win rate ({stats.get('count', 0)} trades, avg ${stats.get('avg_pnl', 0)})\n"
+            by_symbol = pattern_priors.get('by_symbol', {})
+            if by_symbol:
+                prompt += "  By pair:\n"
+                for sym, stats in sorted(by_symbol.items(), key=lambda x: x[1].get('win_rate', 0)):
+                    wr = stats.get('win_rate', 0)
+                    prompt += f"    {sym}: {wr:.0%} win rate ({stats.get('count', 0)} trades, avg ${stats.get('avg_pnl', 0)})\n"
+            by_pair_dir = pattern_priors.get('by_symbol_direction', {})
+            if by_pair_dir:
+                prompt += "  By pair+direction:\n"
+                for pd, stats in sorted(by_pair_dir.items(), key=lambda x: x[1].get('win_rate', 0)):
+                    wr = stats.get('win_rate', 0)
+                    prompt += f"    {pd}: {wr:.0%} win rate ({stats.get('count', 0)} trades)\n"
             prompt += (
                 "\nIMPORTANT: Use this historical data to calibrate your confidence. "
                 "If the current session has <30% win rate, lean toward HOLD unless signals are very strong. "
+                "If this pair or pair+direction has <30% win rate, lean toward HOLD. "
                 "If a setup matches past winning patterns (high MFE, good exit quality), increase confidence. "
                 "If it matches losing patterns (quick SL hits, low exit quality), decrease confidence or HOLD.\n"
             )

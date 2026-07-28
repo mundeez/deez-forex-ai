@@ -1252,11 +1252,12 @@ def record_hourly_performance():
 
 @celery_app.task
 def compute_pattern_priors():
-    """Nightly task: compute pattern priors from closed trades and cache in Redis."""
+    """Hourly task: compute pattern priors from closed trades and cache in Redis."""
     async def _compute():
         async with get_celery_session()() as db:
             from app import models
             from app.services.pattern_extractor import PatternExtractor
+            from app.services.sessions import classify_session
 
             result = await db.execute(
                 select(models.Trade).where(models.Trade.status == models.TradeStatus.CLOSED)
@@ -1267,10 +1268,12 @@ def compute_pattern_priors():
 
             trade_dicts = []
             for t in trades:
-                # Determine session from open_time
-                from datetime import timezone
-                hour = t.open_time.hour if t.open_time else 12
-                session = "london" if 7 <= hour < 16 else "ny" if 12 <= hour < 21 else "asia"
+                # Use stored session_at_open if available, otherwise classify from open_time
+                session = t.session_at_open or "unknown"
+                if session == "unknown" and t.open_time:
+                    session = classify_session(t.open_time) or "unknown"
+                # Normalize session names
+                session = session.replace("asian", "asia").replace("london_ny_overlap", "ny")
                 trade_dicts.append({
                     "symbol": t.symbol,
                     "direction": t.direction.value if hasattr(t.direction, "value") else str(t.direction),
@@ -1283,7 +1286,7 @@ def compute_pattern_priors():
             extractor = PatternExtractor()
             priors = extractor.compute_pattern_priors(trade_dicts)
             await extractor.cache_priors(priors)
-            logger.info("compute_pattern_priors: cached priors for %d trades", len(trade_dicts))
+            logger.info("compute_pattern_priors: cached priors for %d trades", len(trades))
 
     asyncio.run(_compute())
 
