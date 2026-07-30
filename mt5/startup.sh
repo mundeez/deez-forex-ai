@@ -2,9 +2,10 @@
 set -e
 
 # =============================================================================
-# MT5 Container Entrypoint — KasmVNC Desktop + Wine/MT5 + ZMQ Bridge
+# MT5 Container Entrypoint — Proven approach from gmag11/metatrader5_vnc
 # =============================================================================
 
+# Persistent init marker in /config (volume) so it survives container restarts
 INIT_MARKER="/config/.mt5_initialized"
 
 # Configuration
@@ -18,56 +19,25 @@ python_url="https://www.python.org/ftp/python/3.9.13/python-3.9.13.exe"
 mt5setup_url="https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
 
 export WINEPREFIX
-export DISPLAY=:99
 
 # Ensure Wine prefix directory exists
 mkdir -p "$WINEPREFIX/drive_c"
 
-# Clean up stale lock files
-rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+# Clean up any stale Xvfb lock/process from previous (crashed) runs
+rm -f /tmp/.X99-lock
+pkill -f "Xvfb :99" 2>/dev/null || true
+sleep 1
 
-# =============================================================================
-# 1. Start KasmVNC (X server with web VNC interface)
-# =============================================================================
-if ! pgrep -f "Xvnc :99" > /dev/null 2>&1; then
-    echo "[startup] Starting KasmVNC on :99 ..."
-    /usr/local/bin/Xvnc :99 \
-        -PublicIP 127.0.0.1 \
-        -drinode /dev/dri/renderD128 \
-        -disableBasicAuth \
-        -SecurityTypes None \
-        -AlwaysShared \
-        -http-header Cross-Origin-Embedder-Policy=require-corp \
-        -http-header Cross-Origin-Opener-Policy=same-origin \
-        -geometry 1280x800 \
-        -sslOnly 0 \
-        -RectThreads 0 \
-        -websocketPort 6901 \
-        -interface 0.0.0.0 \
-        -Log *:stdout:10 &
-    sleep 3
-    echo "[startup] KasmVNC started on ws://0.0.0.0:6901"
+# Start persistent Xvfb *before* any Wine commands
+echo "[startup] Starting persistent Xvfb on :99 ..."
+Xvfb :99 -screen 0 1024x768x24 +extension GLX &
+sleep 2
+if ! pgrep -f "Xvfb :99" > /dev/null 2>&1; then
+    echo "[startup] ERROR: Xvfb did not start"
+    exit 1
 fi
-
-# =============================================================================
-# 2. Start Openbox window manager
-# =============================================================================
-if ! pgrep -f "openbox" > /dev/null 2>&1; then
-    echo "[startup] Starting Openbox window manager..."
-    export DISPLAY=:99
-    /usr/bin/openbox-session &
-    sleep 2
-    echo "[startup] Openbox started."
-fi
-
-# =============================================================================
-# 3. Initialize Wine + MT5 + Python (only on first run)
-# =============================================================================
-
-# Helper: find python.exe in Wine prefix
-find_wine_python() {
-    find "$WINEPREFIX" -name "python.exe" 2>/dev/null | head -1
-}
+echo "[startup] Xvfb started"
+export DISPLAY=:99
 
 if [ ! -f "$INIT_MARKER" ]; then
     echo "[startup] First run — setting up Wine + MT5 ..."
@@ -76,16 +46,16 @@ if [ ! -f "$INIT_MARKER" ]; then
     if [ ! -e "$WINEPREFIX/drive_c/windows/mono" ]; then
         echo "[startup] [1/7] Installing Wine Mono..."
         curl -L -o "$WINEPREFIX/drive_c/mono.msi" "$mono_url"
-        WINEDLLOVERRIDES=mscoree=d $wine_executable msiexec /i "$WINEPREFIX/drive_c/mono.msi" /qn
+        WINEDLLOVERRIDES=mscoree=d $wine_executable msiexec /i "$WINEPREFIX/drive_c/mono.msi" /qn || true
         rm -f "$WINEPREFIX/drive_c/mono.msi"
-        echo "[startup] [1/7] Mono installed."
+        echo "[startup] [1/7] Mono installed (or skipped on error)."
     else
         echo "[startup] [1/7] Mono already installed."
     fi
 
     # 2. Set Windows 10 mode in Wine
     echo "[startup] [2/7] Setting Windows 10 mode..."
-    $wine_executable reg add "HKEY_CURRENT_USER\\Software\\Wine" /v Version /t REG_SZ /d "win10" /f
+    $wine_executable reg add "HKEY_CURRENT_USER\\Software\\Wine" /v Version /t REG_SZ /d "win10" /f || true
 
     # 3. Install MetaTrader 5
     if [ -e "$mt5file" ]; then
@@ -94,21 +64,10 @@ if [ ! -f "$INIT_MARKER" ]; then
         echo "[startup] [3/7] Downloading MT5 installer..."
         curl -L -o "$WINEPREFIX/drive_c/mt5setup.exe" "$mt5setup_url"
         echo "[startup] [3/7] Installing MetaTrader 5 (this may take a few minutes)..."
+        # Run installer in background and wait (some installers exit non-zero even on success)
         $wine_executable "$WINEPREFIX/drive_c/mt5setup.exe" "/auto" &
         MT5_INSTALL_PID=$!
-        # Wait for the installer to finish (up to 10 minutes)
-        for i in $(seq 1 600); do
-            if ! kill -0 $MT5_INSTALL_PID 2>/dev/null; then
-                echo "[startup] [3/7] Installer process finished."
-                break
-            fi
-            sleep 1
-        done
-        if kill -0 $MT5_INSTALL_PID 2>/dev/null; then
-            echo "[startup] [3/7] MT5 installer still running after 10 min, killing..."
-            kill $MT5_INSTALL_PID 2>/dev/null || true
-            wait $MT5_INSTALL_PID 2>/dev/null || true
-        fi
+        wait $MT5_INSTALL_PID || true
         rm -f "$WINEPREFIX/drive_c/mt5setup.exe"
     fi
 
@@ -134,73 +93,34 @@ if [ ! -f "$INIT_MARKER" ]; then
     fi
 
     # 5. Install Python in Wine
-    WINE_PYTHON=$(find_wine_python)
-    if [ -n "$WINE_PYTHON" ]; then
-        echo "[startup] [5/7] Python already in Wine at $WINE_PYTHON."
-    else
+    if ! $wine_executable python --version 2>/dev/null; then
         echo "[startup] [5/7] Installing Python in Wine..."
         curl -L "$python_url" -o /tmp/python-installer.exe
-        # Run installer and wait for it to finish (up to 5 minutes)
-        $wine_executable /tmp/python-installer.exe /quiet InstallAllUsers=1 PrependPath=1 &
-        PYTHON_PID=$!
-        for i in $(seq 1 300); do
-            if ! kill -0 $PYTHON_PID 2>/dev/null; then
-                echo "[startup] [5/7] Python installer finished."
-                break
-            fi
-            sleep 1
-        done
-        if kill -0 $PYTHON_PID 2>/dev/null; then
-            echo "[startup] [5/7] Python installer still running after 5 min, killing..."
-            kill $PYTHON_PID 2>/dev/null || true
-            wait $PYTHON_PID 2>/dev/null || true
-        fi
+        $wine_executable /tmp/python-installer.exe /quiet InstallAllUsers=1 PrependPath=1 || true
         rm -f /tmp/python-installer.exe
-        WINE_PYTHON=$(find_wine_python)
-        if [ -z "$WINE_PYTHON" ]; then
-            echo "[startup] [5/7] ERROR: Python installation failed."
-            exit 1
-        fi
-        echo "[startup] [5/7] Python installed in Wine at $WINE_PYTHON."
+        echo "[startup] [5/7] Python installed in Wine (or skipped on error)."
+    else
+        echo "[startup] [5/7] Python already in Wine."
     fi
 
     # 6. Install Python libraries in Wine
-    echo "[startup] [6/7] Installing MetaTrader5 + mt5linux + rpyc + pyzmq in Wine Python..."
-    $wine_executable "$WINE_PYTHON" -m pip install --upgrade --no-cache-dir pip || true
-    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir "numpy<2" || true
-    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir "MetaTrader5==$metatrader_version" || true
-    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir "mt5linux>=0.1.9" || true
-    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir rpyc || true
-    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir pyzmq || true
+    echo "[startup] [6/7] Installing MetaTrader5 + mt5linux + rpyc in Wine Python..."
+    $wine_executable python -m pip install --upgrade --no-cache-dir pip
+    $wine_executable python -m pip install --no-cache-dir "MetaTrader5==$metatrader_version"
+    $wine_executable python -m pip install --no-cache-dir "mt5linux>=0.1.9"
+    $wine_executable python -m pip install --no-cache-dir rpyc
     echo "[startup] [6/7] Wine Python libraries installed."
 
     # 7. Install mt5linux + rpyc in Linux Python
     echo "[startup] [7/7] Installing mt5linux + rpyc in Linux Python..."
-    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy redis || true
-    pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux || true
+    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy
+    pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux
     echo "[startup] [7/7] Linux Python libraries installed."
-
-    # 8. Copy ZeroMQ EA and libzmq.dll to MT5 directory
-    echo "[startup] [8/7] Setting up ZeroMQ EA and libzmq.dll..."
-    mkdir -p "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/MQL5/Experts/deez-forex-ai"
-    cp /app/ZeroMQ_Server.ex5 "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/MQL5/Experts/deez-forex-ai/" 2>/dev/null || true
-    cp /app/libzmq.dll "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/" 2>/dev/null || true
-    cp /app/libzmq.dll "$WINEPREFIX/drive_c/Program Files/MetaTrader 5/MQL5/Libraries/" 2>/dev/null || true
-    echo "[startup] [8/7] ZeroMQ EA setup complete."
 
     touch "$INIT_MARKER"
     echo "[startup] Initialization complete."
 else
-    echo "[startup] Already initialized — skipping Wine/MT5/Python install."
-    # Ensure required Python packages are always present in Wine Python
-    echo "[startup] Ensuring Wine Python packages (rpyc, pyzmq, mt5linux)..."
-    $wine_executable "$WINE_PYTHON" -m pip install --no-cache-dir rpyc pyzmq mt5linux numpy 2>/dev/null || true
-    echo "[startup] Wine Python packages checked."
-    # Ensure required Python packages are always present in Linux Python
-    echo "[startup] Ensuring Linux Python packages (rpyc, redis, mt5linux)..."
-    pip3 install --break-system-packages --no-cache-dir rpyc==5.2.3 plumbum==1.7.0 pyparsing==3.2.3 numpy redis 2>/dev/null || true
-    pip3 install --break-system-packages --no-cache-dir --no-deps mt5linux 2>/dev/null || true
-    echo "[startup] Linux Python packages checked."
+    echo "[startup] Already initialized — skipping setup."
 fi
 
 echo "[startup] Starting supervisor..."

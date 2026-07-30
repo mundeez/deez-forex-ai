@@ -4,6 +4,7 @@ Custom RPyC MT5 Service for deez-forex-ai
 Runs inside Wine Python (where MetaTrader5 package works natively).
 Exposes a typed, safe API surface for the backend to call.
 """
+import os
 import sys
 import time
 import threading
@@ -44,7 +45,7 @@ TIMEFRAME_MAP = {
 }
 
 
-def _ensure_mt5() -> bool:
+def _ensure_mt5(login: int = None, password: str = None, server: str = None) -> bool:
     global _mt5_initialized, _last_init_attempt
     with _mt5_lock:
         if _mt5_initialized:
@@ -59,7 +60,26 @@ def _ensure_mt5() -> bool:
                 return True
         except Exception:
             pass
-        if mt5.initialize(timeout=INIT_TIMEOUT):
+        path = os.environ.get("MT5_PATH", "")
+        init_kwargs = {"timeout": 60000}
+        if path:
+            init_kwargs["path"] = path
+            logger.info("MT5 init with path: %s", path)
+        if login and password and server:
+            init_kwargs["login"] = login
+            init_kwargs["password"] = password
+            init_kwargs["server"] = server
+            logger.info("MT5 init with login %s server %s", login, server)
+        else:
+            login_env = os.environ.get("MT5_LOGIN")
+            password_env = os.environ.get("MT5_PASSWORD")
+            server_env = os.environ.get("MT5_SERVER")
+            if login_env and password_env and server_env:
+                init_kwargs["login"] = int(login_env)
+                init_kwargs["password"] = password_env
+                init_kwargs["server"] = server_env
+                logger.info("MT5 init with env login %s server %s", login_env, server_env)
+        if mt5.initialize(**init_kwargs):
             _mt5_initialized = True
             logger.info("MT5 initialized")
             return True
@@ -88,7 +108,7 @@ class MT5Service(rpyc.Service):
         tf = TIMEFRAME_MAP.get(timeframe, mt5.TIMEFRAME_H1)
         limit = max(1, min(int(limit), 2000))
         rates = mt5.copy_rates_from_pos(symbol, tf, 0, limit)
-        if rates is None or len(rates) == 0:
+        if not rates or len(rates) == 0:
             return {"error": "No candle data available"}
         candles = []
         for r in rates:
@@ -224,7 +244,7 @@ class MT5Service(rpyc.Service):
         if ticket == 0:
             return {"error": "Invalid ticket"}
         pos = mt5.positions_get(ticket=ticket)
-        if pos is None or len(pos) == 0:
+        if not pos or len(pos) == 0:
             return {"error": f"Position {ticket} not found"}
         p = pos[0]
         symbol = p.symbol
@@ -258,7 +278,7 @@ class MT5Service(rpyc.Service):
         if not _ensure_mt5():
             return {"error": "MT5 not initialized"}
         pos = mt5.positions_get(ticket=ticket)
-        if pos is None or len(pos) == 0:
+        if not pos or len(pos) == 0:
             return {"error": f"Position {ticket} not found"}
         p = pos[0]
         request = {
@@ -334,7 +354,7 @@ class MT5Service(rpyc.Service):
         return {"orders": out}
 
     def exposed_login(self, login: int, password: str, server: str, timeout: int = 60000) -> dict:
-        if not _ensure_mt5():
+        if not _ensure_mt5(login=login, password=password, server=server):
             return {"error": "MT5 not initialized"}
         result = mt5.login(login, password=password, server=server, timeout=timeout)
         if result:

@@ -134,6 +134,36 @@ class TeamDecisionEngine:
 
         # Compute exact prices from zone midpoints for backward compatibility
         # with the existing execution pipeline (v1 TradeDecision fields).
+
+        # 6. Pattern-prior hard filter (adaptive win-rate threshold)
+        try:
+            from app.services.pattern_extractor import PatternExtractor
+            pe = PatternExtractor()
+            pattern_priors = await pe.get_cached_priors()
+            if pattern_priors and final_decision in ("BUY", "SELL"):
+                session = analysis_snapshot.get("session", "unknown")
+                threshold = 0.30
+                min_samples = 3
+                by_session = pattern_priors.get("by_session", {})
+                by_symbol = pattern_priors.get("by_symbol", {})
+                by_pair_dir = pattern_priors.get("by_symbol_direction", {})
+                reasons = []
+                s = by_session.get(session, {})
+                if s.get("count", 0) >= min_samples and s.get("win_rate", 1.0) < threshold:
+                    reasons.append(f"session {session} WR {s['win_rate']:.0%}")
+                s2 = by_symbol.get(symbol, {})
+                if s2.get("count", 0) >= min_samples and s2.get("win_rate", 1.0) < threshold:
+                    reasons.append(f"pair {symbol} WR {s2['win_rate']:.0%}")
+                key = f"{symbol}_{final_decision}"
+                s3 = by_pair_dir.get(key, {})
+                if s3.get("count", 0) >= min_samples and s3.get("win_rate", 1.0) < threshold:
+                    reasons.append(f"{key} WR {s3['win_rate']:.0%}")
+                if reasons:
+                    final_decision = "HOLD"
+                    final_confidence *= 0.5
+                    final_rationale += " [PATTERN FILTER: " + ", ".join(reasons) + "]"
+        except Exception as exc:
+            logger.warning("Pattern-prior hard filter failed for %s: %s", symbol, exc)
         def _mid(zone):
             if isinstance(zone, (list, tuple)):
                 # Unwrap nested lists (models sometimes return [[price]])

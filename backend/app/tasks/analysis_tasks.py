@@ -847,6 +847,33 @@ def run_full_analysis():
                 await db.refresh(db_decision)
                 _decision_id = db_decision.id  # capture before any sync calls
                 _decision_qdrant_id = getattr(db_decision, "qdrant_point_id", None)
+                # Log TradeDecisionEvent for audit/learning (v2 path)
+                try:
+                    from datetime import datetime, timezone
+                    event = models.TradeDecisionEvent(
+                        trade_id=None,
+                        ts=db_decision.timestamp or datetime.now(timezone.utc),
+                        kind="ENTRY",
+                        source="AI",
+                        action=db_decision.decision,
+                        snapshot=_clean_numpy({
+                            "symbol": symbol,
+                            "session": analysis.get("session"),
+                            "regime": regime_info.get("regime"),
+                            "lead_model": v2_results.get(symbol, {}).get("lead_model"),
+                            "verdict": v2_results.get(symbol, {}).get("verifier_verdict"),
+                            "analyst_opinions": v2_results.get(symbol, {}).get("analyst_opinions"),
+                        }),
+                        rationale=db_decision.rationale,
+                        confidence=db_decision.confidence,
+                        model_used=db_decision.lead_model or db_decision.model_used,
+                    )
+                    db.add(event)
+                    await db.commit()
+                    await db.refresh(event)
+                except Exception as ev:
+                    logger.warning("Failed to log TradeDecisionEvent for %s: %s", symbol, ev)
+
 
                 # Persist regime label to market_regimes table
                 try:
@@ -1375,7 +1402,7 @@ def update_model_performance():
             await db.commit()
             logger.info("update_model_performance: updated %d models", len(by_model))
 
-            # Cache win rates in Redis for fast model-router lookup
+            # Cache win rates + AUC/Brier calibration in Redis
             try:
                 import redis.asyncio as aioredis
                 from app.config import get_settings
@@ -1387,7 +1414,39 @@ def update_model_performance():
                     win_rate = wins / total if total else 0.0
                     avg_pnl = sum(t.pnl or 0 for t in model_trades) / total if total else 0.0
                     await r.hset("ai:model:performance", model, json.dumps({"win_rate": win_rate, "avg_pnl": avg_pnl, "trades": total}))
+
+                    # AUC and Brier calibration
+                    try:
+                        from sklearn.metrics import roc_auc_score, brier_score_loss
+                        confidences = []
+                        y_true = []
+                        for t in model_trades:
+                            d = None
+                            if t.ai_decision_id:
+                                d_res = await db.execute(
+                                    select(models.AIDecision.confidence)
+                                    .where(models.AIDecision.id == t.ai_decision_id)
+                                )
+                                d = d_res.scalar()
+                            confidences.append(float(d) if d is not None else 0.5)
+                            y_true.append(1 if (t.pnl or 0) > 0 else 0)
+                        if len(set(y_true)) > 1 and confidences:
+                            auc = float(roc_auc_score(y_true, confidences))
+                            brier = float(brier_score_loss(y_true, confidences))
+                        else:
+                            auc = None
+                            brier = None
+                        await r.hset("ai:model:calibration", model, json.dumps({
+                            "auc": auc,
+                            "brier": brier,
+                            "samples": total,
+                            "wins": wins,
+                            "losses": losses,
+                        }))
+                    except Exception:
+                        logger.warning("AUC/Brier cache failed for %s", model, exc_info=True)
                 await r.expire("ai:model:performance", 86400)
+                await r.expire("ai:model:calibration", 86400)
                 await r.aclose()
             except Exception:
                 logger.warning("Failed to cache model performance in Redis", exc_info=True)
@@ -1661,8 +1720,8 @@ def daily_kpi_snapshot():
                 domain="overall",
                 window="7d",
                 trades=report.get("total_trades", 0),
-                winning_trades=0,
-                losing_trades=0,
+                winning_trades=report.get("wins", 0),
+                losing_trades=report.get("losses", 0),
                 win_rate=report.get("win_rate", 0),
                 expectancy=report.get("net_pnl", 0),
                 avg_pnl=report.get("net_pnl", 0),

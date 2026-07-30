@@ -151,7 +151,7 @@ def _redis_cache(ttl: int = 30):
 app = FastAPI(
     title="deez-forex-ai",
     description="Intelligent 24/7 Forex Trading Platform",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 

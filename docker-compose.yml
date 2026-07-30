@@ -1,47 +1,4 @@
-version: '3.9'
-
 services:
-  postgres:
-    image: timescale/timescaledb:latest-pg15
-    container_name: deez-forex-postgres
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-forex}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: ${POSTGRES_DB:-deez_forex}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "25432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-forex} -d ${POSTGRES_DB:-deez_forex}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: deez-forex-redis
-    ports:
-      - "26379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: deez-forex-qdrant
-    ports:
-      - "26333:6333"
-      - "26334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-
-
   backend:
     build:
       context: ./backend
@@ -51,16 +8,16 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-deez_forex}
-      REDIS_URL: redis://redis:6379/0
-      QDRANT_URL: http://qdrant:6333
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-forex_secret}@shared-postgres:5432/${POSTGRES_DB:-deez_forex}
+      REDIS_URL: redis://shared-redis:6379/0
+      QDRANT_URL: http://shared-qdrant:6333
       META_API_TOKEN: ${META_API_TOKEN:-}
       META_API_ACCOUNT_ID: ${META_API_ACCOUNT_ID:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       NEWS_API_KEY: ${NEWS_API_KEY:-}
       FRED_API_KEY: ${FRED_API_KEY:-}
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CELERY_BROKER_URL: redis://shared-redis:6379/1
+      CELERY_RESULT_BACKEND: redis://shared-redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
@@ -72,12 +29,9 @@ services:
     ports:
       - "28000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
+      - mt5
+    networks:
+      - shared-net
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
 
   celery_worker:
@@ -93,16 +47,16 @@ services:
       retries: 3
       start_period: 30s
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-deez_forex}
-      REDIS_URL: redis://redis:6379/0
-      QDRANT_URL: http://qdrant:6333
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-forex_secret}@shared-postgres:5432/${POSTGRES_DB:-deez_forex}
+      REDIS_URL: redis://shared-redis:6379/0
+      QDRANT_URL: http://shared-qdrant:6333
       META_API_TOKEN: ${META_API_TOKEN:-}
       META_API_ACCOUNT_ID: ${META_API_ACCOUNT_ID:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       NEWS_API_KEY: ${NEWS_API_KEY:-}
       FRED_API_KEY: ${FRED_API_KEY:-}
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CELERY_BROKER_URL: redis://shared-redis:6379/1
+      CELERY_RESULT_BACKEND: redis://shared-redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
@@ -111,13 +65,8 @@ services:
       MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
+    networks:
+      - shared-net
     command: celery -A app.celery_app worker --pool=threads --loglevel=info -Q celery,ai_analysis,execution,data_ingestion,dead_letter
 
   celery_beat:
@@ -133,16 +82,16 @@ services:
       retries: 3
       start_period: 30s
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-deez_forex}
-      REDIS_URL: redis://redis:6379/0
-      QDRANT_URL: http://qdrant:6333
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-forex}:${POSTGRES_PASSWORD:-forex_secret}@shared-postgres:5432/${POSTGRES_DB:-deez_forex}
+      REDIS_URL: redis://shared-redis:6379/0
+      QDRANT_URL: http://shared-qdrant:6333
       META_API_TOKEN: ${META_API_TOKEN:-}
       META_API_ACCOUNT_ID: ${META_API_ACCOUNT_ID:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       NEWS_API_KEY: ${NEWS_API_KEY:-}
       FRED_API_KEY: ${FRED_API_KEY:-}
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      CELERY_BROKER_URL: redis://shared-redis:6379/1
+      CELERY_RESULT_BACKEND: redis://shared-redis:6379/2
       DATA_PROVIDER: ${DATA_PROVIDER:-metaapi}
       MT5_ZMQ_HOST: ${MT5_ZMQ_HOST:-host.docker.internal}
       MT5_ZMQ_REQ_PORT: ${MT5_ZMQ_REQ_PORT:-5555}
@@ -151,13 +100,8 @@ services:
       MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      qdrant:
-        condition: service_started
+    networks:
+      - shared-net
     command: celery -A app.celery_app beat --loglevel=info
 
   frontend:
@@ -174,9 +118,55 @@ services:
       - "23000:3000"
     depends_on:
       - backend
+    networks:
+      - shared-net
     command: npm start
 
+  mt5:
+    build:
+      context: ./mt5
+      dockerfile: Dockerfile
+    container_name: deez-forex-mt5
+    privileged: true
+    shm_size: 2gb
+    volumes:
+      - mt5-config:/config
+    restart: unless-stopped
+    ports:
+      - "18812:18812"
+      - "15555:5555"
+      - "15556:5556"
+      - "16901:6901"
+    networks:
+      - shared-net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost', 18812)); s.close()\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: deez-forex-dashboard
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "28501:8501"
+    depends_on:
+      - backend
+    networks:
+      - shared-net
+
+networks:
+  shared-net:
+    external: true
+    name: shared-net
+
 volumes:
-  postgres_data:
-  redis_data:
-  qdrant_data:
+  mt5-config:
+    external: true
+    name: mt5-config

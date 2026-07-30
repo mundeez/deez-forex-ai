@@ -123,6 +123,8 @@ class PaperTradingMonitor:
             "period_days": days,
             "report_generated_at": datetime.now(timezone.utc).isoformat(),
             "total_trades": total_closed,
+            "wins": len(wins),
+            "losses": len(losses),
             "win_rate": round(win_rate, 3),
             "profit_factor": round(profit_factor, 2),
             "avg_exit_quality": round(avg_exit_quality, 2),
