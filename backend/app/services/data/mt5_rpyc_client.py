@@ -81,9 +81,17 @@ class MT5RPyCClient:
         timeframe: str = "1h",
         limit: int = 500,
     ) -> List[Dict[str, Any]]:
-        resp = await self._call("get_candles", symbol, timeframe, limit)
+        try:
+            resp = await self._call("get_candles", symbol, timeframe, limit)
+        except Exception as exc:
+            logger.warning("RPyC get_candles failed for %s %s: %s", symbol, timeframe, exc)
+            return []
+        if resp is None:
+            logger.warning("RPyC get_candles returned None for %s %s", symbol, timeframe)
+            return []
         if resp.get("error"):
-            raise RuntimeError(resp["error"])
+            logger.warning("RPyC get_candles error for %s %s: %s", symbol, timeframe, resp.get("error"))
+            return []
         # Convert RPyC netrefs to plain Python dicts to avoid network round-trips
         # on every attribute access during pandas operations
         raw_candles = resp.get("candles", [])

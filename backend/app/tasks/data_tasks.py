@@ -342,3 +342,52 @@ def backfill_dukascopy_5y(self, symbol: str = None):
         except Exception as exc:
             logger.error("Failed to queue 5y backfill for %s: %s", sym, exc)
     return {"symbols": queued, "start": start.isoformat(), "end": end.isoformat()}
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+    time_limit=300,
+    soft_time_limit=240,
+    queue="data_ingestion",
+)
+def ingest_retail_sentiment(self):
+    """Live Myfxbook retail sentiment ingestion, with COT proxy fallback.
+
+    Runs every 30 minutes. If Myfxbook returns 0 rows (Cloudflare 403),
+    we derive a COT-based retail proxy and insert it into retail_sentiment.
+    """
+    import asyncio
+    from app.services.data.retail_client import scrape_myfxbook, backfill_from_cot
+    from app.database import get_celery_session
+    async def _run():
+        async with get_celery_session()() as db:
+            n = await scrape_myfxbook(db)
+            if n == 0:
+                logger.warning("[ingest_retail_sentiment] Myfxbook returned 0 rows; backfilling from COT proxy")
+                n = await backfill_from_cot(db)
+            return n
+    return asyncio.run(_run())
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=300,
+    time_limit=300,
+    soft_time_limit=240,
+    queue="data_ingestion",
+)
+def ingest_forex_factory_calendar(self, lookback_days: int = 2, lookforward_days: int = 7):
+    """Live ForexFactory economic calendar ingestion. Runs every hour."""
+    import asyncio
+    from datetime import date, timedelta
+    from app.services.data.ff_client import ingest_calendar
+    from app.database import get_celery_session
+    async def _run():
+        async with get_celery_session()() as db:
+            start = date.today() - timedelta(days=lookback_days)
+            end = date.today() + timedelta(days=lookforward_days)
+            return await ingest_calendar(db, start, end)
+    return asyncio.run(_run())

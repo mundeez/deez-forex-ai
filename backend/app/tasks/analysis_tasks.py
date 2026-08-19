@@ -435,9 +435,15 @@ def run_full_analysis():
             manual_override = await get_setting_bool(db, "manual_override")
             results = []
 
-            # Initialize Qdrant vector store
+            # Initialize Qdrant vector store — hard dependency; fail fast if unhealthy
             from app.services.vector_store import AsyncVectorStore
             vs = AsyncVectorStore()
+            try:
+                await vs._ensure_collection()
+                logger.info("Qdrant is healthy and collection '%s' is ready", vs.client)
+            except Exception as exc:
+                logger.error("Qdrant hard-dependency failed: %s", exc, exc_info=True)
+                return {"status": "error", "reason": f"Qdrant unavailable: {exc}"}
 
             # News-based trading halt per pair
             news_halt_enabled = await get_setting_bool(db, "news_halt_enabled")
@@ -453,7 +459,13 @@ def run_full_analysis():
                 # Stagger symbol analyses to avoid OpenRouter rate-limit spikes
                 if idx > 0:
                     await asyncio.sleep(5)
-                analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode, db=db)
+
+                try:
+                    analysis = await aggregator.gather_all(symbol, strategy_mode=strategy_mode, db=db)
+                except Exception as exc:
+                    logger.warning("Analysis failed for %s: %s", symbol, exc, exc_info=True)
+                    logger.info("HOLD reason for %s: data unavailable — %s", symbol, exc)
+                    continue
 
                 # Price gate: skip if market hasn't moved meaningfully since last analysis
                 current_price = None
@@ -565,7 +577,7 @@ def run_full_analysis():
                     await db.commit()
                     await db.refresh(db_decision)
                     await broadcast_ai_decision({
-                        "id": _decision_id,
+                        "id": db_decision.id,
                         "symbol": symbol,
                         "decision": "HOLD",
                         "confidence": 0.0,
@@ -609,7 +621,7 @@ def run_full_analysis():
                         await db.commit()
                         await db.refresh(db_decision)
                         await broadcast_ai_decision({
-                            "id": _decision_id,
+                            "id": db_decision.id,
                             "symbol": symbol,
                             "decision": "HOLD",
                             "confidence": 0.0,

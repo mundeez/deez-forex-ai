@@ -34,18 +34,20 @@ class SentimentAnalyzer:
     async def analyze(
         self, symbol: str = "EURUSD", db: AsyncSession = None, as_of: datetime = None
     ) -> Dict[str, Any]:
-        as_of = as_of or datetime.utcnow()
-
-        if db is not None:
+        # Use the DB (point-in-time) path only for explicit backtest queries.
+        # For live forward runs, always use live APIs so the DB does not become
+        # a stale neutered fallback when the tables are empty.
+        if db is not None and as_of is not None:
             # Backtest / point-in-time path — query DB tables
+            as_of = as_of or datetime.utcnow()
             retail = await self._fetch_retail_from_db(db, symbol, as_of)
             news_sentiment = await self._fetch_news_sentiment_from_db(db, symbol, as_of)
             cot = await self._fetch_cot_from_db(db, symbol, as_of)
         else:
-            # Live path — use live APIs (unchanged behaviour)
-            retail = await self._fetch_retail_sentiment(symbol)
+            # Live path — use live APIs and DB-cached retail/COT proxies
+            retail = await self._fetch_retail_sentiment(symbol, db=db)
             news_sentiment = await self._analyze_news_sentiment(symbol)
-            cot = self._fallback_cot()
+            cot = await self._fetch_cot_from_db(db, symbol, as_of=datetime.utcnow())
 
         overall = 0.0
         count = 0
@@ -79,12 +81,11 @@ class SentimentAnalyzer:
     # Retail positioning (Myfxbook community outlook)
     # ------------------------------------------------------------------
 
-    async def _fetch_retail_sentiment(self, symbol: str) -> Dict[str, Any]:
-        """Scrape Myfxbook community outlook for retail positioning."""
+    async def _fetch_retail_sentiment(
+        self, symbol: str, db: AsyncSession = None
+    ) -> Dict[str, Any]:
+        """Scrape Myfxbook, then fall back to the latest COT-based retail proxy in the DB."""
         try:
-            # Map symbol to Myfxbook pair name
-            myfx_symbol = symbol.replace("USD", "").replace("EUR", "EUR").replace("GBP", "GBP")
-            # Myfxbook API-like endpoint for community outlook
             url = f"https://www.myfxbook.com/community/outlook/{symbol}"
             async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
                 resp = await client.get(url)
@@ -109,7 +110,31 @@ class SentimentAnalyzer:
         except Exception:
             logger.warning("Myfxbook scrape failed for %s", symbol, exc_info=True)
 
-        # Fallback: return neutral with warning
+        # Fallback to COT-based retail proxy from the DB (ingest_retail_sentiment keeps this current)
+        if db is not None:
+            try:
+                result = await db.execute(
+                    select(models.RetailSentiment)
+                    .where(models.RetailSentiment.symbol == symbol)
+                    .order_by(models.RetailSentiment.timestamp.desc())
+                    .limit(1)
+                )
+                row = result.scalar_one_or_none()
+                if row is not None:
+                    long_pct = row.long_pct or 50.0
+                    short_pct = row.short_pct or 50.0
+                    net = (long_pct - short_pct) / 100.0
+                    return {
+                        "long_pct": round(long_pct, 1),
+                        "short_pct": round(short_pct, 1),
+                        "score": round(-net, 2),
+                        "contrarian_signal": "bearish" if long_pct > 55 else "bullish" if short_pct > 55 else "neutral",
+                        "source": row.source,
+                    }
+            except Exception:
+                logger.warning("COT retail DB fallback failed for %s", symbol, exc_info=True)
+
+        # Final fallback: neutral
         return {
             "long_pct": 50.0,
             "short_pct": 50.0,

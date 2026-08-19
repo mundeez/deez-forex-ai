@@ -37,6 +37,8 @@ celery_app.conf.update(
         "app.tasks.data_tasks.ingest_fred_macro": {"queue": "data_ingestion"},
         "app.tasks.data_tasks.ingest_yfinance_macro": {"queue": "data_ingestion"},
         "app.tasks.data_tasks.ingest_cot_weekly": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.ingest_retail_sentiment": {"queue": "data_ingestion"},
+        "app.tasks.data_tasks.ingest_forex_factory_calendar": {"queue": "data_ingestion"},
         # Dead letter reprocessing goes to a separate queue to avoid blocking
         "app.tasks.data_tasks.retry_dead_letter_job": {"queue": "dead_letter"},
         # --- Execution tier: high-priority, low-latency (60-180 s tasks) ---
@@ -161,6 +163,22 @@ celery_app.conf.update(
         "ingest-cot-weekly": {
             "task": "app.tasks.data_tasks.ingest_cot_weekly",
             "schedule": crontab(hour=10, minute=0, day_of_week="mon"),
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
+        # Sprint 1: Live sentiment / calendar ingestion
+        "ingest-retail-sentiment": {
+            "task": "app.tasks.data_tasks.ingest_retail_sentiment",
+            "schedule": 1800.0,  # every 30 minutes
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
+        "ingest-forex-factory-calendar": {
+            "task": "app.tasks.data_tasks.ingest_forex_factory_calendar",
+            "schedule": 3600.0,  # every hour
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
+        "refresh-sentiment-cache": {
+            "task": "app.tasks.analysis_tasks.refresh_sentiment_cache",
+            "schedule": 1800.0,  # every 30 minutes
             "options": {"time_limit": 300, "soft_time_limit": 240},
         },
     }

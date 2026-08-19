@@ -4,6 +4,43 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.7.0] — 2026-08-19
+
+### Phase 0/1/2 — Live Signal Loop & Sentiment Repair
+
+This release restores the live AI analysis loop and fixes the data sources that were causing every signal to abort or default to neutral.
+
+#### 🚨 Fixed
+- **Recurring `run_full_analysis` crash** — NumPy array truth-value error in the MT5 RPyC candle path (`mt5/mt5_service.py`) prevented all analysis.
+- **Undefined `_decision_id` in HOLD branches** — news-halt and entry-gate HOLD paths now broadcast the committed `db_decision.id`.
+- **Myfxbook 403 / empty retail sentiment** — `ingest_retail_sentiment` falls back to a COT-based `cot_proxy`, and `SentimentAnalyzer` uses the cached `retail_sentiment` row when live scraping fails.
+
+#### ✨ Added
+- **Qdrant hard-dependency gate** — `run_full_analysis` initializes and health-checks `AsyncVectorStore` before the analysis loop.
+- **Per-symbol defensive aggregation** — a failure for one pair no longer aborts the entire `run_full_analysis` run.
+- **Scheduled live data ingestion** — Celery beat now schedules:
+  - `ingest_retail_sentiment` (every 30 minutes)
+  - `ingest_forex_factory_calendar` (every hour)
+  - `refresh_sentiment_cache` (every 30 minutes)
+- **COT-based retail proxy** — `retail_sentiment` table backfilled from CFTC COT non-commercial positions.
+
+#### 🔧 Changed
+- `SentimentAnalyzer.analyze()` now uses live APIs in forward mode and only queries point-in-time DB tables for explicit backtest `as_of` timestamps.
+- Paper equity reset to `$200` and `account_snapshots` truncated for a clean validation baseline.
+
+#### 📋 Files Changed
+- `mt5/mt5_service.py`
+- `backend/app/services/data/mt5_rpyc_client.py`
+- `backend/app/analysis/aggregator.py`
+- `backend/app/tasks/analysis_tasks.py`
+- `backend/app/analysis/sentiment.py`
+- `backend/app/tasks/data_tasks.py`
+- `backend/app/celery_app.py`
+- `backend/app/services/vector_store.py`
+- `docs/REVIVAL_AND_LEARNING_PLAN.md`
+
+---
+
 ## [v0.7.2] — 2026-06-02
 
 ### Trade Closure Hotfix — Critical Bug Fixes
