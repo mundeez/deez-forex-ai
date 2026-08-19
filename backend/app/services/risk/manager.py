@@ -57,6 +57,27 @@ class RiskManager:
         equity_balance = await get_setting_float(db, "equity_balance")
         return max(equity_balance + realized + unrealized, 1.0)
 
+    async def _consecutive_losses(self, db: AsyncSession, lookback: int = 3) -> int:
+        """Return the number of consecutive losing trades at the end of the last N closed trades."""
+        try:
+            result = await db.execute(
+                select(models.Trade)
+                .where(models.Trade.status == models.TradeStatus.CLOSED)
+                .order_by(models.Trade.close_time.desc())
+                .limit(lookback)
+            )
+            recent = result.scalars().all()
+        except Exception:
+            return 0
+
+        count = 0
+        for t in recent:
+            if (t.pnl or 0) < 0:
+                count += 1
+            else:
+                break
+        return count
+
     async def _get_strategy_mode(self, db: AsyncSession) -> str:
         mode = await get_setting(db, "strategy_mode")
         return mode if mode in STRATEGY_CONFIG else "scalping"
@@ -144,7 +165,7 @@ class RiskManager:
             last3 = recent[:3]
             if all((t.pnl or 0) < 0 for t in last3):
                 last_close = ensure_aware(last3[0].close_time) if last3[0].close_time else now
-                if (now - last_close).total_seconds() < 0:
+                if (now - last_close).total_seconds() <= 1800:
                     return False, "EMERGENCY COOLING: 3 consecutive losses — 30-minute cooling-off active"
 
         return True, "OK"
@@ -162,6 +183,12 @@ class RiskManager:
 
         max_risk_pct = await get_setting_float(db, "max_risk_per_trade_pct")
         max_risk_pct = self._get_strategy_value(strategy_mode, "max_risk_pct", max_risk_pct)
+
+        # Trade-aggressiveness: reduce risk after 3 consecutive losses
+        if await self._consecutive_losses(db, lookback=3) >= 3:
+            max_risk_pct = max(max_risk_pct * 0.5, 0.1)
+            if trade_in.risk_pct:
+                trade_in.risk_pct = max(trade_in.risk_pct * 0.5, 0.1)
 
         max_risk_abs = await get_setting_float(db, "max_risk_per_trade_abs")
         max_daily_loss = await get_setting_float(db, "max_daily_loss_pct")
@@ -215,6 +242,10 @@ class RiskManager:
 
         ai_confidence_threshold = await get_setting_float(db, "ai_confidence_threshold")
         ai_confidence_threshold = self._get_strategy_value(strategy_mode, "ai_confidence_threshold", ai_confidence_threshold)
+
+        # Trade-aggressiveness: be more selective and smaller after 3 consecutive losses
+        if await self._consecutive_losses(db, lookback=3) >= 3:
+            ai_confidence_threshold = min(ai_confidence_threshold + 0.05, 0.95)
 
         min_risk_reward = await get_setting_float(db, "min_risk_reward")
         min_risk_reward = self._get_strategy_value(strategy_mode, "min_risk_reward", min_risk_reward)
@@ -396,8 +427,9 @@ class RiskManager:
             return 0.01
         raw_size = risk_amount / risk_per_lot
         size = round(raw_size, 2)
-        # Cap at ~20% of equity as position value
-        max_size = (equity * 0.20) / (entry * 100000)
-        size = min(size, round(max_size, 2))
+        # Cap at ~20% of equity as position value, but only if the cap is >= micro lot
+        max_size = round((equity * 0.20) / (entry * 100000), 2)
+        if max_size >= 0.01:
+            size = min(size, max_size)
         size = max(size, 0.01)  # enforce broker minimum (micro lot) AFTER cap
         return size

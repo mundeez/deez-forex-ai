@@ -16,6 +16,11 @@ class TestPositionSizing:
         size = rm.calculate_position_size(200, 1.0, 150.00, 149.50, "USDJPY")
         assert size >= 0.01, f"Expected >= 0.01, got {size}"
 
+    def test_micro_lot_floor_xau_pair(self):
+        rm = RiskManager()
+        size = rm.calculate_position_size(200, 1.0, 2400.0, 2395.0, "XAUUSD")
+        assert size >= 0.01, f"Expected >= 0.01, got {size}"
+
     def test_larger_account_capped_by_max_size(self):
         rm = RiskManager()
         # raw_size = 100 / 500 = 0.20, but max_size cap applies
