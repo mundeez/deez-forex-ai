@@ -6,6 +6,7 @@ Trains two models:
 """
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from celery import shared_task
@@ -19,6 +20,9 @@ from app.services.ml.entry_model import EntryQualityModel
 from app.services.feature_store import FeatureStore
 
 logger = logging.getLogger("app.tasks.train_multitimeframe_team")
+
+# Allow training on small historical bootstrap samples; increase as more live data accumulates.
+MIN_TRADES_FOR_RETRAIN = int(os.environ.get("MIN_TRADES_FOR_RETRAIN", "25"))
 
 
 @shared_task(
@@ -43,8 +47,8 @@ def train_multitimeframe_and_team(self):
             trades = result.scalars().all()
             logger.info("Found %d closed trades with decisions", len(trades))
 
-            if len(trades) < 100:
-                logger.warning("Insufficient data (%d trades), skipping training", len(trades))
+            if len(trades) < MIN_TRADES_FOR_RETRAIN:
+                logger.warning("Insufficient data (%d trades < %d), skipping training", len(trades), MIN_TRADES_FOR_RETRAIN)
                 return {"status": "skipped", "trades": len(trades)}
 
             # --- Multi-timeframe entry model data ---
@@ -105,7 +109,7 @@ def train_multitimeframe_and_team(self):
 
             # Train entry model
             entry_metrics = {}
-            if len(entry_decisions) >= 100:
+            if len(entry_decisions) >= MIN_TRADES_FOR_RETRAIN:
                 import pandas as pd
                 entry_df = FeatureStore.export_training_set(entry_decisions)
                 entry_model = EntryQualityModel()
@@ -116,7 +120,7 @@ def train_multitimeframe_and_team(self):
 
             # Train team meta-model
             team_metrics = {}
-            if len(team_data) >= 100:
+            if len(team_data) >= MIN_TRADES_FOR_RETRAIN:
                 import pandas as pd
                 team_df = pd.DataFrame(team_data)
                 team_model = TeamMetaModel()

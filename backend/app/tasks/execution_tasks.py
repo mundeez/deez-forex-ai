@@ -9,7 +9,8 @@ from app.services.execution.executor import ExecutionService, compute_live_unrea
 from app.services.notification_service import NotificationService
 from app.services.settings_service import get_setting_bool, get_setting_float
 from app.utils.time import utc_now, ensure_aware
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
+from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 
 
@@ -390,6 +391,60 @@ def compute_daily_bias():
     return asyncio.run(_compute())
 
 
+async def _cache_analyst_weights(db: AsyncSession) -> None:
+    """Build trade-decision examples from closed trades and cache analyst weights."""
+    from app.services.analyst_weight_optimizer import AnalystWeightOptimizer
+    from app import models
+    from sqlalchemy import select
+    from app.services.analyst_weight_optimizer import DEFAULT_WEIGHTS
+    import json
+
+    since = utc_now() - timedelta(days=90)
+    stmt = (
+        select(models.Trade, models.AIDecision)
+        .join(models.AIDecision, models.Trade.ai_decision_id == models.AIDecision.id)
+        .where(
+            models.Trade.status == models.TradeStatus.CLOSED,
+            models.Trade.close_time >= since,
+            models.Trade.ai_decision_id.isnot(None),
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+
+    trade_decisions = []
+    for trade, decision in rows:
+        outcome = 1 if (trade.pnl or 0) > 0 else 0
+        session = trade.session_at_close or trade.session_at_open or "unknown"
+        regime = "unknown"
+        if decision.regime:
+            if isinstance(decision.regime, str):
+                regime = decision.regime
+            elif isinstance(decision.regime, dict):
+                regime = decision.regime.get("regime", "unknown")
+
+        analyst_signals = {}
+        for analyst, opinion in (decision.analyst_opinions or {}).items():
+            bias = (opinion.get("bias") or "NEUTRAL").lower()
+            if bias in ("bullish", "bearish"):
+                analyst_signals[analyst] = bias
+
+        if analyst_signals:
+            trade_decisions.append({
+                "regime": regime,
+                "session": session,
+                "analyst_signals": analyst_signals,
+                "outcome": outcome,
+            })
+
+    if len(trade_decisions) >= 5:
+        optimizer = AnalystWeightOptimizer()
+        weights = optimizer.compute_weights(trade_decisions)
+        await optimizer.cache_weights(weights)
+        logger.info("Cached analyst weights for %d decisions", len(trade_decisions))
+    else:
+        logger.debug("Not enough closed trades with analyst opinions to update weights: %d", len(trade_decisions))
+
+
 @celery_app.task
 def refresh_model_performance():
     """Compute per-model performance stats from closed trades for self-improvement."""
@@ -465,6 +520,10 @@ def refresh_model_performance():
                             avg_pnl=round(float(avg_pnl or 0), 4),
                         ))
             await db.commit()
+
+            # --- Update AnalystWeightOptimizer cache from recent closed trades ---
+            await _cache_analyst_weights(db)
+
             return {"refreshed": True}
     return asyncio.run(_refresh())
 
