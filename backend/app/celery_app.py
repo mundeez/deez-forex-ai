@@ -67,6 +67,11 @@ celery_app.conf.update(
             "schedule": 60.0,
             "options": {"time_limit": 30, "soft_time_limit": 20},
         },
+        "evaluate-exits": {
+            "task": "app.tasks.execution_tasks.evaluate_exits",
+            "schedule": 60.0,
+            "options": {"time_limit": 60, "soft_time_limit": 45},
+        },
         "auto-select-pairs": {
             "task": "app.tasks.analysis_tasks.auto_select_pairs",
             "schedule": 3600.0,
