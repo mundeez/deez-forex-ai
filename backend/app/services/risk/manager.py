@@ -8,7 +8,7 @@ from app import models, schemas
 from app.enums import TradeDirection, TradeMode
 from app.config import get_settings
 from app.ai.openrouter_client import TradeDecision
-from app.services.settings_service import get_setting_float, get_setting_int, get_setting
+from app.services.settings_service import get_setting_float, get_setting_int, get_setting, get_setting_bool
 from app.utils.time import ensure_aware, utc_now
 
 settings = get_settings()
@@ -156,6 +156,40 @@ class RiskManager:
             recent = result.scalars().all()
         except Exception:
             recent = []
+
+        # 4) Phase 6 paper forward hard stop
+        try:
+            phase6_active = await get_setting_bool(db, "phase6_active")
+        except Exception:
+            phase6_active = False
+        if phase6_active:
+            phase6_max_trades = await get_setting_int(db, "phase6_max_trades") or 0
+            phase6_max_loss = await get_setting_float(db, "phase6_max_loss") or 0.0
+            phase6_start_str = await get_setting(db, "phase6_start_time")
+            try:
+                phase6_start = ensure_aware(datetime.fromisoformat(phase6_start_str)) if phase6_start_str else None
+            except Exception:
+                phase6_start = None
+
+            if phase6_max_trades > 0:
+                stmt = select(func.count(models.Trade.id)).where(
+                    models.Trade.status == models.TradeStatus.CLOSED,
+                )
+                if phase6_start:
+                    stmt = stmt.where(models.Trade.close_time >= phase6_start)
+                closed_count = await db.execute(stmt)
+                if (closed_count.scalar() or 0) >= phase6_max_trades:
+                    return False, f"PHASE 6 HALT: {phase6_max_trades} closed trades reached — validation complete"
+            if phase6_max_loss > 0:
+                stmt = select(func.coalesce(func.sum(models.Trade.pnl), 0.0)).where(
+                    models.Trade.status == models.TradeStatus.CLOSED,
+                )
+                if phase6_start:
+                    stmt = stmt.where(models.Trade.close_time >= phase6_start)
+                realized = await db.execute(stmt)
+                total_pnl = realized.scalar() or 0.0
+                if total_pnl <= -phase6_max_loss:
+                    return False, f"PHASE 6 HALT: realized loss ${abs(total_pnl):.2f} >= ${phase6_max_loss:.2f} — validation complete"
         from app.services.settings_service import get_setting_int
         max_consecutive = await get_setting_int(db, "max_consecutive_losses") or 5
         losses = [t for t in recent if (t.pnl or 0) < 0]
