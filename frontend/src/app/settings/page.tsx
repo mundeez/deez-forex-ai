@@ -343,7 +343,7 @@ export default function SettingsPage() {
                     <div>
                       <label className="text-sm text-slate-300 block mb-2">Data Provider</label>
                       <div className="flex gap-2">
-                        {["mt5_zmq", "metaapi"].map((provider) => (
+                        {["mt5_zmq", "mt5_rpyc", "metaapi"].map((provider) => (
                           <button
                             key={provider}
                             onClick={() => updateField("data_provider", provider)}
@@ -353,7 +353,11 @@ export default function SettingsPage() {
                                 : "bg-slate-800 text-slate-400 hover:bg-slate-700"
                             }`}
                           >
-                            {provider === "mt5_zmq" ? "MT5 ZMQ" : "MetaAPI"}
+                            {provider === "mt5_zmq"
+                              ? "MT5 ZMQ"
+                              : provider === "mt5_rpyc"
+                              ? "MT5 RPyC"
+                              : "MetaAPI"}
                           </button>
                         ))}
                       </div>

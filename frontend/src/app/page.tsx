@@ -83,7 +83,8 @@ export default function Home() {
               className="text-xs bg-slate-800 text-slate-300 border border-slate-600 rounded px-1 py-0.5"
             >
               <option value="metaapi">MetaAPI.cloud</option>
-              <option value="mt5_zmq">MT5 Desktop (ZMQ)</option>
+              <option value="mt5_zmq">MT5 (ZMQ)</option>
+              <option value="mt5_rpyc">MT5 (RPyC)</option>
             </select>
             <span className="text-xs text-slate-500">
               {activePairs.length} pair{activePairs.length !== 1 ? "s" : ""} active
