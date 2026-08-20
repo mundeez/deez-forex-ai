@@ -190,7 +190,6 @@ class RiskManager:
                 total_pnl = realized.scalar() or 0.0
                 if total_pnl <= -phase6_max_loss:
                     return False, f"PHASE 6 HALT: realized loss ${abs(total_pnl):.2f} >= ${phase6_max_loss:.2f} — validation complete"
-        from app.services.settings_service import get_setting_int
         max_consecutive = await get_setting_int(db, "max_consecutive_losses") or 5
         losses = [t for t in recent if (t.pnl or 0) < 0]
         if len(losses) >= max_consecutive:
