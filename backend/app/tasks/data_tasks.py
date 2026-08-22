@@ -178,8 +178,15 @@ def detect_and_backfill_gaps(self, symbol: str = None):
 def ingest_mt5_fill(self, symbol: str = None):
     """
     Fill recent gaps from MT5 ZMQ (last 2h).
-    Runs every 30 minutes for all active symbols.
+    Runs every 30 minutes for all active symbols, but only when the active
+    data provider is mt5_zmq. Skipped otherwise to avoid crashing against a
+    non-running ZMQ bridge.
     """
+    data_provider = os.environ.get("DATA_PROVIDER", "metaapi")
+    if data_provider != "mt5_zmq":
+        logger.info("[ingest_mt5_fill] skipped: DATA_PROVIDER=%s (mt5_zmq required)", data_provider)
+        return {"symbols": 0, "ticks": 0, "skipped": True}
+
     service = IngestionService()
     symbols = [symbol] if symbol else ACTIVE_SYMBOLS
     total = 0
@@ -353,21 +360,25 @@ def backfill_dukascopy_5y(self, symbol: str = None):
     queue="data_ingestion",
 )
 def ingest_retail_sentiment(self):
-    """Live Myfxbook retail sentiment ingestion, with COT proxy fallback.
+    """Retail sentiment ingestion.
 
-    Runs every 30 minutes. If Myfxbook returns 0 rows (Cloudflare 403),
-    we derive a COT-based retail proxy and insert it into retail_sentiment.
+    Runs every 30 minutes. Myfxbook live scraping is disabled by default
+    because it is blocked by Cloudflare (403). The COT-based proxy is used
+    instead. Set MYFXBOOK_SCRAPE_ENABLED=true to attempt live scraping.
     """
     import asyncio
     from app.services.data.retail_client import scrape_myfxbook, backfill_from_cot
     from app.database import get_celery_session
     async def _run():
         async with get_celery_session()() as db:
-            n = await scrape_myfxbook(db)
-            if n == 0:
-                logger.warning("[ingest_retail_sentiment] Myfxbook returned 0 rows; backfilling from COT proxy")
-                n = await backfill_from_cot(db)
-            return n
+            if os.environ.get("MYFXBOOK_SCRAPE_ENABLED", "false").lower() == "true":
+                n = await scrape_myfxbook(db)
+                if n == 0:
+                    logger.info("[ingest_retail_sentiment] Myfxbook returned 0 rows; backfilling from COT proxy")
+                    n = await backfill_from_cot(db)
+                return n
+            logger.info("[ingest_retail_sentiment] Myfxbook scrape disabled; using COT proxy")
+            return await backfill_from_cot(db)
     return asyncio.run(_run())
 
 

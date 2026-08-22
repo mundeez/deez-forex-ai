@@ -1,6 +1,6 @@
 import logging
-from datetime import datetime, timedelta
-from typing import Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -42,30 +42,38 @@ STRATEGY_CONFIG = {
 
 class RiskManager:
     async def _get_equity(self, db: AsyncSession) -> float:
-        result = await db.execute(
-            select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-                models.Trade.status == models.TradeStatus.CLOSED
-            )
+        reset_at = await self._get_portfolio_reset_at(db)
+
+        closed_stmt = select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
+            models.Trade.status == models.TradeStatus.CLOSED
         )
-        realized = result.scalar() or 0.0
-        result2 = await db.execute(
-            select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
-                models.Trade.status == models.TradeStatus.OPEN
-            )
+        if reset_at is not None:
+            closed_stmt = closed_stmt.where(models.Trade.close_time >= reset_at)
+        realized = (await db.execute(closed_stmt)).scalar() or 0.0
+
+        open_stmt = select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
+            models.Trade.status == models.TradeStatus.OPEN
         )
-        unrealized = result2.scalar() or 0.0
+        if reset_at is not None:
+            open_stmt = open_stmt.where(models.Trade.open_time >= reset_at)
+        unrealized = (await db.execute(open_stmt)).scalar() or 0.0
+
         equity_balance = await get_setting_float(db, "equity_balance")
         return max(equity_balance + realized + unrealized, 1.0)
 
     async def _consecutive_losses(self, db: AsyncSession, lookback: int = 3) -> int:
         """Return the number of consecutive losing trades at the end of the last N closed trades."""
         try:
-            result = await db.execute(
+            reset_at = await self._get_portfolio_reset_at(db)
+            stmt = (
                 select(models.Trade)
                 .where(models.Trade.status == models.TradeStatus.CLOSED)
                 .order_by(models.Trade.close_time.desc())
                 .limit(lookback)
             )
+            if reset_at is not None:
+                stmt = stmt.where(models.Trade.close_time >= reset_at)
+            result = await db.execute(stmt)
             recent = result.scalars().all()
         except Exception:
             return 0
@@ -77,6 +85,17 @@ class RiskManager:
             else:
                 break
         return count
+
+    async def _get_portfolio_reset_at(self, db: AsyncSession) -> Optional[datetime]:
+        """Return the portfolio reset timestamp, if one is set."""
+        try:
+            from app.services.settings_service import get_setting
+            s = await get_setting(db, "portfolio_reset_at")
+            if s:
+                return ensure_aware(datetime.fromisoformat(s))
+        except Exception:
+            pass
+        return None
 
     async def _get_strategy_mode(self, db: AsyncSession) -> str:
         mode = await get_setting(db, "strategy_mode")
@@ -109,14 +128,16 @@ class RiskManager:
 
         now = utc_now()
         today = now.date()
-        start_of_day = datetime.combine(today, datetime.min.time())
+        start_of_day = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        reset_at = await self._get_portfolio_reset_at(db)
 
-        # 1) Daily loss > 3%
+        # 1) Daily loss > 5%
+        effective_start_of_day = max(start_of_day, reset_at) if reset_at else start_of_day
         try:
             result = await db.execute(
                 select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
                     models.Trade.status == models.TradeStatus.CLOSED,
-                    models.Trade.close_time >= start_of_day,
+                    models.Trade.close_time >= effective_start_of_day,
                     models.Trade.pnl < 0,
                 )
             )
@@ -130,11 +151,12 @@ class RiskManager:
         # 2) Weekly loss > 6%
         week_start = now - timedelta(days=now.weekday())
         week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        effective_week_start = max(week_start, reset_at) if reset_at else week_start
         try:
             result = await db.execute(
                 select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
                     models.Trade.status == models.TradeStatus.CLOSED,
-                    models.Trade.close_time >= week_start,
+                    models.Trade.close_time >= effective_week_start,
                     models.Trade.pnl < 0,
                 )
             )
@@ -237,12 +259,14 @@ class RiskManager:
             if risk_amount > max_risk_abs:
                 return False, f"Risk amount ${risk_amount:.2f} exceeds max ${max_risk_abs:.2f}"
 
-        today = datetime.utcnow().date()
-        start_of_day = datetime.combine(today, datetime.min.time())
+        today = datetime.now(timezone.utc).date()
+        start_of_day = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+        reset_at = await self._get_portfolio_reset_at(db)
+        effective_start_of_day = max(start_of_day, reset_at) if reset_at else start_of_day
         result = await db.execute(
             select(func.coalesce(func.sum(models.Trade.pnl), 0)).where(
                 models.Trade.status == models.TradeStatus.CLOSED,
-                models.Trade.close_time >= start_of_day,
+                models.Trade.close_time >= effective_start_of_day,
             )
         )
         daily_pnl = result.scalar() or 0

@@ -201,19 +201,10 @@ class FundamentalAnalyzer:
         if not self.news_api_key:
             return ["Mock headline: ECB signals potential rate cut"]
         try:
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                "q": f"{symbol[:3]} {symbol[3:]} forex",
-                "apiKey": self.news_api_key,
-                "sortBy": "publishedAt",
-                "pageSize": 5,
-                "language": "en",
-            }
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
-            return [a["title"] for a in data.get("articles", [])]
+            # Reuse the cached, rate-limited NewsAPI fetch from SentimentAnalyzer
+            # to avoid hammering the free tier once per analysed symbol.
+            from app.analysis.sentiment import SentimentAnalyzer
+            return await SentimentAnalyzer()._fetch_headlines(symbol)
         except Exception:
             logger.warning("Failed to fetch news headlines", exc_info=True)
             return ["News unavailable"]

@@ -140,7 +140,7 @@ services:
     networks:
       - shared-net
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.connect(('localhost', 18812)); s.close()\" || exit 1"]
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.connect(('localhost', 18812)); s.close()\" || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
