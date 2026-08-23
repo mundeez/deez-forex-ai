@@ -30,6 +30,8 @@ DEFAULTS = {
     "weekend_close_enabled": "true",
     "weekend_close_time_utc": "21:00",
     "weekend_resume_time_utc": "22:00",
+    "overnight_cutoff_enabled": "false",
+    "overnight_cutoff_utc": "22:00",
     "enable_technical": "true",
     "enable_fundamental": "true",
     "enable_sentiment": "true",

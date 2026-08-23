@@ -48,6 +48,7 @@ celery_app.conf.update(
         "app.tasks.execution_tasks.reevaluate_open_positions": {"queue": "execution"},
         "app.tasks.execution_tasks.close_eod_positions": {"queue": "execution"},
         "app.tasks.execution_tasks.close_weekend_positions": {"queue": "execution"},
+        "app.tasks.execution_tasks.close_overnight_cutoff": {"queue": "execution"},
         "app.tasks.analysis_tasks.run_full_analysis": {"queue": "ai_analysis"},
         "app.tasks.analysis_tasks.compute_daily_bias": {"queue": "ai_analysis"},
         # Pre-compute refresh tasks go to ai_analysis so they don't block execution
@@ -91,6 +92,11 @@ celery_app.conf.update(
         "close-weekend-positions": {
             "task": "app.tasks.execution_tasks.close_weekend_positions",
             "schedule": crontab(hour=21, minute=0, day_of_week="fri"),
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
+        "close-overnight-cutoff": {
+            "task": "app.tasks.execution_tasks.close_overnight_cutoff",
+            "schedule": 300.0,  # every 5 minutes
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
         "compute-pair-performance": {

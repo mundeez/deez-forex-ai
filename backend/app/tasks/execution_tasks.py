@@ -7,7 +7,7 @@ logger = logging.getLogger("app.tasks.execution")
 from app.database import get_celery_session
 from app.services.execution.executor import ExecutionService, compute_live_unrealized
 from app.services.notification_service import NotificationService
-from app.services.settings_service import get_setting_bool, get_setting_float
+from app.services.settings_service import get_setting_bool, get_setting_float, get_setting
 from app.utils.time import utc_now, ensure_aware
 from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -180,6 +180,41 @@ def close_weekend_positions():
                     "close_reason": "weekend",
                 })
             return {"closed": len(closed_trades), "reason": "weekend"}
+    return asyncio.run(_close())
+
+
+@celery_app.task
+def close_overnight_cutoff():
+    async def _close():
+        async with get_celery_session()() as db:
+            from app.services.websocket_broadcaster import broadcast_trade_event
+            overnight_enabled = await get_setting_bool(db, "overnight_cutoff_enabled")
+            if not overnight_enabled:
+                return {"closed": 0, "reason": "Overnight cutoff disabled"}
+
+            cutoff_str = await get_setting(db, "overnight_cutoff_utc") or "22:00"
+            try:
+                oc_h, oc_m = map(int, cutoff_str.split(":"))
+                if utc_now().time() < time(oc_h, oc_m):
+                    return {"closed": 0, "reason": f"Before overnight cutoff {cutoff_str}"}
+            except Exception:
+                logger.warning("Failed to parse overnight cutoff time", exc_info=True)
+                return {"closed": 0, "reason": "Invalid overnight cutoff time"}
+
+            executor = ExecutionService()
+            closed_trades = await executor.close_all_open_positions(db, close_reason="overnight")
+            for trade in closed_trades:
+                await broadcast_trade_event("closed", {
+                    "id": trade.id,
+                    "symbol": trade.symbol,
+                    "direction": trade.direction,
+                    "exit_price": trade.exit_price,
+                    "pnl": trade.pnl,
+                    "pnl_pct": trade.pnl_pct,
+                    "mode": trade.mode,
+                    "close_reason": "overnight",
+                })
+            return {"closed": len(closed_trades), "reason": "overnight"}
     return asyncio.run(_close())
 
 

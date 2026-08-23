@@ -127,6 +127,8 @@ export interface AppSettings {
   weekend_close_enabled: boolean;
   weekend_close_time_utc: string;
   weekend_resume_time_utc: string;
+  overnight_cutoff_enabled: boolean;
+  overnight_cutoff_utc: string;
   enable_technical: boolean;
   enable_fundamental: boolean;
   enable_sentiment: boolean;

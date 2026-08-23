@@ -102,6 +102,16 @@ async def _trading_paused(strategy_mode: str, db) -> Tuple[bool, str]:
         except Exception:
             logger.warning("Failed to parse weekend time settings", exc_info=True)
 
+    overnight_enabled = await get_setting_bool(db, "overnight_cutoff_enabled")
+    if overnight_enabled:
+        overnight_cutoff_str = await get_setting(db, "overnight_cutoff_utc") or "22:00"
+        try:
+            oc_h, oc_m = map(int, overnight_cutoff_str.split(":"))
+            if now.time() >= time(oc_h, oc_m):
+                return True, f"Trading paused: overnight cutoff at {overnight_cutoff_str} UTC"
+        except Exception:
+            logger.warning("Failed to parse overnight cutoff time", exc_info=True)
+
     return False, ""
 
 
