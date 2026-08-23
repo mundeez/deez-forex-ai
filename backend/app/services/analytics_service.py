@@ -8,7 +8,7 @@ import math
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 
 from app import models
 
@@ -200,10 +200,10 @@ async def compute_analytics_by_session(
         select(
             models.Trade.session_at_close,
             func.count(models.Trade.id).label("total"),
-            func.sum(func.case((models.Trade.pnl > 0, 1), else_=0)).label("wins"),
+            func.sum(case((models.Trade.pnl > 0, 1), else_=0)).label("wins"),
             func.coalesce(func.sum(models.Trade.pnl), 0.0).label("total_pnl"),
-            func.coalesce(func.sum(func.case((models.Trade.pnl > 0, models.Trade.pnl), else_=0)), 0.0).label("gross_profit"),
-            func.coalesce(func.sum(func.abs(func.case((models.Trade.pnl <= 0, models.Trade.pnl), else_=0))), 0.0).label("gross_loss"),
+            func.coalesce(func.sum(case((models.Trade.pnl > 0, models.Trade.pnl), else_=0)), 0.0).label("gross_profit"),
+            func.coalesce(func.sum(func.abs(case((models.Trade.pnl <= 0, models.Trade.pnl), else_=0))), 0.0).label("gross_loss"),
         )
         .where(*filters)
         .group_by(models.Trade.session_at_close)
@@ -243,7 +243,7 @@ async def compute_analytics_by_hour(
             func.extract("hour", models.Trade.close_time).label("hour"),
             models.Trade.symbol,
             func.count(models.Trade.id).label("total"),
-            func.sum(func.case((models.Trade.pnl > 0, 1), else_=0)).label("wins"),
+            func.sum(case((models.Trade.pnl > 0, 1), else_=0)).label("wins"),
             func.coalesce(func.sum(models.Trade.pnl), 0.0).label("total_pnl"),
         )
         .where(*filters)
