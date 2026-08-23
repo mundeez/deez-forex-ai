@@ -75,11 +75,15 @@ export interface PortfolioSummary {
   realized_pnl: number;
   win_rate: number | null;
   profit_factor: number | null;
-  sharpe_ratio: number;
-  max_drawdown_pct: number;
+  sharpe_ratio: number | null;
+  max_drawdown_pct: number | null;
+  expectancy: number | null;
   total_trades: number;
-  open_trades: number;
-  equity_curve: { timestamp: string; equity: number }[];
+  winning_trades: number;
+  losing_trades: number;
+  open_trades?: number;
+  portfolio_reset_at?: string | null;
+  equity_history: { timestamp: string; equity: number }[];
 }
 
 export interface MarketSummary {

@@ -3,37 +3,28 @@
 import { useState } from "react";
 import { TrendingUp, TrendingDown, Wallet, BarChart3, Target, Activity, RotateCcw, AlertTriangle, Eye } from "lucide-react";
 import { API_URL } from "@/utils/api";
-import { usePolling, useFetchOnce, fetchJSON } from "@/hooks/usePolling";
+import { usePolling, fetchJSON } from "@/hooks/usePolling";
 import { formatDateTime } from "@/utils/date";
+import { PortfolioSummary } from "@/types";
 import PortfolioIndicatorModal from "./PortfolioIndicatorModal";
-
-interface EquityPoint {
-  date: string;
-  equity: number;
-}
 
 export default function ProfitMetricsPanel() {
   const [stats, setStats] = useState<any>(null);
-  const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
   const [showConfirm, setShowConfirm] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
 
   usePolling(async (signal) => {
-    const data = await fetchJSON<any>(`${API_URL}/api/v1/trades/stats`, signal);
+    const data = await fetchJSON<PortfolioSummary>(`${API_URL}/api/v1/portfolio/summary`, signal);
     if (data) setStats(data);
-  }, 15000, []);
-
-  useFetchOnce(async (signal) => {
-    await fetchJSON<any>(`${API_URL}/api/v1/portfolio/summary`, signal);
-  }, []);
+  }, 30000, []);
 
   async function handleReset() {
     setResetLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/v1/portfolio/reset`, { method: "POST" });
       if (res.ok) {
-        const statsData = await fetchJSON<any>(`${API_URL}/api/v1/trades/stats`);
+        const statsData = await fetchJSON<PortfolioSummary>(`${API_URL}/api/v1/portfolio/summary`);
         if (statsData) setStats(statsData);
       }
     } catch (e) {

@@ -5,7 +5,7 @@ statistics (max drawdown, Sharpe, expectancy) from live trade records.
 """
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -77,6 +77,7 @@ async def compute_portfolio_metrics(
     if total_closed == 0:
         return {
             "equity": round(equity_balance, 2),
+            "daily_pnl": 0.0,
             "realized_pnl": 0.0,
             "unrealized_pnl": 0.0,
             "total_trades": 0,
@@ -113,6 +114,16 @@ async def compute_portfolio_metrics(
     )
     total_pnl = total_pnl_result.scalar() or 0.0
 
+    start_of_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    daily_start = max(start_of_day, reset_at) if reset_at is not None else start_of_day
+    daily_pnl_result = await db.execute(
+        select(func.coalesce(func.sum(models.Trade.pnl), 0.0)).where(
+            models.Trade.status == models.TradeStatus.CLOSED,
+            models.Trade.close_time >= daily_start,
+        )
+    )
+    daily_pnl = daily_pnl_result.scalar() or 0.0
+
     curve = await compute_equity_curve(db, equity_balance, reset_at)
     max_drawdown_pct = max((p["drawdown_pct"] for p in curve), default=0.0)
 
@@ -140,6 +151,7 @@ async def compute_portfolio_metrics(
 
     return {
         "equity": round(equity_balance + total_pnl, 2),
+        "daily_pnl": round(daily_pnl, 2),
         "realized_pnl": round(total_pnl, 2),
         "unrealized_pnl": 0.0,
         "total_trades": total_closed,

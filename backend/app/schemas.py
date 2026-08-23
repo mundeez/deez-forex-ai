@@ -167,6 +167,7 @@ class PositionOut(BaseModel):
 
 class PortfolioSummaryOut(BaseModel):
     equity: float
+    daily_pnl: float
     realized_pnl: float
     unrealized_pnl: float
     total_trades: int
