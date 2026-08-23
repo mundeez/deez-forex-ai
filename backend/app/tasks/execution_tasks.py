@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from app.celery_app import celery_app
 
 logger = logging.getLogger("app.tasks.execution")
@@ -224,7 +224,7 @@ def update_daily_pnl():
         async with get_celery_session()() as db:
             from app.services.websocket_broadcaster import broadcast_settings_change
             today = utc_now().date()
-            start_of_day = datetime.combine(today, datetime.min.time())
+            start_of_day = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
             equity_balance = await get_setting_float(db, "equity_balance")
 
             result = await db.execute(
