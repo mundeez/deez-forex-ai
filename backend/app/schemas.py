@@ -57,6 +57,18 @@ class TradeOut(BaseModel):
     trailing_stop_distance: Optional[float] = None
     highest_price_seen: Optional[float] = None
     lowest_price_seen: Optional[float] = None
+    close_reason: Optional[str] = None
+    partial_tp_hit: Optional[bool] = False
+    partial_profit_pnl: Optional[float] = None
+    max_risk_amount: Optional[float] = None
+    mfe_pips: Optional[float] = None
+    mae_pips: Optional[float] = None
+    peak_pnl: Optional[float] = None
+    peak_pnl_time: Optional[datetime] = None
+    session_at_open: Optional[str] = None
+    session_at_close: Optional[str] = None
+    actual_holding_min: Optional[float] = None
+    exit_quality_score: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -165,6 +177,7 @@ class PortfolioSummaryOut(BaseModel):
     max_drawdown_pct: Optional[float]
     sharpe_ratio: Optional[float]
     expectancy: Optional[float]
+    equity_history: List[Dict[str, Any]] = []
 
 
 class AnalysisTechnicalOut(BaseModel):
