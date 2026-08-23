@@ -1,7 +1,9 @@
 """Tests for the live portfolio analytics service."""
 
 import pytest
+import pytest_asyncio
 from datetime import timedelta
+from sqlalchemy import delete
 
 from app.models import Trade, TradeStatus, TradeDirection
 from app.enums import TradeMode, DataProvider
@@ -10,6 +12,13 @@ from app.utils.time import utc_now
 
 
 EQUITY_BALANCE = 100.0
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def clean_trades(db_session):
+    """Truncate trades before each test so metrics are deterministic."""
+    await db_session.execute(delete(Trade))
+    await db_session.commit()
 
 
 async def _add_trades(db_session, pnls):
