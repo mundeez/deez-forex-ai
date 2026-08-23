@@ -4,7 +4,7 @@ import logging
 import time as pytime
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
