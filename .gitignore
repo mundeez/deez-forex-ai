@@ -62,6 +62,7 @@ logs/
 # Generated / local
 backend/celerybeat-schedule
 frontend/.env.local
+frontend/tsconfig.tsbuildinfo
 celerybeat-schedule
 
 # Test virtual environments

@@ -4,6 +4,27 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v0.3.0] — 2026-08-23
+
+### Round 1 — Live Portfolio Analytics, Trade Visibility, and Build-Typing Hardening
+
+This release closes Round 1 with live portfolio analytics on the backend, richer trade visibility in the UI, execution-control settings, and a final build-typing hardening pass.
+
+#### ✨ Added
+- **Live portfolio analytics service** with equity-curve endpoint and portfolio summary API.
+- **ProfitMetricsPanel** sparkline and live profit/loss metrics on the dashboard.
+- **PositionsPanel** session badge and **TradeHistoryPanel** close-reason, session, duration, and R-multiple columns.
+- **Overnight cutoff setting**, **analysis pause**, and a dedicated **close task** for execution control.
+- **Analytics test suite** with deterministic, per-test cleanup.
+
+#### 🚨 Fixed
+- Dependency audit follow-up and **@types/jest** typing fix for the frontend build.
+
+#### ⚠️ Known Limitations
+- Two remaining `npm` high vulnerabilities require **Next.js 16** to resolve fully.
+
+---
+
 ## [v1.7.0] — 2026-08-19
 
 ### Phase 0/1/2 — Live Signal Loop & Sentiment Repair
@@ -142,5 +163,6 @@ This release addresses a critical failure where the auto-trade system silently s
 
 ---
 
+[v0.3.0]: https://github.com/mundeez/deez-forex-ai/compare/v0.2.0...v0.3.0
 [v0.7.0]: https://github.com/mundeez/deez-forex-ai/compare/v0.6.2...v0.7.0
 [v0.6.2]: https://github.com/mundeez/deez-forex-ai/releases/tag/v0.6.2
