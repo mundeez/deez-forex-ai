@@ -4,7 +4,7 @@ import logging
 import time as pytime
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +31,14 @@ from app.services.data.ingestion_service import IngestionService
 from app.services.data.pipeline_orchestrator import PipelineOrchestrator, PipelineStatus, DeadLetterHandler
 from app.services.execution.executor import compute_live_unrealized
 from app.services.risk.manager import RiskManager
-from app.services.analytics_service import compute_portfolio_metrics, compute_equity_curve
+from app.services.vector_store import AsyncVectorStore
+from app.services.analytics_service import (
+    compute_portfolio_metrics,
+    compute_equity_curve,
+    compute_analytics_by_session,
+    compute_analytics_by_hour,
+    compute_holding_distribution,
+)
 from app.services.settings_service import build_settings_response, set_setting, get_setting_bool, get_setting, get_setting_float
 from app.ai.openrouter_client import OpenRouterClient
 from app.analysis.aggregator import AnalysisAggregator
@@ -493,19 +500,146 @@ async def set_active_pairs(pairs: list[schemas.ActivePairCreate], db: AsyncSessi
     return {"detail": "Active pairs updated"}
 
 
-@app.get("/api/v1/trades")
+@app.get("/api/v1/trades", response_model=Union[List[schemas.TradeOut], schemas.TradeListResponse])
 @_redis_cache(ttl=_CACHE_TTL_FAST)
 async def get_trades(
-    status: str = None,
+    status: Optional[str] = None,
+    symbol: Optional[str] = None,
+    session: Optional[str] = None,
+    outcome: Optional[str] = None,
+    from_date: Optional[datetime] = None,
+    to_date: Optional[datetime] = None,
+    min_pnl: Optional[float] = None,
+    max_pnl: Optional[float] = None,
+    min_confidence: Optional[float] = None,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+    cursor: Optional[int] = None,
     limit: int = 50,
-    db: AsyncSession = Depends(get_db)
+    paginate: bool = False,
+    db: AsyncSession = Depends(get_db),
 ):
-    query = select(models.Trade).order_by(desc(models.Trade.created_at))
+    """List trades with optional filters, sorting, and cursor pagination.
+
+    Legacy callers that do not set `paginate=true` receive the original flat
+    list. New callers can request `paginate=true` to receive `items`, `total`,
+    and `next_cursor`.
+    """
+    page_size = max(1, min(limit, 200))
+    query = select(models.Trade)
+
     if status:
-        query = query.where(models.Trade.status == status)
-    result = await db.execute(query.limit(limit))
+        try:
+            query = query.where(models.Trade.status == models.TradeStatus(status.upper()))
+        except ValueError:
+            query = query.where(models.Trade.status == status)
+
+    if symbol:
+        query = query.where(models.Trade.symbol == symbol.upper())
+
+    if session:
+        query = query.where(
+            (models.Trade.session_at_open == session) | (models.Trade.session_at_close == session)
+        )
+
+    if outcome:
+        outcome = outcome.lower()
+        if outcome == "win":
+            query = query.where(models.Trade.pnl > 0)
+        elif outcome == "loss":
+            query = query.where(models.Trade.pnl < 0)
+        elif outcome == "breakeven":
+            query = query.where(func.coalesce(models.Trade.pnl, 0) == 0)
+
+    if from_date:
+        if status and status.upper() == "OPEN":
+            query = query.where(models.Trade.open_time >= from_date)
+        else:
+            query = query.where(models.Trade.close_time >= from_date)
+
+    if to_date:
+        if status and status.upper() == "OPEN":
+            query = query.where(models.Trade.open_time <= to_date)
+        else:
+            query = query.where(models.Trade.close_time <= to_date)
+
+    if min_pnl is not None:
+        query = query.where(func.coalesce(models.Trade.pnl, 0) >= min_pnl)
+    if max_pnl is not None:
+        query = query.where(func.coalesce(models.Trade.pnl, 0) <= max_pnl)
+
+    if min_confidence is not None:
+        confidence_subq = select(models.AIDecision.id).where(
+            models.AIDecision.confidence >= min_confidence
+        )
+        query = query.where(models.Trade.ai_decision_id.in_(confidence_subq))
+
+    if cursor is not None:
+        if sort_dir.lower() == "asc":
+            query = query.where(models.Trade.id > cursor)
+        else:
+            query = query.where(models.Trade.id < cursor)
+
+    sort_col = {
+        "created_at": models.Trade.created_at,
+        "close_time": models.Trade.close_time,
+        "open_time": models.Trade.open_time,
+        "pnl": models.Trade.pnl,
+    }.get(sort_by, models.Trade.created_at)
+
+    if sort_dir.lower() == "asc":
+        query = query.order_by(sort_col.asc(), models.Trade.id.asc())
+    else:
+        query = query.order_by(sort_col.desc(), models.Trade.id.desc())
+
+    total_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = total_result.scalar() or 0
+
+    result = await db.execute(query.limit(page_size + 1))
     trades = result.scalars().all()
-    return trades
+
+    next_cursor = None
+    if len(trades) > page_size:
+        trades = trades[:page_size]
+        next_cursor = trades[-1].id
+
+    if paginate:
+        return schemas.TradeListResponse(items=trades, total=total, next_cursor=next_cursor)
+    return list(trades)
+
+
+@app.get("/api/v1/trades/{trade_id}", response_model=schemas.TradeDetailOut)
+async def get_trade_detail(trade_id: int, db: AsyncSession = Depends(get_db)):
+    """Fetch a single trade with its linked AI decision and similar setups."""
+    result = await db.execute(select(models.Trade).where(models.Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
+
+    ai_decision = None
+    if trade.ai_decision_id:
+        dec_result = await db.execute(
+            select(models.AIDecision).where(models.AIDecision.id == trade.ai_decision_id)
+        )
+        ai_decision = dec_result.scalar_one_or_none()
+
+    similar_setups: list = []
+    if ai_decision and ai_decision.technical_snapshot:
+        try:
+            snapshot = ai_decision.technical_snapshot
+            if isinstance(snapshot, str):
+                snapshot = json.loads(snapshot)
+            vs = AsyncVectorStore()
+            similar_setups = await vs.search_similar(snapshot, limit=5)
+        except Exception:
+            logger = logging.getLogger("app.main")
+            logger.warning("Failed to retrieve similar setups for trade %s", trade_id, exc_info=True)
+
+    return schemas.TradeDetailOut(
+        trade=trade,
+        ai_decision=ai_decision,
+        similar_setups=similar_setups,
+    )
 
 
 @app.post("/api/v1/trades/manual", response_model=schemas.TradeOut)
@@ -683,6 +817,47 @@ async def get_equity_curve(db: AsyncSession = Depends(get_db)):
     equity_balance = await get_setting_float(db, "equity_balance")
     curve = await compute_equity_curve(db, equity_balance, reset_at)
     return {"equity_history": curve}
+
+
+@app.get("/api/v1/analytics/portfolio")
+@_redis_cache(ttl=_CACHE_TTL_MED)
+async def get_analytics_portfolio(db: AsyncSession = Depends(get_db)):
+    reset_at_str = await get_setting(db, "portfolio_reset_at")
+    reset_at = _parse_reset_at(reset_at_str)
+    equity_balance = await get_setting_float(db, "equity_balance")
+    unrealized = await compute_live_unrealized(db)
+    metrics = await compute_portfolio_metrics(db, equity_balance, reset_at)
+    metrics["unrealized_pnl"] = round(unrealized, 2)
+    metrics["equity"] = round(metrics["equity"] + unrealized, 2)
+    metrics["portfolio_reset_at"] = reset_at_str if reset_at_str else None
+    return metrics
+
+
+@app.get("/api/v1/analytics/by-session")
+@_redis_cache(ttl=_CACHE_TTL_MED)
+async def get_analytics_by_session(db: AsyncSession = Depends(get_db)):
+    reset_at_str = await get_setting(db, "portfolio_reset_at")
+    reset_at = _parse_reset_at(reset_at_str)
+    data = await compute_analytics_by_session(db, reset_at)
+    return {"sessions": data}
+
+
+@app.get("/api/v1/analytics/by-hour")
+@_redis_cache(ttl=_CACHE_TTL_MED)
+async def get_analytics_by_hour(db: AsyncSession = Depends(get_db)):
+    reset_at_str = await get_setting(db, "portfolio_reset_at")
+    reset_at = _parse_reset_at(reset_at_str)
+    data = await compute_analytics_by_hour(db, reset_at)
+    return {"hours": data}
+
+
+@app.get("/api/v1/analytics/holding-distribution")
+@_redis_cache(ttl=_CACHE_TTL_MED)
+async def get_analytics_holding_distribution(db: AsyncSession = Depends(get_db)):
+    reset_at_str = await get_setting(db, "portfolio_reset_at")
+    reset_at = _parse_reset_at(reset_at_str)
+    data = await compute_holding_distribution(db, reset_at)
+    return {"buckets": data}
 
 
 @app.post("/api/v1/portfolio/reset")

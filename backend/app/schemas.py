@@ -177,8 +177,73 @@ class PortfolioSummaryOut(BaseModel):
     profit_factor: Optional[float]
     max_drawdown_pct: Optional[float]
     sharpe_ratio: Optional[float]
+    sortino_ratio: Optional[float] = None
+    calmar_ratio: Optional[float] = None
     expectancy: Optional[float]
     equity_history: List[Dict[str, Any]] = []
+
+
+class TradeListResponse(BaseModel):
+    items: List[TradeOut]
+    total: int
+    next_cursor: Optional[int] = None
+
+
+class SimilarSetupOut(BaseModel):
+    id: Any
+    score: float
+    symbol: Optional[str] = None
+    decision: Optional[str] = None
+    confidence: Optional[float] = None
+    outcome_pnl: Optional[float] = None
+    outcome_status: Optional[str] = None
+    strategy_mode: Optional[str] = None
+    timestamp: Optional[Any] = None
+
+
+class TradeDetailOut(BaseModel):
+    trade: TradeOut
+    ai_decision: Optional[AIDecisionOut] = None
+    similar_setups: List[SimilarSetupOut] = []
+
+
+class SessionAnalyticsOut(BaseModel):
+    session: str
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: Optional[float]
+    total_pnl: float
+    avg_pnl: float
+    profit_factor: Optional[float]
+
+
+class HourAnalyticsItem(BaseModel):
+    hour: int
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: Optional[float]
+    total_pnl: float
+    avg_pnl: float
+    symbols: List[str]
+
+
+class HourAnalyticsOut(BaseModel):
+    hour: int
+    items: List[HourAnalyticsItem]
+
+
+class HoldingBucketOut(BaseModel):
+    bucket: str
+    min_minutes: Optional[float]
+    max_minutes: Optional[float]
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: Optional[float]
+    total_pnl: float
+    avg_pnl: float
 
 
 class AnalysisTechnicalOut(BaseModel):
@@ -263,6 +328,8 @@ class AppSettingsOut(BaseModel):
     weekend_close_enabled: bool
     weekend_close_time_utc: str
     weekend_resume_time_utc: str
+    overnight_cutoff_enabled: bool
+    overnight_cutoff_utc: str
     enable_technical: bool
     enable_fundamental: bool
     enable_sentiment: bool
@@ -322,6 +389,8 @@ class AppSettingsUpdate(BaseModel):
     weekend_close_enabled: Optional[bool] = None
     weekend_close_time_utc: Optional[str] = None
     weekend_resume_time_utc: Optional[str] = None
+    overnight_cutoff_enabled: Optional[bool] = None
+    overnight_cutoff_utc: Optional[str] = None
     enable_technical: Optional[bool] = None
     enable_fundamental: Optional[bool] = None
     enable_sentiment: Optional[bool] = None

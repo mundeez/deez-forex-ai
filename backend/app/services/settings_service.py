@@ -218,6 +218,8 @@ async def build_settings_response(db: AsyncSession) -> dict:
         "weekend_close_enabled": all_db.get("weekend_close_enabled", "true").lower() == "true",
         "weekend_close_time_utc": all_db.get("weekend_close_time_utc", "21:00"),
         "weekend_resume_time_utc": all_db.get("weekend_resume_time_utc", "22:00"),
+        "overnight_cutoff_enabled": all_db.get("overnight_cutoff_enabled", "false").lower() == "true",
+        "overnight_cutoff_utc": all_db.get("overnight_cutoff_utc", "22:00"),
         "enable_technical": all_db.get("enable_technical", "true").lower() == "true",
         "enable_fundamental": all_db.get("enable_fundamental", "true").lower() == "true",
         "enable_sentiment": all_db.get("enable_sentiment", "true").lower() == "true",
