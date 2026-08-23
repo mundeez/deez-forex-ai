@@ -5,6 +5,7 @@ import { XCircle, TrendingUp, TrendingDown, Clock, Target, Shield, Timer, Calend
 import { API_URL } from "@/utils/api";
 import { usePolling, fetchJSON } from "@/hooks/usePolling";
 import { formatDateTime } from "@/utils/date";
+import { classifySession, formatSession } from "@/utils/sessions";
 
 interface ExitRec {
   action: string;
@@ -28,6 +29,7 @@ interface Position {
   partial_pnl?: number;
   closed_portion?: number;
   open_time?: string;
+  session_at_open?: string | null;
   duration_minutes?: number;
   distance_to_sl?: number;
   distance_to_tp?: number;
@@ -154,6 +156,9 @@ export default function PositionsPanel({ onRefresh }: { onRefresh?: () => void }
                 <div className="flex items-center gap-1">
                   <Calendar className="w-3 h-3" />
                   <span>{formatDateTime(p.open_time)}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">
+                    {formatSession(classifySession(p.open_time))}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1">
                   <Clock className="w-3 h-3" />
