@@ -246,7 +246,7 @@ export default function ChartPanel({ symbol, timeframe, livePrice }: ChartPanelP
     } catch {
       // ignore
     }
-  }, [livePrice]);
+  }, [livePrice, candles]);
 
   return (
     <div className="bg-forex-card rounded-xl border border-slate-700 p-4">
