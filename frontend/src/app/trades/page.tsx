@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Download, Filter, RefreshCw } from "lucide-react";
 import { API_URL } from "@/utils/api";
@@ -48,20 +48,26 @@ export default function TradesPage() {
     return `${API_URL}/api/v1/trades?${params.toString()}`;
   };
 
-  const load = async (cursor?: number | null) => {
-    setLoading(true);
-    const data = await fetchJSON<TradeListResponse>(buildUrl(cursor));
-    if (data) {
-      setItems((prev) => (cursor ? [...prev, ...data.items] : data.items));
-      setNextCursor(data.next_cursor);
-    }
-    setLoading(false);
-  };
+  const load = useCallback(
+    async (cursor?: number | null, signal?: AbortSignal) => {
+      setLoading(true);
+      const data = await fetchJSON<TradeListResponse>(buildUrl(cursor), signal);
+      if (data) {
+        setItems((prev) => (cursor ? [...prev, ...data.items] : data.items));
+        setNextCursor(data.next_cursor);
+      }
+      setLoading(false);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filters]
+  );
 
   useEffect(() => {
     setItems([]);
-    load(null);
-  }, [filters]);
+    const controller = new AbortController();
+    load(null, controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   const exportCsv = () => {
     if (!items.length) return;
