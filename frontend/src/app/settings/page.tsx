@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, AlertTriangle, Bot, Globe, BarChart3, Shield, Bell, Zap, Clock, Server, Plus, Trash2, RotateCcw, CheckCircle2, AlertCircle } from "lucide-react";
+import { ArrowLeft, Save, AlertTriangle, Bot, Globe, BarChart3, Shield, Bell, Zap, Clock, Server, Plus, Trash2, RotateCcw, CheckCircle2, AlertCircle, Moon } from "lucide-react";
 import { API_URL } from "@/utils/api";
 import { usePolling, useFetchOnce, fetchJSON } from "@/hooks/usePolling";
 
@@ -571,6 +571,36 @@ export default function SettingsPage() {
                           type="time"
                           value={settings.weekend_resume_time_utc || "22:00"}
                           onChange={(e) => updateField("weekend_resume_time_utc", e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-slate-700 pt-4">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Moon className="w-5 h-5 text-forex-accent" />
+                      <h3 className="text-lg font-semibold">Overnight Cutoff</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={settings.overnight_cutoff_enabled === true}
+                          onChange={(e) => updateField("overnight_cutoff_enabled", e.target.checked)}
+                          className="w-4 h-4 accent-forex-accent"
+                        />
+                        <div>
+                          <span className="text-sm text-slate-300">Enable overnight cutoff</span>
+                          <p className="text-xs text-slate-500">Close all open positions and block new entries after the cutoff</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-sm text-slate-300 block mb-1">Cutoff Time (UTC)</label>
+                        <input
+                          type="time"
+                          value={settings.overnight_cutoff_utc || "22:00"}
+                          onChange={(e) => updateField("overnight_cutoff_utc", e.target.value)}
                           className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm"
                         />
                       </div>

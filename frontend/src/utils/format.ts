@@ -23,6 +23,21 @@ export function formatDuration(minutes?: number | null): string {
   return `${m}m`;
 }
 
+export function formatDateTime(isoString?: string | null, options?: Intl.DateTimeFormatOptions): string {
+  if (!isoString) return "—";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "—";
+  const opts = options || {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  };
+  return d.toLocaleString(undefined, opts);
+}
+
 export function computeRMultiple(
   pnlPct: number | null | undefined,
   entryPrice: number | null | undefined,

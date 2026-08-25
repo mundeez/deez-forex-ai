@@ -67,3 +67,6 @@ celerybeat-schedule
 
 # Test virtual environments
 backend/.test-venv/
+
+# Local backups / dumps
+backups/

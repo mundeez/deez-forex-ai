@@ -65,6 +65,7 @@ export interface AIDecision {
   take_profit: number;
   timeframe: string;
   rationale: string;
+  model_used?: string | null;
   timestamp: string;
 }
 
@@ -76,6 +77,8 @@ export interface PortfolioSummary {
   win_rate: number | null;
   profit_factor: number | null;
   sharpe_ratio: number | null;
+  sortino_ratio?: number | null;
+  calmar_ratio?: number | null;
   max_drawdown_pct: number | null;
   expectancy: number | null;
   total_trades: number;
@@ -84,6 +87,64 @@ export interface PortfolioSummary {
   open_trades?: number;
   portfolio_reset_at?: string | null;
   equity_history: { timestamp: string; equity: number }[];
+}
+
+export interface TradeListResponse {
+  items: Trade[];
+  total: number;
+  next_cursor: number | null;
+}
+
+export interface TradeDetail {
+  trade: Trade;
+  ai_decision: AIDecision | null;
+  similar_setups: SimilarSetup[];
+}
+
+export interface SimilarSetup {
+  id: string | number;
+  score: number;
+  symbol?: string | null;
+  decision?: string | null;
+  confidence?: number | null;
+  outcome_pnl?: number | null;
+  outcome_status?: string | null;
+  strategy_mode?: string | null;
+  timestamp?: string | null;
+}
+
+export interface SessionAnalytics {
+  session: string;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number | null;
+  total_pnl: number;
+  avg_pnl: number;
+  profit_factor: number | null;
+}
+
+export interface HourAnalytics {
+  hour: number;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number | null;
+  total_pnl: number;
+  avg_pnl: number;
+  symbols: string[];
+}
+
+export interface HoldingBucket {
+  bucket: string;
+  min_minutes: number | null;
+  max_minutes: number | null;
+  total_trades: number;
+  winning_trades: number;
+  losing_trades: number;
+  win_rate: number | null;
+  total_pnl: number;
+  avg_pnl: number;
 }
 
 export interface MarketSummary {

@@ -24,7 +24,7 @@ const SESSION_LABELS: Record<SessionLabel, string> = {
   sydney: "Sydney",
 };
 
-export function formatSession(label?: SessionLabel | null): string {
+export function formatSession(label?: string | SessionLabel | null): string {
   if (!label) return "—";
-  return SESSION_LABELS[label];
+  return SESSION_LABELS[label as SessionLabel] || label;
 }

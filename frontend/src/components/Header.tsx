@@ -12,6 +12,7 @@ import {
 import {
   Settings as SettingsIcon,
   ShowChart as ShowChartIcon,
+  Analytics as AnalyticsIcon,
 } from "@mui/icons-material";
 import Link from "next/link";
 
@@ -68,6 +69,13 @@ export default function Header({ connected = true, provider = "metaapi" }: Heade
               color: (theme) => (connected ? theme.palette.success.main : theme.palette.error.main),
             }}
           />
+          <Tooltip title="Analytics">
+            <Link href="/analytics" passHref>
+              <IconButton size="small" sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}>
+                <AnalyticsIcon />
+              </IconButton>
+            </Link>
+          </Tooltip>
           <Tooltip title="Settings">
             <Link href="/settings" passHref>
               <IconButton size="small" sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}>
