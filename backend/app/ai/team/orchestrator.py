@@ -145,12 +145,21 @@ class TeamDecisionEngine:
                 threshold = 0.30
                 min_samples = 3
                 by_session = pattern_priors.get("by_session", {})
+                by_symbol_session = pattern_priors.get("by_symbol_session", {})
                 by_symbol = pattern_priors.get("by_symbol", {})
                 by_pair_dir = pattern_priors.get("by_symbol_direction", {})
                 reasons = []
-                s = by_session.get(session, {})
-                if s.get("count", 0) >= min_samples and s.get("win_rate", 1.0) < threshold:
-                    reasons.append(f"session {session} WR {s['win_rate']:.0%}")
+                # Prefer symbol-scoped session win rate; fall back to the
+                # global session stat only when we lack enough symbol×session
+                # samples. Otherwise one bad pair in a session would block
+                # every other pair trading in that same session.
+                ss = by_symbol_session.get(f"{symbol}_{session}", {})
+                if ss.get("count", 0) >= min_samples and ss.get("win_rate", 1.0) < threshold:
+                    reasons.append(f"{symbol} {session} WR {ss['win_rate']:.0%}")
+                else:
+                    s = by_session.get(session, {})
+                    if s.get("count", 0) >= min_samples and s.get("win_rate", 1.0) < threshold:
+                        reasons.append(f"session {session} WR {s['win_rate']:.0%}")
                 s2 = by_symbol.get(symbol, {})
                 if s2.get("count", 0) >= min_samples and s2.get("win_rate", 1.0) < threshold:
                     reasons.append(f"pair {symbol} WR {s2['win_rate']:.0%}")

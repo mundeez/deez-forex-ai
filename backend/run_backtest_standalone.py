@@ -52,6 +52,7 @@ sys.path.insert(0, "/app")
 from app.database import get_celery_session
 from app import models
 from app.enums import TradeDirection, TradeMode, DataProvider, TradeStatus
+from app.services.instruments import pip_size
 
 logging.basicConfig(
     level=logging.INFO,
@@ -203,9 +204,9 @@ class StandaloneBacktestEngine:
             return obj.tolist()
         return obj
 
-    def _compute_atr_based_sl(self, candles: pd.DataFrame, entry_price: float, direction: str) -> Optional[float]:
+    def _compute_atr_based_sl(self, candles: pd.DataFrame, entry_price: float, direction: str, symbol: str = "") -> Optional[float]:
         """Compute adaptive stop-loss based on 14-period ATR.
-        
+
         Rules:
         - SL distance = 1.5x ATR (adapts to volatility)
         - Minimum: 10 pips (noise floor)
@@ -213,25 +214,26 @@ class StandaloneBacktestEngine:
         """
         if candles.empty or len(candles) < 14:
             return None
-        
+
         high = candles["high"].values
         low = candles["low"].values
         close = candles["close"].values
-        
+
         # True Range
         tr1 = high[1:] - low[1:]
         tr2 = np.abs(high[1:] - close[:-1])
         tr3 = np.abs(low[1:] - close[:-1])
         tr = np.maximum(np.maximum(tr1, tr2), tr3)
-        
+
         # 14-period ATR
         atr_14 = np.mean(tr[-14:]) if len(tr) >= 14 else np.mean(tr)
-        
+
         # SL distance = 1.5x ATR
         sl_dist = atr_14 * 1.5
-        
-        # Symbol-specific pip value
-        pip = 0.01 if "JPY" in candles.attrs.get("symbol", "") else 0.0001
+
+        # Symbol-specific pip value (falls back to candles.attrs for old callers)
+        sym = symbol or candles.attrs.get("symbol", "")
+        pip = pip_size(sym)
         min_sl_dist = 10.0 * pip
         max_sl_dist = 30.0 * pip
         
@@ -716,7 +718,7 @@ class StandaloneBacktestEngine:
         # ATR SL: use pre-session context, not session candles (no look-ahead)
         atr_sl = self._compute_atr_based_sl(
             ctx_candles if ctx_candles is not None else exec_candles,
-            entry_price, direction
+            entry_price, direction, symbol
         )
         if atr_sl is not None:
             # Use the TIGHTER stop (closer to entry = smaller loss)

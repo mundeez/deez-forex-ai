@@ -106,6 +106,21 @@ class PatternExtractor:
                         "avg_pnl": round(np.mean([t["pnl"] for t in subset]), 2),
                     }
 
+        # By symbol + session (symbol-scoped session win rate, so the
+        # orchestrator's session filter does not block a good pair just
+        # because another pair lost in the same session).
+        symbol_session_stats = {}
+        for sym in symbols:
+            for sess in sessions:
+                subset = [t for t in trades if t.get("symbol") == sym and t.get("session") == sess]
+                if subset:
+                    ss_wins = [t for t in subset if t.get("pnl", 0) > 0]
+                    symbol_session_stats[f"{sym}_{sess}"] = {
+                        "count": len(subset),
+                        "win_rate": round(len(ss_wins) / len(subset), 3),
+                        "avg_pnl": round(np.mean([t["pnl"] for t in subset]), 2),
+                    }
+
         priors = {
             "computed_at": datetime.now(timezone.utc).isoformat(),
             "total_trades": total,
@@ -118,6 +133,7 @@ class PatternExtractor:
             "by_pattern_tag": tag_stats,
             "by_symbol": symbol_stats,
             "by_symbol_direction": pair_dir_stats,
+            "by_symbol_session": symbol_session_stats,
         }
 
         logger.info(

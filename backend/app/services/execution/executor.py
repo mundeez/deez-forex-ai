@@ -11,7 +11,7 @@ from app.services.data.mt5_zmq_client import MT5ZMQClient
 from app.config import get_settings
 from app.services.settings_service import get_setting_int, get_setting_bool, get_setting_float
 from app.utils.time import utc_now, ensure_aware
-from app.services.instruments import pnl_usd, pips
+from app.services.instruments import pnl_usd, pips, pip_size
 from app.services.sessions import classify_session
 
 settings = get_settings()
@@ -148,7 +148,7 @@ class ExecutionService:
             atr = np.mean(tr[-14:]) if len(tr) >= 14 else np.mean(tr)
             
             sl_dist = atr * 1.5
-            pip = 0.01 if "JPY" in symbol else 0.0001
+            pip = pip_size(symbol)
             min_dist = 10.0 * pip
             max_dist = 30.0 * pip
             sl_dist = max(min_dist, min(max_dist, sl_dist))

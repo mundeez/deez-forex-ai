@@ -37,6 +37,34 @@ This release closes Round 2 with full trade visibility and analytics on both the
 
 ---
 
+## [v1.8.1] — 2026-08-25
+
+### Adaptive FX fixes
+
+This patch fixes two bugs in the adaptive trading logic that produced incorrect ATR stop-loss distances and over-broad session win-rate filtering.
+
+#### 🚨 Fixed
+- **ATR stop-loss pip-size bug** — `_compute_atr_sl` in the executor and `_compute_atr_based_sl` in the standalone backtest hardcoded pip to `0.0001`/`0.01`, which is ~1000× too small for XAUUSD (gold, pip=0.10) and wrong for crypto/indices. Both now use `pip_size(symbol)` from instrument metadata. Without this fix, gold/crypto/index trades received a stop-loss clamped to a near-zero distance, causing instant stop-outs.
+- **Adaptive win-rate pattern filter** — the orchestrator's session check used a global per-session win rate across all symbols, so one bad pair in a session could block every other pair in that session. `PatternExtractor` now supports `by_symbol_session` aggregation, and the orchestrator prefers the symbol-scoped session win rate, falling back to the global session stat only when symbol×session samples are insufficient.
+
+#### ✨ Added
+- `backend/app/tests/test_adaptive_fixes.py` — ATR SL pip-size tests for gold (XAUUSD), EURUSD, and JPY pairs.
+- `test_by_symbol_session_aggregation` in `backend/app/tests/test_sprint4.py`.
+
+#### 🔬 Validation
+- 6/6 new tests pass.
+- Full backend suite: 212 passed, 0 regressions (9 pre-existing environmental failures in TimescaleDB/Postgres-dependent tests, confirmed by revert).
+
+#### 📋 Files Changed
+- `backend/app/services/execution/executor.py`
+- `backend/app/services/pattern_extractor.py`
+- `backend/app/ai/team/orchestrator.py`
+- `backend/run_backtest_standalone.py`
+- `backend/app/tests/test_sprint4.py`
+- `backend/app/tests/test_adaptive_fixes.py`
+
+---
+
 ## [v0.3.0] — 2026-08-23
 
 ### Round 1 — Live Portfolio Analytics, Trade Visibility, and Build-Typing Hardening
@@ -196,6 +224,7 @@ This release addresses a critical failure where the auto-trade system silently s
 
 ---
 
+[v1.8.1]: https://github.com/mundeez/deez-forex-ai/compare/v1.8.0...v1.8.1
 [v1.8.0]: https://github.com/mundeez/deez-forex-ai/compare/v1.7.0...v1.8.0
 [v0.3.0]: https://github.com/mundeez/deez-forex-ai/compare/v0.2.0...v0.3.0
 [v0.7.0]: https://github.com/mundeez/deez-forex-ai/compare/v0.6.2...v0.7.0

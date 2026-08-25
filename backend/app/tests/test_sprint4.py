@@ -116,6 +116,28 @@ class TestPatternExtractor:
         # bb_bounce: 1 trade, 1 win -> 1.0 wr
         assert priors["by_pattern_tag"]["bb_bounce"]["win_rate"] == 1.0
 
+    def test_by_symbol_session_aggregation(self):
+        """by_symbol_session must be computed so the orchestrator's session
+        filter can be symbol-scoped instead of blocking all pairs in a session."""
+        trades = [
+            {"symbol": "EURUSD", "direction": "buy", "pnl": 100, "regime": "trending", "session": "london", "pattern_tags": []},
+            {"symbol": "EURUSD", "direction": "buy", "pnl": -80, "regime": "trending", "session": "london", "pattern_tags": []},
+            {"symbol": "EURUSD", "direction": "buy", "pnl": -60, "regime": "trending", "session": "london", "pattern_tags": []},
+            # GBPUSD wins in london — must NOT be dragged down by EURUSD
+            {"symbol": "GBPUSD", "direction": "buy", "pnl": 120, "regime": "trending", "session": "london", "pattern_tags": []},
+            {"symbol": "GBPUSD", "direction": "buy", "pnl": 90, "regime": "trending", "session": "london", "pattern_tags": []},
+        ]
+        priors = PatternExtractor.compute_pattern_priors(trades)
+        assert "by_symbol_session" in priors
+        # EURUSD_london: 1 win / 3 -> 0.333
+        eur_london = priors["by_symbol_session"]["EURUSD_london"]
+        assert eur_london["count"] == 3
+        assert eur_london["win_rate"] == 0.333
+        # GBPUSD_london: 2 wins / 2 -> 1.0
+        gbp_london = priors["by_symbol_session"]["GBPUSD_london"]
+        assert gbp_london["count"] == 2
+        assert gbp_london["win_rate"] == 1.0
+
     def test_empty_trades(self):
         priors = PatternExtractor.compute_pattern_priors([])
         assert priors == {}
