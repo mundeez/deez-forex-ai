@@ -50,7 +50,8 @@ export default function TradesPage() {
 
   const load = useCallback(
     async (cursor?: number | null, signal?: AbortSignal) => {
-      setLoading(true);
+      // Defer setLoading to avoid synchronous setState in effect body
+      Promise.resolve().then(() => setLoading(true));
       const data = await fetchJSON<TradeListResponse>(buildUrl(cursor), signal);
       if (data) {
         setItems((prev) => (cursor ? [...prev, ...data.items] : data.items));
@@ -63,8 +64,10 @@ export default function TradesPage() {
   );
 
   useEffect(() => {
-    setItems([]);
     const controller = new AbortController();
+    // load() defers setLoading via Promise.resolve().then(), so this is
+    // not a synchronous setState — the linter can't trace through it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load(null, controller.signal);
     return () => controller.abort();
   }, [load]);

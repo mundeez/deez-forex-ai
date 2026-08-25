@@ -1269,6 +1269,15 @@ export default function SettingsPage() {
 
 
 
+function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${ok ? "bg-emerald-900/40 text-emerald-300" : "bg-red-900/40 text-red-300"}`}>
+      {ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+      {label}
+    </span>
+  );
+}
+
 function MT5BrokerSettings() {
   const [status, setStatus] = useState<any>(null);
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -1354,13 +1363,6 @@ function MT5BrokerSettings() {
       setLoading(false);
     }
   };
-
-  const StatusBadge = ({ ok, label }: { ok: boolean; label: string }) => (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${ok ? "bg-emerald-900/40 text-emerald-300" : "bg-red-900/40 text-red-300"}`}>
-      {ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
-      {label}
-    </span>
-  );
 
   return (
     <div className="bg-forex-card rounded-xl border border-slate-700 p-6 space-y-6">

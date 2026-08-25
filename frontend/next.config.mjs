@@ -1,6 +1,14 @@
+import { dirname } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  turbopack: {
+    root: __dirname,
+  },
   async rewrites() {
     // Only proxy /api internally when running in Docker dev mode
     // (NEXT_PUBLIC_API_URL is the internal backend hostname).

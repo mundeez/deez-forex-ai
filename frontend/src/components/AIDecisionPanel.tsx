@@ -44,9 +44,11 @@ export default function AIDecisionPanel({ newDecisions = [] }: { newDecisions?: 
     if (overrideData) setManualOverride(overrideData.manual_override);
   }, 15000, []);
 
-  // Merge WebSocket decisions
+  // Merge WebSocket decisions — setState here is intentional: we're
+  // syncing external WebSocket events into local state.
   useEffect(() => {
     if (newDecisions.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDecisions((prev) => {
         const merged = [...newDecisions, ...prev];
         // Remove duplicates by id

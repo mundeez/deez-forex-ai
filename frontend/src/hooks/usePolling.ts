@@ -19,7 +19,10 @@ export function usePolling(
   deps: any[] = []
 ) {
   const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
+
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -54,7 +57,10 @@ export function useFetchOnce(
   deps: any[] = []
 ) {
   const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
+
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+  });
 
   useEffect(() => {
     const controller = new AbortController();

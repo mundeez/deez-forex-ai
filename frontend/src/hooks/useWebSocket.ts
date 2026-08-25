@@ -62,8 +62,12 @@ export function useWebSocket(url: string, symbols: string[], provider?: string) 
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
 
   const symbolsRef = useRef(symbols);
-  symbolsRef.current = symbols;
   const symbolsKey = symbols.join(",");
+  const connectRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    symbolsRef.current = symbols;
+  });
 
   const connect = useCallback(() => {
     if (!url || ws.current?.readyState === WebSocket.OPEN) return;
@@ -127,7 +131,7 @@ export function useWebSocket(url: string, symbols: string[], provider?: string) 
             ? RECONNECT_DELAYS[reconnectAttempt.current]
             : MAX_RECONNECT_DELAY;
         reconnectAttempt.current += 1;
-        reconnectTimer.current = setTimeout(connect, delay);
+        reconnectTimer.current = setTimeout(() => connectRef.current(), delay);
       };
 
       socket.onerror = () => {
@@ -141,12 +145,16 @@ export function useWebSocket(url: string, symbols: string[], provider?: string) 
           ? RECONNECT_DELAYS[reconnectAttempt.current]
           : MAX_RECONNECT_DELAY;
       reconnectAttempt.current += 1;
-      reconnectTimer.current = setTimeout(connect, delay);
+      reconnectTimer.current = setTimeout(() => connectRef.current(), delay);
     }
     // symbolsKey is an intentional trigger: reconnect when the symbol set
     // changes by value, even though the body reads symbols via symbolsRef.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, symbolsKey, provider]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  });
 
   const send = useCallback((msg: object) => {
     if (ws.current?.readyState === WebSocket.OPEN) {

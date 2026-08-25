@@ -40,11 +40,10 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activePairs, setActivePairs] = useState<string[]>(["EURUSD"]);
   const [provider, setProvider] = useState<string>("metaapi");
-  const [wsUrl, setWsUrl] = useState<string>("");
+  const [wsUrl] = useState<string>(() => getWsUrl());
 
   useEffect(() => {
     const controller = new AbortController();
-    setWsUrl(getWsUrl());
     // Hydrate provider from backend settings so it persists across reloads
     fetchJSON<any>(`${API_URL}/api/v1/settings`, controller.signal).then((data) => {
       if (data?.data_provider) setProvider(data.data_provider);
