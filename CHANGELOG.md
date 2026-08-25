@@ -4,6 +4,39 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.8.0] — 2026-08-25
+
+### Round 2 — Trade Visibility & Analytics
+
+This release closes Round 2 with full trade visibility and analytics on both the backend and frontend, plus hardening and lint cleanup for the new frontend pages.
+
+#### ✨ Added
+- **Backend analytics endpoints**: `GET /api/v1/analytics/{portfolio,by-session,by-hour,holding-distribution}`, paginated `GET /api/v1/trades` with filters, sorting, and cursor pagination, and `GET /api/v1/trades/{id}` with linked AI decision and similar setups via vector search.
+- **New backend schemas**: `TradeListResponse`, `TradeDetailOut`, `SimilarSetupOut`, `SessionAnalyticsOut`, `HourAnalyticsItem`, `HoldingBucketOut`.
+- **Analytics service helpers**: `compute_analytics_by_session`, `compute_analytics_by_hour`, `compute_holding_distribution`, and overnight cutoff setting support.
+- **Frontend analytics page** (`/analytics`) with portfolio metrics, equity curve chart via `lightweight-charts`, and by-session/by-hour/holding-distribution breakdowns.
+- **Frontend trade history page** (`/trades`) with filterable, paginated trade history and CSV export.
+- **Frontend trade detail page** (`/trades/[id]`) showing full trade detail, linked AI decision, and similar setups.
+- **Overnight cutoff controls** on the `/settings` page and an **Analytics** link in the Header.
+- **New frontend types**: `TradeListResponse`, `TradeDetail`, `SimilarSetup`, `SessionAnalytics`, `HourAnalytics`, `HoldingBucket`, plus `formatDateTime` helper and widened `formatSession`.
+- **Strict ESLint config** (`next/core-web-vitals`) and **AbortController hardening** on `/trades` so stale fetches cannot overwrite newer results.
+
+#### 🚨 Fixed
+- Override transitive `glob` to `^10.4.6` to clear GHSA-5j98-mcp5-4vw2.
+- Clear remaining `react-hooks/exhaustive-deps` warnings in `ChartPanel` live-price effect and `useWebSocket` `symbolsKey` ref pattern.
+- Use `sqlalchemy.case` instead of `func.case` in analytics queries.
+- Add missing `List` import in `main.py`.
+
+#### ⚠️ Known Limitations
+- Two remaining `npm` high vulnerabilities (`next`/`postcss`) require **Next.js 16** to resolve fully. They are pre-existing and documented in the previous release.
+
+#### ⏭️ Skipped
+- **Docker rebuild**: no `Dockerfile` or `compose` changes this phase.
+- **Backend tests**: no new backend code changes in this closeout; backend was validated in the prior round-2 commits.
+- **DB migrations**: none required.
+
+---
+
 ## [v0.3.0] — 2026-08-23
 
 ### Round 1 — Live Portfolio Analytics, Trade Visibility, and Build-Typing Hardening
@@ -163,6 +196,7 @@ This release addresses a critical failure where the auto-trade system silently s
 
 ---
 
+[v1.8.0]: https://github.com/mundeez/deez-forex-ai/compare/v1.7.0...v1.8.0
 [v0.3.0]: https://github.com/mundeez/deez-forex-ai/compare/v0.2.0...v0.3.0
 [v0.7.0]: https://github.com/mundeez/deez-forex-ai/compare/v0.6.2...v0.7.0
 [v0.6.2]: https://github.com/mundeez/deez-forex-ai/releases/tag/v0.6.2
