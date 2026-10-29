@@ -1827,3 +1827,109 @@ def model_health_probe():
             await r.aclose()
 
     return asyncio.run(_probe())
+
+
+@celery_app.task
+def run_variant_engine():
+    """Phase 7.1 tournament engine: rule candidates -> shadow log -> LLM
+    PASS/VETO filter -> decision rows tagged variant_id. Execution is still
+    blocked by Phase 6 (validate_new_trade returns PHASE 6 HALT) — the
+    candidates, filter verdicts and decisions are all recorded regardless.
+    """
+    async def _run():
+        import time as _time
+        from app.strategies import generate_all, VARIANT_PAIRS, pip_size
+        from app.services.data.mt5_rpyc_client import MT5RPyCClient
+        from app.ai.openrouter_client import OpenRouterClient
+        from app.ai.suites import resolve_models
+        from app import models
+        from sqlalchemy import select
+
+        now = _time.time()
+        client = MT5RPyCClient()
+        ai = OpenRouterClient()
+        news = NewsService()
+        out = {}
+        symbols = sorted({s for pairs in VARIANT_PAIRS.values() for s in pairs})
+        async with get_celery_session()() as db:
+            suite = await get_setting(db, "model_suite") or "production_v2"
+            filter_model = resolve_models(suite, {}).get("lead")
+            for symbol in symbols:
+                try:
+                    tfs = {"5m": 300, "15m": 400, "1h": 300, "4h": 200, "1d": 100}
+                    candles = {tf: await client.get_historical_candles(symbol, tf, n)
+                               for tf, n in tfs.items()}
+                    cal = await news._fetch_calendar()
+                    events = [e for e in cal if news._event_affects_symbol(e, symbol)]
+                    candidates = generate_all(symbol, candles, events, now)
+                    halted, halt_reason = await news.is_trading_halted(symbol)
+
+                    for c in candidates:
+                        # shadow arm: record EVERY candidate pre-filter
+                        row = models.StrategyCandidate(
+                            variant_id=c.variant_id, symbol=symbol,
+                            direction=c.direction, entry_price=c.entry,
+                            stop_loss=c.sl, take_profit=c.tp, atr=c.atr,
+                            timeframe=c.timeframe, spread_at_signal=c.spread,
+                            regime=c.regime, rule_rationale=c.rationale[:500])
+                        db.add(row)
+
+                        if halted and c.variant_id != "ND-M15-DRIFT":
+                            row.llm_verdict = "SKIPPED"
+                            continue
+
+                        # LLM filter: PASS or VETO, never changes direction/levels
+                        verdict, rationale = "SKIPPED", ""
+                        try:
+                            prompt = (
+                                f"Rule-generated trade candidate ({c.variant_id}): "
+                                f"{c.direction} {symbol} @ {c.entry}, SL {c.sl}, TP {c.tp}. "
+                                f"Rule rationale: {c.rationale}. Regime: {c.regime}. "
+                                "Reply ONLY JSON: {\"verdict\": \"PASS\"|\"VETO\", "
+                                "\"confidence\": 0-1, \"rationale\": \"<=200 chars\"}")
+                            data, used = await ai._post_with_failover(
+                                ai._request_headers(),
+                                {"temperature": 0.1, "max_tokens": 512,
+                                 "messages": [{"role": "user", "content": prompt}],
+                                 "response_format": {"type": "json_object"}},
+                                [filter_model], reasoning={"effort": "low"})
+                            parsed = ai._parse_object(data["choices"][0]["message"]["content"])
+                            verdict = str(parsed.get("verdict", "VETO")).upper()
+                            rationale = str(parsed.get("rationale", ""))[:300]
+                        except Exception as exc:
+                            verdict, rationale = "VETO", f"filter error: {exc}"
+                        row.llm_verdict = verdict if verdict in ("PASS", "VETO") else "VETO"
+
+                        # record the decision row (execution still phase-6 blocked)
+                        dec = models.AIDecision(
+                            symbol=symbol, decision=c.direction, confidence=0.5,
+                            timeframe=c.timeframe, entry_price=c.entry,
+                            stop_loss=c.sl, take_profit=c.tp,
+                            rationale=f"[{c.variant_id}] {c.rationale} | LLM {row.llm_verdict}: {rationale}",
+                            model_used=filter_model, engine_version="v2",
+                            variant_id=c.variant_id, llm_verdict=row.llm_verdict,
+                            requested_price=c.entry, spread_at_decision=c.spread)
+                        db.add(dec)
+                        await db.flush()
+                        row.ai_decision_id = dec.id
+                    out[symbol] = len(candidates)
+                except Exception as exc:
+                    logger.warning("variant engine %s failed: %s", symbol, exc, exc_info=True)
+                    out[symbol] = f"error:{exc}"
+            await db.commit()
+        return out
+    return asyncio.run(_run())
+
+
+@celery_app.task
+def variant_monitor_snapshot():
+    """Per-variant stats + auto-retire criteria (every 30 min)."""
+    from app.services.variant_monitor import compute_variant_stats
+    return asyncio.run(compute_variant_stats())
+
+
+@celery_app.task
+def reconcile_execution_costs():
+    """Nightly rollup of measured spread/slippage into execution_costs."""
+    from app.services.variant_monitor import aggregate_execution_costs
+    return asyncio.run(aggregate_execution_costs())

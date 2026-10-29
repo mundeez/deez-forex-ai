@@ -65,6 +65,11 @@ class Trade(Base):
     session_at_close = Column(String(20))
     actual_holding_min = Column(Float)
     exit_quality_score = Column(Float)
+    variant_id = Column(String(40))
+    fill_slippage_pips = Column(Float)
+    exit_slippage_pips = Column(Float)
+    spread_at_entry = Column(Float)
+    spread_at_exit = Column(Float)
 
 
 class AIDecision(Base):
@@ -96,6 +101,12 @@ class AIDecision(Base):
     verifier_confidence = Column(Float)
     regime = Column(JSON)
     daily_bias = Column(JSON)
+    variant_id = Column(String(40))
+    llm_verdict = Column(String(12))
+    xgb_score = Column(Float)
+    pattern_prior_snapshot = Column(JSON)
+    spread_at_decision = Column(Float)
+    requested_price = Column(Float)
     qdrant_point_id = Column(Integer)
 
 
@@ -438,3 +449,68 @@ class MarketRegime(Base):
     atr_pct = Column(Float)
     news_proximity = Column(Boolean, default=False)
     confidence = Column(Float)
+
+
+class StrategyVariant(Base):
+    __tablename__ = 'strategy_variants'
+    id = Column(Integer, primary_key=True)
+    variant_id = Column(String(40), unique=True, nullable=False)
+    family = Column(String(30), nullable=False)
+    timeframe = Column(String(8), nullable=False)
+    params = Column(JSON, default=dict)
+    hypothesis = Column(Text)
+    status = Column(String(20), default='active')  # active|retired|promoted
+    registered_at = Column(DateTime(timezone=True), server_default=func.now())
+    retired_at = Column(DateTime(timezone=True))
+    kill_reason = Column(String(160))
+
+
+class StrategyCandidate(Base):
+    """Shadow arm: every rule-generated candidate, before any LLM filter."""
+    __tablename__ = 'strategy_candidates'
+    id = Column(BigInteger, primary_key=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    variant_id = Column(String(40), nullable=False)
+    symbol = Column(String(10), nullable=False)
+    direction = Column(String(6), nullable=False)
+    entry_price = Column(Float)
+    stop_loss = Column(Float)
+    take_profit = Column(Float)
+    atr = Column(Float)
+    timeframe = Column(String(8))
+    spread_at_signal = Column(Float)
+    regime = Column(String(24))
+    llm_verdict = Column(String(12))
+    ai_decision_id = Column(Integer)
+    rule_rationale = Column(Text)
+
+
+class VariantStat(Base):
+    __tablename__ = 'variant_stats'
+    id = Column(BigInteger, primary_key=True)
+    computed_at = Column(DateTime(timezone=True), server_default=func.now())
+    variant_id = Column(String(40), nullable=False)
+    trades = Column(Integer, default=0)
+    wins = Column(Integer, default=0)
+    win_rate = Column(Float)
+    profit_factor = Column(Float)
+    expectancy = Column(Float)
+    net_pnl = Column(Float)
+    max_drawdown = Column(Float)
+    t_stat = Column(Float)
+    pf_ci90_low = Column(Float)
+    xauusd = Column(Boolean, default=False)
+
+
+class ExecutionCost(Base):
+    __tablename__ = 'execution_costs'
+    id = Column(BigInteger, primary_key=True)
+    computed_at = Column(DateTime(timezone=True), server_default=func.now())
+    symbol = Column(String(10), nullable=False)
+    session = Column(String(20), nullable=False)
+    samples = Column(Integer, default=0)
+    mean_spread_pips = Column(Float)
+    p90_spread_pips = Column(Float)
+    mean_entry_slip_pips = Column(Float)
+    mean_exit_slip_pips = Column(Float)
+    p90_exit_slip_pips = Column(Float)

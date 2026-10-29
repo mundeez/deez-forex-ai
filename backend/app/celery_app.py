@@ -204,6 +204,23 @@ celery_app.conf.update(
             "schedule": crontab(hour=5, minute=30),
             "options": {"time_limit": 300, "soft_time_limit": 240},
         },
+        # Phase 7.1: tournament variant engine (candidates -> shadow log ->
+        # LLM filter -> tagged decisions; execution still phase-6 halted)
+        "run-variant-engine": {
+            "task": "app.tasks.analysis_tasks.run_variant_engine",
+            "schedule": 1800.0,  # every 30 min
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
+        "variant-monitor-snapshot": {
+            "task": "app.tasks.analysis_tasks.variant_monitor_snapshot",
+            "schedule": 1800.0,
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
+        "reconcile-execution-costs": {
+            "task": "app.tasks.analysis_tasks.reconcile_execution_costs",
+            "schedule": crontab(hour=23, minute=30),  # nightly, post-EOD
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
     }
 )
 

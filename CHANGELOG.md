@@ -4,6 +4,66 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.10.0] — 2026-10-29
+
+### Phase 7.1 — Strategy Tournament Engine
+
+The deterministic rules engine, schema, shadow arm, per-variant accounting,
+and execution-cost reconciler from `docs/STRATEGY_REBUILD_PLAN.md`. LLMs can
+only veto — never originate direction. Phase 6 remains armed, so every
+candidate is generated, filtered, and recorded with zero trades executing.
+
+#### ✨ Added
+- **`strategy_variants` registry** — 8 pre-registered variants seeded:
+  `TF-D1-DON20`, `TF-H4-DON20`, `TF-H1-DON55`, `SB-M15-LDN`, `SB-H1-NYO`,
+  `ND-M15-DRIFT`, `MR-H1-BBFADE` (control), `LEGACY-M5-EMA` (control).
+- **`app/strategies/` package** — pure-rule generators over multi-TF candles
+  (Donchian/ADX/EMA/RSI/Bollinger/session-range helpers); XAUUSD restricted
+  to the two trend variants with its own pip economics.
+- **`strategy_candidates` shadow arm** — every rule candidate recorded
+  *before* the LLM filter, for later "does the filter add edge?" analysis.
+- **LLM PASS/VETO filter** per candidate (suite lead model); verdict +
+  rationale recorded on both `strategy_candidates` and `ai_decisions`.
+- **Per-variant accounting** (`variant_stats` + `variant_monitor_snapshot`
+  task): trades, WR, PF, expectancy, max DD, t-stat, 90% CI on PF; XAUUSD
+  is a separate bucket with its own kill flag (`variant:xau_kill:*` Redis).
+- **Auto-retire**: realized P&L <= -$40, >=30 trades & negative expectancy,
+  >=60 trades & PF < 1.15; promote flag at the §6 bar (>=300 trades,
+  PF CI90 > 1.10, t > 2).
+- **Execution-cost reconciler** (`execution_costs` + nightly task): rolls up
+  measured `spread_at_entry`/`fill_slippage_pips`/`exit_slippage_pips` by
+  symbol x session for the Phase 7.2 backtest.
+- New `ai_decisions` cols: `variant_id`, `llm_verdict`, `xgb_score`,
+  `pattern_prior_snapshot`, `spread_at_decision`, `requested_price`.
+- New `trades` cols: `variant_id`, `fill_slippage_pips`,
+  `exit_slippage_pips`, `spread_at_entry`, `spread_at_exit`.
+- `backend/migrate_phase7.sql` (applied live).
+
+#### 🚨 Fixed
+- `_session_of` tolerates corrupt/millisecond candle timestamps.
+- `variant_monitor` uses `get_celery_session` (asyncpg loop binding).
+
+#### ✅ Verified live
+- `run_variant_engine` ran twice in production: 7 shadow candidates across
+  4 symbols, real kimi-k2 VETO rationale on each, decision rows tagged.
+- `variant_monitor_snapshot` wrote 8 stats rows; reconciler clean.
+- Tests: 212 pass / 9 pre-existing environmental failures (unchanged).
+- Phase 6 halt still armed — zero trades executed.
+
+#### ⚠️ Known Limitations
+- No trades have `variant_id` yet — stats/reconciler populate as the
+  tournament produces (post-Phase-6) trades.
+- `execution_costs` empty until variant trades close.
+- LLM regime classifier deferred to 7.3 wiring (deterministic regime
+  used now); per-variant EOD/overnight rules also 7.3.
+- Dashboard per-variant table not yet built (7.1 exit criterion deferred).
+
+#### ⏭️ Skipped
+- **Frontend**: untouched. **Deps**: none added. **Migrations**: SQL file
+  pattern (no Alembic in this repo).
+
+---
+
 ## [v1.9.0] — 2026-10-29
 
 ### Phase 7.0 — AI Infrastructure Repair (strategy rebuild prelude)
