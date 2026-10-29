@@ -18,6 +18,13 @@ class CircuitOpenError(Exception):
     pass
 
 
+class EmptyCompletionError(Exception):
+    """Model returned an HTTP 200 but no usable content — typically a reasoning
+    model that burned the entire max_tokens budget on chain-of-thought
+    (finish_reason='length' with content=None)."""
+    pass
+
+
 class APICostTracker:
     """Track daily OpenRouter API spend via Redis.  Halt analysis if budget exceeded."""
 
@@ -231,6 +238,8 @@ class OpenRouterClient:
         base_payload: Dict[str, Any],
         candidates: List[str],
         router: Optional[ModelRouter] = None,
+        reasoning: Optional[Dict[str, Any]] = None,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], str]:
         """POST to OpenRouter, failing over across candidate models.
 
@@ -238,6 +247,12 @@ class OpenRouterClient:
         router is supplied) and immediately move to the next candidate. Transient
         server / network errors get one short retry on the same model before
         failing over. Returns the parsed JSON response and the model that served it.
+
+        ``reasoning`` is passed through to OpenRouter verbatim (e.g.
+        ``{"effort": "low"}`` or ``{"enabled": false}``); non-reasoning models
+        ignore it. ``json_schema`` upgrades response_format to
+        ``{"type": "json_schema", ...}`` for providers that support it —
+        ``structured_outputs`` errors fall back to the base payload's format.
         """
         # Circuit breaker: halt if daily budget exceeded
         await APICostTracker.check()
@@ -245,10 +260,23 @@ class OpenRouterClient:
         last_exc: Optional[Exception] = None
         for model in candidates:
             payload = {**base_payload, "model": model}
+            if reasoning is not None:
+                payload["reasoning"] = reasoning
             for attempt in range(2):  # up to 2 tries per model for transient errors
                 try:
+                    if json_schema is not None and attempt == 0:
+                        payload["response_format"] = {
+                            "type": "json_schema",
+                            "json_schema": json_schema,
+                        }
+                    elif json_schema is not None:
+                        payload.pop("response_format", None)
+                        payload["response_format"] = {"type": "json_object"}
                     async with httpx.AsyncClient(timeout=60.0) as client:
                         resp = await client.post(self.base_url, headers=headers, json=payload)
+                        # json_schema unsupported on this provider -> retry once with plain json_object
+                        if resp.status_code == 400 and json_schema is not None and attempt == 0:
+                            continue
                         resp.raise_for_status()
                         data = resp.json()
                         # Validate OpenRouter response structure
@@ -259,11 +287,25 @@ class OpenRouterClient:
                             raise ValueError(f"OpenRouter response missing choices: {err_msg}")
                         if "message" not in data["choices"][0] or "content" not in data["choices"][0]["message"]:
                             raise ValueError("OpenRouter response missing message content")
+                        choice = data["choices"][0]
+                        content = choice["message"]["content"]
+                        if not content or not str(content).strip():
+                            finish = choice.get("finish_reason")
+                            used_reasoning = (data.get("usage", {}).get("completion_tokens_details") or {}).get("reasoning_tokens")
+                            raise EmptyCompletionError(
+                                f"Empty completion from {model} (finish_reason={finish}, "
+                                f"reasoning_tokens={used_reasoning}) — likely reasoning model "
+                                f"starved the token budget"
+                            )
                         # Record estimated cost
                         usage = data.get("usage", {})
                         total_tokens = usage.get("total_tokens", 0) or (usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
                         await APICostTracker.record(total_tokens)
                         return data, model
+                except EmptyCompletionError as e:
+                    last_exc = e
+                    logger.warning("Model %s returned empty content; failing over to next model", model)
+                    break
                 except httpx.HTTPStatusError as e:
                     last_exc = e
                     status = e.response.status_code

@@ -152,7 +152,8 @@ async def test_team_decision_engine_approve(sample_analysis):
          patch.object(team.analysts["sentiment"], "analyze", new_callable=AsyncMock) as mock_sent, \
          patch.object(team.analysts["macro"], "analyze", new_callable=AsyncMock) as mock_macro, \
          patch.object(team.lead, "decide", new_callable=AsyncMock) as mock_lead, \
-         patch.object(team.verifier, "verify", new_callable=AsyncMock) as mock_verifier:
+         patch.object(team.verifier, "verify", new_callable=AsyncMock) as mock_verifier, \
+         patch("app.services.pattern_extractor.PatternExtractor.get_cached_priors", new_callable=AsyncMock) as mock_priors:
 
         mock_tech.return_value = {"bias": "BULLISH", "confidence_score": 0.7, "reasoning_short": "", "risk_warning": ""}
         mock_fund.return_value = {"bias": "BULLISH", "confidence_score": 0.6, "reasoning_short": "", "risk_warning": ""}
@@ -165,6 +166,9 @@ async def test_team_decision_engine_approve(sample_analysis):
             "rationale": "Test", "model_used": "lead-model",
         }
         mock_verifier.return_value = {"verdict": "APPROVE", "confidence": 0.9, "concerns": "", "suggested_changes": "", "model_used": "verifier-model"}
+        # Isolate from live Redis pattern priors — in production they can
+        # legitimately convert BUY->HOLD (e.g. pair WR below threshold).
+        mock_priors.return_value = {}
 
         result = await team.decide("EURUSD", "scalping", sample_analysis)
 

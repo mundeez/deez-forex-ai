@@ -4,6 +4,66 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.9.0] — 2026-10-29
+
+### Phase 7.0 — AI Infrastructure Repair (strategy rebuild prelude)
+
+Restores the decision pipeline to a working state after discovering that dead
+OpenRouter model IDs and silent parse failures had reduced the AI team to
+noise. Phase 6 halt remains armed (`phase6_active=true`) so decisions are
+generated and logged but no trades execute — verified live.
+
+#### ✨ Added
+- **`production_v2` model suite** — all IDs verified live 2026-10-29:
+  technical `qwen/qwen3-next-80b-a3b-instruct`, fundamental `gemini-2.5-flash`,
+  sentiment `llama-3.3-70b-instruct`, macro `qwen3-next-80b-a3b-instruct`,
+  lead `moonshotai/kimi-k2-0905`, verifier `deepseek/deepseek-r1-0528`.
+- **`model_health_probe` Celery task** — JSON ping to every configured model,
+  marks `ai:model_health:<model>` in Redis (26h TTL), logs loudly on dead
+  models. Runs daily 05:30 UTC and once on every worker start
+  (`worker_ready` signal).
+- **`EmptyCompletionError`** — HTTP 200 responses with empty/null content or
+  `finish_reason=length` now fail loudly and fail over, instead of parsing
+  `{}` into a silent HOLD(0.0).
+- **`reasoning` + `json_schema` params** on `_post_with_failover` — per-role
+  reasoning controls (`effort: low` on analyst/lead/daily-bias hot path);
+  optional structured-outputs upgrade with `json_object` fallback on 400.
+- **`NewsService.get_latest_headlines()`** — serves daily-bias from the
+  GDELT-ingested `news_headlines` table (was `AttributeError` every run).
+- `docs/STRATEGY_REBUILD_PLAN.md` — approved strategy-tournament plan.
+
+#### 🚨 Fixed
+- **Silent HOLD(0.0) bug**: reasoning models (`deepseek-v4-flash`) burned the
+  whole `max_tokens` budget on chain-of-thought → `content=None` → empty
+  rationale. Token budgets raised (analyst 256→1024, lead 384→1536,
+  verifier 384→2048, daily bias 384→1024).
+- Dead models removed: `deepseek-r1` (404), `nemotron-3-super-120b` (404),
+  `openrouter/owl-alpha`, all previous `:free` pool IDs (upstream removed
+  every one). `DEFAULT_FREE_POOL` → live nemotron/gemma frees.
+- FRED `DFEDTAR` (discontinued Dec 2008) → `FEDFUNDS` for the rate spread.
+- Daily-bias default model: dead `deepseek-r1` → `qwen3-next-80b-a3b-instruct`.
+- `test_free_suite_resolution` updated for new free suite;
+  `test_team_decision_engine_approve` now isolates from live Redis pattern
+  priors (they legitimately flip BUY→HOLD in production).
+
+#### ⚠️ Known Limitations
+- `gemma-4-{26b,31b}-it:free` pool entries are alive but 429-saturated;
+  router cooldown handles them as designed.
+- 9 pre-existing environmental test failures remain (live-DB-dependent
+  assertions: active_pairs CRUD, trade stats, TimescaleDB continuous
+  aggregates, compression policy, pipeline jobs, ingestion ORM insert).
+- `ingest_mt5_fill` still requires `mt5_zmq` (provider is `mt5_rpyc`).
+- `active_pairs` table is empty — analysis still falls back to EURUSD only.
+- 24h zero-404 log window still accumulating; verified zero-404 across the
+  post-deploy cycles so far.
+
+#### ⏭️ Skipped
+- **Frontend**: untouched this phase.
+- **DB migrations**: none required (settings table UPDATEs only).
+- **Dependency changes**: none.
+
+---
+
 ## [v1.8.0] — 2026-08-25
 
 ### Round 2 — Trade Visibility & Analytics

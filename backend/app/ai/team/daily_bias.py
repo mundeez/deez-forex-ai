@@ -34,7 +34,9 @@ class DailyBiasEngine:
     )
 
     def __init__(self, model: str = None):
-        self.model = model or "deepseek/deepseek-r1"
+        # Default aligns with the macro suite role (cheap reasoning-light model);
+        # callers already pass models_map["macro"].
+        self.model = model or "qwen/qwen3-next-80b-a3b-instruct"
         self.client = OpenRouterClient()
 
     async def compute(
@@ -53,7 +55,7 @@ class DailyBiasEngine:
         )
         payload = {
             "temperature": 0.2,
-            "max_tokens": 384,
+            "max_tokens": 1024,
             "messages": [
                 {"role": "system", "content": self._SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -66,6 +68,7 @@ class DailyBiasEngine:
                 payload,
                 [self.model],
                 router=router,
+                reasoning={"effort": "low"},
             )
             content = data["choices"][0]["message"]["content"]
             parsed = self.client._parse_object(content)

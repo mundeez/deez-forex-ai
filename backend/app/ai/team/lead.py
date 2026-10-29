@@ -155,7 +155,7 @@ class LeadStrategist:
         prompt = self._build_prompt(symbol, strategy_mode, analyst_opinions, daily_bias, similar, analyst_weights, pattern_priors)
         payload = {
             "temperature": 0.15,
-            "max_tokens": 384,
+            "max_tokens": 1536,
             "messages": [
                 {"role": "system", "content": self._SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
@@ -168,6 +168,7 @@ class LeadStrategist:
                 payload,
                 [self.model] if self.model else [self.client.model],
                 router=router,
+                reasoning={"effort": "low"},
             )
             content = data["choices"][0]["message"]["content"]
             parsed = self.client._parse_object(content)

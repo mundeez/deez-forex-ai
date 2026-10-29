@@ -132,7 +132,9 @@ class FundamentalAnalyzer:
         if not self.fred_api_key:
             return 1.25
         try:
-            us_rate = await self._fred_series("DFEDTAR", as_of=as_of, db=db)
+            # DFEDTAR was discontinued (Dec 2008) — FRED returns a non-JSON error
+            # page for it. FEDFUNDS (effective rate) is the maintained series.
+            us_rate = await self._fred_series("FEDFUNDS", as_of=as_of, db=db)
             eu_rate = await self._fred_series("ECBDFR", as_of=as_of, db=db)
             if us_rate and eu_rate:
                 return round(us_rate - eu_rate, 2)

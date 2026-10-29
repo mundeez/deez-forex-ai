@@ -198,5 +198,24 @@ celery_app.conf.update(
             "schedule": crontab(hour=2, minute=0),  # nightly 02:00 UTC
             "options": {"time_limit": 600, "soft_time_limit": 480},
         },
+        # Phase 7.0: daily health probe for every configured model
+        "model-health-probe": {
+            "task": "app.tasks.analysis_tasks.model_health_probe",
+            "schedule": crontab(hour=5, minute=30),
+            "options": {"time_limit": 300, "soft_time_limit": 240},
+        },
     }
 )
+
+
+# Run the model health probe once at worker startup so dead models are
+# surfaced immediately after every deploy, not just on the daily schedule.
+from celery.signals import worker_ready  # noqa: E402
+
+
+@worker_ready.connect
+def _probe_models_on_startup(**kwargs):
+    try:
+        celery_app.send_task("app.tasks.analysis_tasks.model_health_probe")
+    except Exception:
+        pass

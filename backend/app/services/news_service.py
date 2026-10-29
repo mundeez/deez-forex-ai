@@ -150,6 +150,35 @@ class NewsService:
 
         return False, ""
 
+    async def get_latest_headlines(self, symbol: str, limit: int = 10) -> List[str]:
+        """Latest ingested headlines (GDELT/NewsAPI) relevant to a symbol.
+
+        Reads the news_headlines table populated by the ingestion pipeline.
+        Returns headline strings, most recent first. Empty list on failure.
+        """
+        try:
+            from sqlalchemy import select
+            from app.database import AsyncSessionLocal
+            from app import models
+
+            base, quote = symbol[:3], symbol[3:]
+            async with AsyncSessionLocal() as db:
+                stmt = (
+                    select(models.NewsHeadline.headline)
+                    .where(
+                        (models.NewsHeadline.symbol == symbol)
+                        | (models.NewsHeadline.headline.ilike(f"%{base}%"))
+                        | (models.NewsHeadline.headline.ilike(f"%{quote}%"))
+                    )
+                    .order_by(models.NewsHeadline.published_at.desc())
+                    .limit(limit)
+                )
+                rows = (await db.execute(stmt)).scalars().all()
+                return list(rows)
+        except Exception:
+            logger.warning("get_latest_headlines failed for %s", symbol, exc_info=True)
+            return []
+
     async def get_upcoming_events(self, symbol: str, hours_ahead: int = 24) -> List[Dict[str, Any]]:
         """Get upcoming high-impact events for a symbol."""
         events = await self._fetch_calendar()

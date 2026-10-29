@@ -6,9 +6,9 @@ from app.ai.suites import resolve_models, suite_info, SUITES
 def test_free_suite_resolution():
     """Free suite should return the expected free model IDs."""
     models = resolve_models("free")
-    assert models["technical"] == "openai/gpt-oss-120b:free"
-    assert models["lead"] == "openai/gpt-oss-120b:free"
-    assert models["verifier"] == "openrouter/owl-alpha"
+    assert models["technical"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
+    assert models["lead"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
+    assert models["verifier"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
 def test_production_suite_resolution():

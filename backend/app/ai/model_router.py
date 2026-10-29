@@ -23,14 +23,15 @@ settings = get_settings()
 # Curated free models verified against the live OpenRouter catalogue.
 # Ordered by general suitability for structured forex JSON decisions
 # (strong reasoning + reliable JSON adherence first).
+# Verified against the live OpenRouter catalogue 2026-10-29.
+# The entire previous generation of free models (qwen3-next, llama-3.3,
+# gpt-oss, glm-4.5, deepseek-*) was removed upstream — all return 404.
+# The daily model_health_probe task re-verifies these continuously.
 DEFAULT_FREE_POOL: List[str] = [
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "deepseek/deepseek-v4-flash:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "openai/gpt-oss-120b:free",
-    "z-ai/glm-4.5-air:free",
-    "deepseek/deepseek-r1:free",  # reasoning model for macro / verifier roles
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
 ]
 
 # Cheap, very reliable JSON-mode model used only when every free model is

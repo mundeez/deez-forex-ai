@@ -122,7 +122,7 @@ class DomainAnalyst:
         prompt = self._build_prompt(analysis_snapshot)
         payload = {
             "temperature": 0.1,
-            "max_tokens": 256,
+            "max_tokens": 1024,
             "messages": [
                 {"role": "system", "content": self._SYSTEM_PROMPT_TEMPLATE},
                 {"role": "user", "content": prompt},
@@ -135,6 +135,7 @@ class DomainAnalyst:
                 {**payload, "model": self.model} if self.model else payload,
                 [self.model] if self.model else [self.client.model],
                 router=router,
+                reasoning={"effort": "low"},
             )
             content = data["choices"][0]["message"]["content"]
             parsed = self.client._parse_object(content)

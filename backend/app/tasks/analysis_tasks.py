@@ -1756,3 +1756,74 @@ def daily_kpi_snapshot():
                         report.get("win_rate", 0), report.get("total_trades", 0))
 
     asyncio.run(_snapshot())
+
+
+@celery_app.task
+def model_health_probe():
+    """Ping every configured AI model with a ~20-token JSON request.
+
+    Records per-model health in Redis (ai:model_health:<model>, 26h TTL) and
+    logs loudly when a configured suite role is served by a dead model. Runs
+    on worker startup (via worker_ready signal in celery_app) and daily.
+    """
+    async def _probe():
+        import redis.asyncio as aioredis
+        from app.ai.suites import resolve_models
+
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        try:
+            async with get_celery_session()() as db:
+                suite = await get_setting(db, "model_suite") or "free"
+                overrides = {
+                    role: await get_setting(db, f"model_{role}")
+                    for role in ("technical", "fundamental", "sentiment", "macro", "lead", "verifier")
+                }
+                models_map = resolve_models(suite, overrides)
+                pool_raw = await get_setting(db, "ai_model_pool")
+            candidates = {m for m in models_map.values() if m}
+            if pool_raw:
+                candidates.update(m.strip() for m in str(pool_raw).split(",") if m.strip())
+
+            client = OpenRouterClient()
+            results = {}
+            for model in sorted(candidates):
+                ok = True
+                err = ""
+                try:
+                    data, _ = await client._post_with_failover(
+                        client._request_headers(),
+                        {
+                            # 256-token budget: some models emit a short reasoning
+                            # preamble before the JSON — 32 was too small and
+                            # produced false-negative "empty completion" results.
+                            "max_tokens": 256,
+                            "messages": [{"role": "user", "content": 'Reply with {"ok": true}'}],
+                            "response_format": {"type": "json_object"},
+                        },
+                        [model],
+                        reasoning={"effort": "low"},
+                    )
+                    _ = data["choices"][0]["message"]["content"]
+                except Exception as exc:
+                    ok, err = False, str(exc)[:200]
+                ttl = 26 * 3600
+                await r.set(
+                    f"ai:model_health:{model}",
+                    "ok" if ok else f"dead:{err}",
+                    ex=ttl,
+                )
+                results[model] = "ok" if ok else err
+                if not ok:
+                    logger.error("model_health_probe: %s DEAD — %s", model, err)
+
+            dead = {m: e for m, e in results.items() if e != "ok"}
+            if dead:
+                logger.error("model_health_probe: %d/%d configured models dead: %s",
+                             len(dead), len(results), dead)
+            else:
+                logger.info("model_health_probe: all %d configured models healthy", len(results))
+            return results
+        finally:
+            await r.aclose()
+
+    return asyncio.run(_probe())

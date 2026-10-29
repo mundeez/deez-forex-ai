@@ -8,17 +8,17 @@ from app.config import get_settings
 
 settings = get_settings()
 
-SUITE_NAMES = ["free", "production", "extreme", "custom"]
+SUITE_NAMES = ["free", "production", "production_v2", "extreme", "custom"]
 
 # Suite definitions: per-function model IDs
 SUITES: Dict[str, Dict[str, str]] = {
     "free": {
-        "technical": "openai/gpt-oss-120b:free",
-        "fundamental": "meta-llama/llama-3.3-70b-instruct:free",
-        "sentiment": "qwen/qwen3-next-80b-a3b-instruct:free",
-        "macro": "openrouter/owl-alpha",
-        "lead": "openai/gpt-oss-120b:free",
-        "verifier": "openrouter/owl-alpha",
+        "technical": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "fundamental": "google/gemma-4-31b-it:free",
+        "sentiment": "nvidia/nemotron-3.5-lightning:free",
+        "macro": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "lead": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "verifier": "nvidia/nemotron-3-ultra-550b-a55b:free",
     },
     "production": {
         "technical": "deepseek/deepseek-v4-flash",
@@ -27,6 +27,20 @@ SUITES: Dict[str, Dict[str, str]] = {
         "macro": "openai/gpt-4o-mini",
         "lead": "deepseek/deepseek-v4-flash",
         "verifier": "deepseek/deepseek-r1",
+    },
+    # production_v2 — IDs verified live 2026-10-29 via model_health_probe.
+    # Hot-path roles (technical/sentiment/lead) deliberately use NON-reasoning
+    # models: reasoning models burn max_tokens on chain-of-thought and return
+    # empty content, which silently parses to HOLD(0.0).
+    # OpenAI models are avoided entirely — this account's provider returns
+    # 400 for all chat-completions calls (Responses-API-only backend).
+    "production_v2": {
+        "technical": "qwen/qwen3-next-80b-a3b-instruct",
+        "fundamental": "google/gemini-2.5-flash",
+        "sentiment": "meta-llama/llama-3.3-70b-instruct",
+        "macro": "qwen/qwen3-next-80b-a3b-instruct",
+        "lead": "moonshotai/kimi-k2-0905",
+        "verifier": "deepseek/deepseek-r1-0528",
     },
     "extreme": {
         "technical": "openai/gpt-4o",  # or best available

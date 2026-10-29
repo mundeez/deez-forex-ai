@@ -94,7 +94,7 @@ class Verifier:
         prompt = self._build_prompt(symbol, strategy_mode, proposal, analyst_opinions, daily_bias)
         payload = {
             "temperature": 0.1,
-            "max_tokens": 384,
+            "max_tokens": 2048,
             "messages": [
                 {"role": "system", "content": self._SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
