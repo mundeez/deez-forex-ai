@@ -4,6 +4,30 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.10.1] — 2026-10-29
+
+### Phase 7.2 — Sanity Backtest with Honest Costs
+
+`backend/run_variant_backtest.py` — walk-forward sanity check for all 8
+variants over `historical_candles` (4h/1d aggregated from 1h), honest retail
+costs (~1.5-2 pips rt majors, 35 pips XAUUSD), SL-first intrabar resolution.
+
+#### Results (bounded window, ~5k bars/symbol, every 3rd bar)
+- `LEGACY-M5-EMA` control: **6,941 trades, 34.8% WR, PF 0.48** — replicates
+  the known negative edge; simulator is honest.
+- `MR-H1-BBFADE` control: 24 trades, PF 1.23 — small-sample noise.
+- `TF-H1-DON55` PF 1.19 / `SB-M15-LDN` PF 1.26 / `TF-H4-DON20` PF 1.00 —
+  all within the plausible trend/breakout range; **nothing wildly positive,
+  no look-ahead flags**.
+- `SB-H1-NYO` PF 0.80, `TF-D1-DON20` PF 0.83 — thin-sample negatives, fine.
+- `ND-M15-DRIFT`: 0 trades — needs historical calendar feed (not a bug).
+
+#### ⚠️ Known Limitations
+- Bounded window (~4-8 months by TF) — sanity check, not a power test.
+- Costs are honest defaults, not measured fills (none exist yet).
+
+---
+
 ## [v1.10.0] — 2026-10-29
 
 ### Phase 7.1 — Strategy Tournament Engine
