@@ -16,6 +16,7 @@ class TradeCreate(BaseModel):
     provider: DataProvider = DataProvider.METAAPI
     ai_decision_id: Optional[int] = None
     rationale: Optional[str] = None
+    variant_id: Optional[str] = None
 
     @field_validator("symbol")
     @classmethod

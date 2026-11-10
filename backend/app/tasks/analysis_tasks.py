@@ -1087,6 +1087,14 @@ def run_full_analysis():
                                 ok = False
                                 reason = mem_reason
 
+                        # Phase 7.3: variant tournament is the ONLY execution
+                        # path. Legacy analysis still runs (signals, stats,
+                        # model telemetry) but is shadow-only unless the
+                        # operator explicitly sets legacy_analysis_executes.
+                        if ok and not await get_setting_bool(db, "legacy_analysis_executes"):
+                            ok = False
+                            reason = "legacy path shadow-only (variant engine owns execution)"
+
                         if ok:
                             equity = await risk._get_equity(db)
                             position_size = risk.calculate_position_size(
@@ -1838,6 +1846,32 @@ def run_variant_engine():
     """
     async def _run():
         import time as _time
+        import uuid
+        import redis.asyncio as aioredis
+        from app.strategies import generate_all, VARIANT_PAIRS, pip_size
+        from app.services.data.mt5_rpyc_client import MT5RPyCClient
+        from app.ai.openrouter_client import OpenRouterClient
+        from app.ai.suites import resolve_models
+        from app import models
+        from sqlalchemy import select
+
+        # Serialize: beat + manual + restart overlap must not interleave
+        # (concurrent runs trip the dedup window on each other's rows).
+        r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        tok = str(uuid.uuid4())
+        try:
+            got = await r.set("variant_engine:lock", tok, nx=True, ex=1500)
+            if not got:
+                logger.info("variant engine: lock held by another run — skipping")
+                return {"skipped": "locked"}
+            return await _engine_body(r)
+        finally:
+            if await r.get("variant_engine:lock") == tok:
+                await r.delete("variant_engine:lock")
+            await r.aclose()
+
+    async def _engine_body(r):
+        import time as _time
         from app.strategies import generate_all, VARIANT_PAIRS, pip_size
         from app.services.data.mt5_rpyc_client import MT5RPyCClient
         from app.ai.openrouter_client import OpenRouterClient
@@ -1864,22 +1898,69 @@ def run_variant_engine():
                     candidates = generate_all(symbol, candles, events, now)
                     halted, halt_reason = await news.is_trading_halted(symbol)
 
+                    # per-variant-TF dedup window (seconds) — a Donchian
+                    # break stays true for many bars; don't refire per cycle
+                    cooldown = {"1d": 86400, "4h": 14400, "1h": 3600,
+                                "15m": 900, "5m": 60}
+                    from datetime import timezone as _tz
+                    trading_enabled = await get_setting_bool(db, "trading_enabled")
+                    executor = ExecutionService()
+                    risk = RiskManager()
+                    # $/pip per 1.0 lot (approx; majors quote-USD)
+                    PIP_LOT = {"EURUSD": 10, "GBPUSD": 10, "AUDUSD": 10,
+                               "USDCHF": 11, "USDCAD": 7.7, "USDJPY": 9.5,
+                               "XAUUSD": 10}
+                    prices_map = {}
+                    try:
+                        prices_map = await executor._fetch_prices_batch(client, [symbol])
+                    except Exception:
+                        pass
                     for c in candidates:
                         # shadow arm: record EVERY candidate pre-filter
+                        pd_ = prices_map.get(symbol) or {}
+                        spread = (pd_.get("ask", 0) - pd_.get("bid", 0)) or 0.0
                         row = models.StrategyCandidate(
                             variant_id=c.variant_id, symbol=symbol,
                             direction=c.direction, entry_price=c.entry,
                             stop_loss=c.sl, take_profit=c.tp, atr=c.atr,
-                            timeframe=c.timeframe, spread_at_signal=c.spread,
+                            timeframe=c.timeframe, spread_at_signal=spread,
                             regime=c.regime, rule_rationale=c.rationale[:500])
-                        db.add(row)
 
+                        # dedup BEFORE db.add(row): the candidate row must not
+                        # be in the session, or autoflush inserts it and the
+                        # 60s window matches the row against itself.
+                        win = cooldown.get(c.timeframe, 3600)
+                        dup = await db.execute(select(models.StrategyCandidate.id).where(
+                            models.StrategyCandidate.variant_id == c.variant_id,
+                            models.StrategyCandidate.symbol == symbol,
+                            models.StrategyCandidate.created_at > datetime.fromtimestamp(now - win, tz=_tz.utc)))
+                        if dup.first():
+                            row.llm_verdict = "SKIPPED:dup"
+                            db.add(row)
+                            continue
+                        db.add(row)
                         if halted and c.variant_id != "ND-M15-DRIFT":
-                            row.llm_verdict = "SKIPPED"
+                            row.llm_verdict = "SKIPPED:halt"
+                            continue
+                        # regime gate (deterministic; LLM regime classifier is 7.3.1)
+                        if c.variant_id.startswith("TF-") and not str(c.regime).startswith("trending"):
+                            row.llm_verdict = "SKIPPED:regime"
+                            continue
+                        if c.variant_id.startswith("MR-") and c.regime != "ranging":
+                            row.llm_verdict = "SKIPPED:regime"
+                            continue
+                        # no pyramiding: skip if this variant+symbol already has a position
+                        open_t = await db.execute(select(models.Trade.id).where(
+                            models.Trade.variant_id == c.variant_id,
+                            models.Trade.symbol == symbol,
+                            models.Trade.status == models.TradeStatus.OPEN))
+                        if open_t.first():
+                            row.llm_verdict = "SKIPPED:openpos"
                             continue
 
                         # LLM filter: PASS or VETO, never changes direction/levels
                         verdict, rationale = "SKIPPED", ""
+                        filter_model_used = filter_model
                         try:
                             prompt = (
                                 f"Rule-generated trade candidate ({c.variant_id}): "
@@ -1887,12 +1968,19 @@ def run_variant_engine():
                                 f"Rule rationale: {c.rationale}. Regime: {c.regime}. "
                                 "Reply ONLY JSON: {\"verdict\": \"PASS\"|\"VETO\", "
                                 "\"confidence\": 0-1, \"rationale\": \"<=200 chars\"}")
+                            # credits can run out (402): try the paid lead
+                            # first, then the configured free pool so the
+                            # filter keeps working either way.
+                            pool = [m.strip() for m in (await get_setting(
+                                db, "ai_model_pool") or "").split(",") if m.strip()]
+                            chain = [filter_model] + [m for m in pool if m != filter_model]
                             data, used = await ai._post_with_failover(
                                 ai._request_headers(),
                                 {"temperature": 0.1, "max_tokens": 512,
                                  "messages": [{"role": "user", "content": prompt}],
                                  "response_format": {"type": "json_object"}},
-                                [filter_model], reasoning={"effort": "low"})
+                                chain, reasoning={"effort": "low"})
+                            filter_model_used = used
                             parsed = ai._parse_object(data["choices"][0]["message"]["content"])
                             verdict = str(parsed.get("verdict", "VETO")).upper()
                             rationale = str(parsed.get("rationale", ""))[:300]
@@ -1900,18 +1988,47 @@ def run_variant_engine():
                             verdict, rationale = "VETO", f"filter error: {exc}"
                         row.llm_verdict = verdict if verdict in ("PASS", "VETO") else "VETO"
 
-                        # record the decision row (execution still phase-6 blocked)
+                        # record the decision row
                         dec = models.AIDecision(
                             symbol=symbol, decision=c.direction, confidence=0.5,
                             timeframe=c.timeframe, entry_price=c.entry,
                             stop_loss=c.sl, take_profit=c.tp,
                             rationale=f"[{c.variant_id}] {c.rationale} | LLM {row.llm_verdict}: {rationale}",
-                            model_used=filter_model, engine_version="v2",
+                            model_used=filter_model_used, engine_version="v2",
                             variant_id=c.variant_id, llm_verdict=row.llm_verdict,
-                            requested_price=c.entry, spread_at_decision=c.spread)
+                            requested_price=c.entry, spread_at_decision=spread)
                         db.add(dec)
                         await db.flush()
                         row.ai_decision_id = dec.id
+
+                        # Phase 7.3: PASS'd candidates go to risk + executor
+                        if row.llm_verdict != "PASS" or not trading_enabled:
+                            continue
+                        stop_pips = abs(c.entry - c.sl) / pip_size(symbol)
+                        lots = max(0.01, round(5.0 / max(stop_pips * PIP_LOT.get(symbol, 10), 1e-9), 2))
+                        trade_in = schemas.TradeCreate(
+                            symbol=symbol, direction=TradeDirection(c.direction.lower()),
+                            entry_price=c.entry, stop_loss=c.sl, take_profit=c.tp,
+                            mode=TradeMode.PAPER, provider=settings.DATA_PROVIDER,
+                            ai_decision_id=dec.id,
+                            rationale=f"[{c.variant_id}] {c.rationale}",
+                            variant_id=c.variant_id)
+                        ok, reason = await risk.validate_new_trade(db, trade_in)
+                        if not ok:
+                            dec.rationale += f" | [RISK BLOCKED: {reason}]"
+                            row.llm_verdict = "BLOCKED"
+                            continue
+                        try:
+                            trade = await executor.execute_trade(
+                                db, trade_in, position_size=lots,
+                                strategy_mode="tournament")
+                            trade.spread_at_entry = spread
+                            await db.flush()
+                            logger.info("VARIANT EXECUTED %s %s %s lots=%s",
+                                        c.variant_id, c.direction, symbol, lots)
+                        except Exception as exc:
+                            dec.rationale += f" | [EXEC FAILED: {exc}]"
+                            logger.warning("variant exec failed %s %s: %s", c.variant_id, symbol, exc)
                     out[symbol] = len(candidates)
                 except Exception as exc:
                     logger.warning("variant engine %s failed: %s", symbol, exc, exc_info=True)
@@ -1933,3 +2050,42 @@ def reconcile_execution_costs():
     """Nightly rollup of measured spread/slippage into execution_costs."""
     from app.services.variant_monitor import aggregate_execution_costs
     return asyncio.run(aggregate_execution_costs())
+
+
+@celery_app.task
+def variant_weekly_report():
+    """Weekly tournament summary — logged + notification for the operator."""
+    async def _run():
+        async with get_celery_session()() as db:
+            # latest snapshot per (variant_id, xauusd)
+            sub = (select(models.VariantStats.variant_id,
+                          models.VariantStats.xauusd,
+                          func.max(models.VariantStats.computed_at).label("mx"))
+                   .group_by(models.VariantStats.variant_id, models.VariantStats.xauusd)
+                   .subquery())
+            rows = (await db.execute(
+                select(models.VariantStats).join(
+                    sub, (models.VariantStats.variant_id == sub.c.variant_id)
+                    & (models.VariantStats.xauusd == sub.c.xauusd)
+                    & (models.VariantStats.computed_at == sub.c.mx))
+            )).scalars().all()
+            killed = {v.variant_id for v in (await db.execute(
+                select(models.StrategyVariant).where(models.StrategyVariant.status == "retired"))).scalars().all()}
+            lines = ["=== WEEKLY VARIANT TOURNAMENT ==="]
+            for r in sorted(rows, key=lambda x: (-(x.net_pnl or 0), x.variant_id)):
+                tag = "[XAU]" if r.xauusd else "     "
+                lines.append(
+                    f"{r.variant_id:16s}{tag} n={r.trades:3d} WR={(r.win_rate or 0)*100:4.1f}% "
+                    f"PF={r.profit_factor or 0:5.2f} net=${(r.net_pnl or 0):8.2f} "
+                    f"exp=${(r.expectancy or 0):6.2f} t={r.t_stat or 0:5.2f} "
+                    f"DD=${(r.max_drawdown or 0):7.2f} "
+                    f"{'KILLED' if r.variant_id in killed else 'alive'}")
+            report = "\n".join(lines)
+            logger.warning("\n%s", report)
+            try:
+                await NotificationService().send_notification(
+                    "weekly_tournament_report", {"report": report})
+            except Exception:
+                pass
+            return report
+    return asyncio.run(_run())

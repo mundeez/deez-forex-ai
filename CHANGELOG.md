@@ -4,6 +4,61 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.11.0] — 2026-11-10
+
+### Phase 7.3 — Tournament Open: candidate-driven execution live
+
+The variant engine is now the **authoritative execution path**. Legacy
+`run_full_analysis` still runs (signals, stats, telemetry) but is
+shadow-only unless `legacy_analysis_executes` is set. **`phase6_active`
+released → first live paper tournament trades executing.**
+
+#### Execution wiring (`run_variant_engine`)
+- PASS'd candidates now flow → `validate_new_trade` → `execute_trade`
+  with `variant_id` propagated through `TradeCreate` → `trades`.
+- Fixed **$5 risk per trade** — lots = 5 / (stop_pips × $/pip-per-lot).
+- Per-variant-TF **dedup window** (D1=24h … 5m=60s) so persistent setups
+  don't re-fire every cycle.
+- **Redis run-lock** (`variant_engine:lock`) — beat + manual + restart
+  overlap can no longer interleave duplicate candidates.
+- **Regime gate** — TF-* requires trending, MR-* requires ranging.
+- **No pyramiding** — skip if variant+symbol already has an open position.
+- Skip reasons now tagged: `SKIPPED:dup|halt|regime|openpos`, `BLOCKED`.
+
+#### EOD/weekend exemption
+- `close_all_open_positions` (eod/weekend/overnight scheduled closes)
+  **exempts TF-* variant trades** — trend variants hold overnight per
+  plan §3.4; session/day variants and legacy trades still flatten.
+- Manual close-all unaffected.
+
+#### LLM filter resilience
+- Failover chain widened: paid lead → `ai_model_pool` free models. When
+  OpenRouter credits hit 402, `nvidia/nemotron-3-ultra-550b-a55b:free`
+  took over seamlessly with real verdict rationales.
+- `model_used` on decisions records the actual model that answered.
+
+#### New task
+- `variant_weekly_report` — Monday 08:00 UTC; latest stats per variant
+  (incl. XAUUSD bucket) logged + notified.
+
+#### Deps
+- `kombu==5.5.4` pinned — unpinned kombu drifted to 5.7.0 which requires
+  redis-py ≥6.1 and crash-looped the worker on rebuild.
+
+#### Verified live
+- First trades: `LEGACY-M5-EMA` (control arm) executed 3 real paper
+  trades within hours — 0.23 lots EURUSD @ 2.1-pip stop ≈ **$4.83 risk ≈
+  $5 target**; SL/TP exits handled by `check_open_positions`; monitor
+  accounting correct (3 trades, net -$8.38).
+
+#### ⚠️ Operator notes
+- **OpenRouter credits exhausted** ($40 used). Free pool carries the
+  filter; paid suite resumes automatically on top-up.
+- Control arm is burning ~1R/trade against its -$40 kill cap as designed.
+- 9 pre-existing environmental test failures unchanged (212 pass).
+
+---
+
 ## [v1.10.1] — 2026-10-29
 
 ### Phase 7.2 — Sanity Backtest with Honest Costs

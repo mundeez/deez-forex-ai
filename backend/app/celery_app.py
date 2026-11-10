@@ -221,6 +221,11 @@ celery_app.conf.update(
             "schedule": crontab(hour=23, minute=30),  # nightly, post-EOD
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
+        "variant-weekly-report": {
+            "task": "app.tasks.analysis_tasks.variant_weekly_report",
+            "schedule": crontab(hour=8, minute=0, day_of_week="mon"),
+            "options": {"time_limit": 120, "soft_time_limit": 90},
+        },
     }
 )
 

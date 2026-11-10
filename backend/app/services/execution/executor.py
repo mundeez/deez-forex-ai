@@ -186,6 +186,7 @@ class ExecutionService:
             rationale=trade_in.rationale,
             provider=trade_in.provider.value,
             trailing_stop_distance=trailing_distance,
+            variant_id=getattr(trade_in, "variant_id", None),
         )
 
         # ------------------------------------------------------------------
@@ -533,6 +534,17 @@ class ExecutionService:
             select(models.Trade).where(models.Trade.status == models.TradeStatus.OPEN)
         )
         open_trades = result.scalars().all()
+        if not open_trades:
+            return []
+        # Phase 7.3: trend variants (TF-*) must hold overnight/weekend —
+        # the trend edge IS the overnight move (plan §3.4). Session/day
+        # variants and legacy trades still get flattened. Scheduled
+        # closures only — a manual close-all still hits everything.
+        if close_reason in ("eod", "weekend", "overnight"):
+            open_trades = [
+                t for t in open_trades
+                if not (t.variant_id or "").startswith("TF-")
+            ]
         if not open_trades:
             return []
         closed = []
