@@ -4,6 +4,21 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.1] — 2026-11-11
+
+### Tournament dashboard page + risk-config note
+
+- `frontend/src/app/tournament/` — standings table (trades/WR/PF/net/t-stat
+  per variant, kill status), per-variant FX/XAUUSD detail + recent candidates
+  on click, and the shadow-arm filter-quality table (vetoed-R vs passed-R).
+  Trophy icon in the home header.
+- Risk settings: `equity_balance` reverted to $200 per operator;
+  `portfolio_reset_at` advanced to clear the weekly-loss halt. Note the
+  weekly cap is $12 at this equity — it will re-trip after ~$12 of net
+  losses in a week (by design per operator).
+
+---
+
 ## [v1.12.0] — 2026-11-11
 
 ### Phase 7.3.1 — Regime classifier, instrumentation, variant API, shadow arm

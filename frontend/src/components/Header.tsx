@@ -13,6 +13,7 @@ import {
   Settings as SettingsIcon,
   ShowChart as ShowChartIcon,
   Analytics as AnalyticsIcon,
+  EmojiEvents as EmojiEventsIcon,
 } from "@mui/icons-material";
 import Link from "next/link";
 
@@ -69,6 +70,13 @@ export default function Header({ connected = true, provider = "metaapi" }: Heade
               color: (theme) => (connected ? theme.palette.success.main : theme.palette.error.main),
             }}
           />
+          <Tooltip title="Strategy Tournament">
+            <Link href="/tournament" passHref>
+              <IconButton size="small" sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}>
+                <EmojiEventsIcon />
+              </IconButton>
+            </Link>
+          </Tooltip>
           <Tooltip title="Analytics">
             <Link href="/analytics" passHref>
               <IconButton size="small" sx={{ color: "text.secondary", "&:hover": { color: "text.primary" } }}>
