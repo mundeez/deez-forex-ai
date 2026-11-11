@@ -2085,3 +2085,102 @@ async def get_live_readiness(db: AsyncSession = Depends(get_db)):
         "checks_total": total,
         "checks": checks,
     }
+
+
+# ----------------------------------------------------------------------
+# Phase 7 — variant tournament API
+# ----------------------------------------------------------------------
+
+@app.get("/api/v1/variants")
+async def get_variants(db: AsyncSession = Depends(get_db)):
+    """All tournament variants with latest stats snapshot (FX + XAUUSD buckets)."""
+    variants = (await db.execute(select(models.StrategyVariant))).scalars().all()
+    sub = (select(models.VariantStat.variant_id, models.VariantStat.xauusd,
+                  func.max(models.VariantStat.computed_at).label("mx"))
+           .group_by(models.VariantStat.variant_id, models.VariantStat.xauusd)
+           .subquery())
+    stats = (await db.execute(
+        select(models.VariantStat).join(
+            sub, (models.VariantStat.variant_id == sub.c.variant_id)
+            & (models.VariantStat.xauusd == sub.c.xauusd)
+            & (models.VariantStat.computed_at == sub.c.mx))
+    )).scalars().all()
+    smap = {(s.variant_id, s.xauusd): s for s in stats}
+    out = []
+    for v in variants:
+        row = {
+            "variant_id": v.variant_id, "family": v.family,
+            "timeframe": v.timeframe, "status": v.status,
+            "kill_reason": v.kill_reason,
+            "registered_at": v.registered_at, "retired_at": v.retired_at,
+            "params": v.params or {},
+        }
+        for tag, is_xau in (("fx_stats", False), ("xauusd_stats", True)):
+            s = smap.get((v.variant_id, is_xau))
+            if s:
+                row[tag] = {
+                    "trades": s.trades, "wins": s.wins,
+                    "win_rate": s.win_rate, "profit_factor": s.profit_factor,
+                    "expectancy": s.expectancy, "net_pnl": s.net_pnl,
+                    "max_drawdown": s.max_drawdown, "t_stat": s.t_stat,
+                    "pf_ci90_low": s.pf_ci90_low,
+                    "computed_at": s.computed_at,
+                }
+        out.append(row)
+    return out
+
+
+@app.get("/api/v1/variants/{variant_id}/candidates")
+async def get_variant_candidates(variant_id: str, limit: int = 50,
+                                 db: AsyncSession = Depends(get_db)):
+    """Recent shadow candidates for a variant (verdicts + shadow outcomes)."""
+    rows = (await db.execute(
+        select(models.StrategyCandidate)
+        .where(models.StrategyCandidate.variant_id == variant_id)
+        .order_by(models.StrategyCandidate.id.desc())
+        .limit(max(1, min(limit, 200))))).scalars().all()
+    return [{
+        "id": r.id, "created_at": r.created_at, "symbol": r.symbol,
+        "direction": r.direction, "entry_price": r.entry_price,
+        "stop_loss": r.stop_loss, "take_profit": r.take_profit,
+        "timeframe": r.timeframe, "regime": r.regime,
+        "llm_regime": r.llm_regime, "llm_verdict": r.llm_verdict,
+        "shadow_outcome_r": r.shadow_outcome_r,
+        "ai_decision_id": r.ai_decision_id,
+        "rule_rationale": r.rule_rationale,
+    } for r in rows]
+
+
+@app.get("/api/v1/variants/shadow")
+async def get_shadow_comparison(db: AsyncSession = Depends(get_db)):
+    """Shadow arm: LLM filter vs raw rules (plan §6.6).
+
+    veto_r_sum = summed R outcomes the filter REFUSED — negative means the
+    vetoes saved money. pass_r_sum = realized-side hypothetical R on PASS'd
+    candidates (executed trades are the true measure).
+    """
+    from sqlalchemy import case
+    rows = (await db.execute(
+        select(
+            models.StrategyCandidate.variant_id,
+            func.count().label("n"),
+            func.sum(case((models.StrategyCandidate.llm_verdict == "PASS", 1), else_=0)).label("passed"),
+            func.sum(case((models.StrategyCandidate.llm_verdict == "VETO", 1), else_=0)).label("vetoed"),
+            func.sum(case(((models.StrategyCandidate.llm_verdict == "SKIPPED:dup"), 1), else_=0)).label("dup"),
+            func.sum(case(((models.StrategyCandidate.llm_verdict == "VETO")
+                           & models.StrategyCandidate.shadow_outcome_r.isnot(None),
+                           models.StrategyCandidate.shadow_outcome_r), else_=0)).label("veto_r"),
+            func.sum(case(((models.StrategyCandidate.llm_verdict == "PASS")
+                           & models.StrategyCandidate.shadow_outcome_r.isnot(None),
+                           models.StrategyCandidate.shadow_outcome_r), else_=0)).label("pass_r"),
+            func.count(models.StrategyCandidate.shadow_outcome_r).label("resolved"),
+        ).group_by(models.StrategyCandidate.variant_id)
+    )).all()
+    return [{
+        "variant_id": r.variant_id, "candidates": r.n,
+        "passed": r.passed or 0, "vetoed": r.vetoed or 0,
+        "deduped": r.dup or 0, "resolved": r.resolved or 0,
+        "pass_rate": round((r.passed or 0) / r.n, 4) if r.n else None,
+        "veto_r_sum": round(r.veto_r or 0.0, 3),
+        "pass_r_sum": round(r.pass_r or 0.0, 3),
+    } for r in sorted(rows, key=lambda x: x.variant_id)]

@@ -1888,6 +1888,22 @@ def run_variant_engine():
         async with get_celery_session()() as db:
             suite = await get_setting(db, "model_suite") or "production_v2"
             filter_model = resolve_models(suite, {}).get("lead")
+            # 7.3.1: shadow instrumentation — XGB entry model + pattern
+            # priors are SCORED AND LOGGED on every decision, never enforced.
+            from app.services.ml.entry_model import EntryQualityModel
+            from app.services.feature_store import FeatureStore
+            from app.services.pattern_extractor import PatternExtractor
+            from app.services.regime_classifier import classify as _classify_regime
+            from app.strategies import _session_of, shadow_features
+            entry_model = EntryQualityModel()
+            priors = None
+            try:
+                priors = await PatternExtractor().get_cached_priors()
+            except Exception:
+                pass
+            pool_models = [m.strip() for m in (await get_setting(
+                db, "ai_model_pool") or "").split(",") if m.strip()]
+            session_now = _session_of(now)
             for symbol in symbols:
                 try:
                     tfs = {"5m": 300, "15m": 400, "1h": 300, "4h": 200, "1d": 100}
@@ -1897,6 +1913,16 @@ def run_variant_engine():
                     events = [e for e in cal if news._event_affects_symbol(e, symbol)]
                     candidates = generate_all(symbol, candles, events, now)
                     halted, halt_reason = await news.is_trading_halted(symbol)
+
+                    # 7.3.1: LLM regime classifier — once per symbol+session
+                    # (cached in Redis); gates which families may fire.
+                    llm_reg = None
+                    try:
+                        llm_reg = await _classify_regime(
+                            symbol, candles.get("1h") or [], session_now,
+                            ai, r, pool_models)
+                    except Exception as _e:
+                        logger.warning("regime classify %s failed: %s", symbol, _e)
 
                     # per-variant-TF dedup window (seconds) — a Donchian
                     # break stays true for many bars; don't refire per cycle
@@ -1924,7 +1950,8 @@ def run_variant_engine():
                             direction=c.direction, entry_price=c.entry,
                             stop_loss=c.sl, take_profit=c.tp, atr=c.atr,
                             timeframe=c.timeframe, spread_at_signal=spread,
-                            regime=c.regime, rule_rationale=c.rationale[:500])
+                            regime=c.regime, rule_rationale=c.rationale[:500],
+                            llm_regime=llm_reg)
 
                         # dedup BEFORE db.add(row): the candidate row must not
                         # be in the session, or autoflush inserts it and the
@@ -1949,6 +1976,22 @@ def run_variant_engine():
                         if c.variant_id.startswith("MR-") and c.regime != "ranging":
                             row.llm_verdict = "SKIPPED:regime"
                             continue
+                        # 7.3.1: LLM regime gate — the family must agree with
+                        # the classifier's session label. LEGACY exempt: it is
+                        # the unfiltered control arm by design.
+                        if llm_reg and not c.variant_id.startswith("LEGACY"):
+                            if c.variant_id.startswith("TF-"):
+                                want = "trending_up" if c.direction == "BUY" else "trending_down"
+                                ok_r = llm_reg == want
+                            elif c.variant_id.startswith("MR-"):
+                                ok_r = llm_reg == "ranging"
+                            elif c.variant_id.startswith("ND-"):
+                                ok_r = True
+                            else:
+                                ok_r = llm_reg != "volatile"
+                            if not ok_r:
+                                row.llm_verdict = "SKIPPED:regime"
+                                continue
                         # no pyramiding: skip if this variant+symbol already has a position
                         open_t = await db.execute(select(models.Trade.id).where(
                             models.Trade.variant_id == c.variant_id,
@@ -1988,6 +2031,26 @@ def run_variant_engine():
                             verdict, rationale = "VETO", f"filter error: {exc}"
                         row.llm_verdict = verdict if verdict in ("PASS", "VETO") else "VETO"
 
+                        # shadow instrumentation: score + priors logged,
+                        # never enforced (plan §2 — the answerable question
+                        # is "did score>threshold predict winners?")
+                        xgb_score = None
+                        try:
+                            feats = shadow_features(
+                                symbol, candles.get(c.timeframe) or [], c.direction)
+                            if feats:
+                                xgb_score = entry_model.predict(
+                                    FeatureStore.compute_entry_features(feats))
+                        except Exception:
+                            pass
+                        prior_snap = None
+                        if priors:
+                            prior_snap = {
+                                "pair_dir": (priors.get("by_symbol_direction") or {}).get(
+                                    f"{symbol}_{c.direction}"),
+                                "session": (priors.get("by_session") or {}).get(session_now),
+                            }
+
                         # record the decision row
                         dec = models.AIDecision(
                             symbol=symbol, decision=c.direction, confidence=0.5,
@@ -1996,7 +2059,9 @@ def run_variant_engine():
                             rationale=f"[{c.variant_id}] {c.rationale} | LLM {row.llm_verdict}: {rationale}",
                             model_used=filter_model_used, engine_version="v2",
                             variant_id=c.variant_id, llm_verdict=row.llm_verdict,
-                            requested_price=c.entry, spread_at_decision=spread)
+                            requested_price=c.entry, spread_at_decision=spread,
+                            xgb_score=xgb_score,
+                            pattern_prior_snapshot=prior_snap)
                         db.add(dec)
                         await db.flush()
                         row.ai_decision_id = dec.id
@@ -2055,19 +2120,20 @@ def reconcile_execution_costs():
 @celery_app.task
 def variant_weekly_report():
     """Weekly tournament summary — logged + notification for the operator."""
+    from app import models
     async def _run():
         async with get_celery_session()() as db:
             # latest snapshot per (variant_id, xauusd)
-            sub = (select(models.VariantStats.variant_id,
-                          models.VariantStats.xauusd,
-                          func.max(models.VariantStats.computed_at).label("mx"))
-                   .group_by(models.VariantStats.variant_id, models.VariantStats.xauusd)
+            sub = (select(models.VariantStat.variant_id,
+                          models.VariantStat.xauusd,
+                          func.max(models.VariantStat.computed_at).label("mx"))
+                   .group_by(models.VariantStat.variant_id, models.VariantStat.xauusd)
                    .subquery())
             rows = (await db.execute(
-                select(models.VariantStats).join(
-                    sub, (models.VariantStats.variant_id == sub.c.variant_id)
-                    & (models.VariantStats.xauusd == sub.c.xauusd)
-                    & (models.VariantStats.computed_at == sub.c.mx))
+                select(models.VariantStat).join(
+                    sub, (models.VariantStat.variant_id == sub.c.variant_id)
+                    & (models.VariantStat.xauusd == sub.c.xauusd)
+                    & (models.VariantStat.computed_at == sub.c.mx))
             )).scalars().all()
             killed = {v.variant_id for v in (await db.execute(
                 select(models.StrategyVariant).where(models.StrategyVariant.status == "retired"))).scalars().all()}
@@ -2080,6 +2146,36 @@ def variant_weekly_report():
                     f"exp=${(r.expectancy or 0):6.2f} t={r.t_stat or 0:5.2f} "
                     f"DD=${(r.max_drawdown or 0):7.2f} "
                     f"{'KILLED' if r.variant_id in killed else 'alive'}")
+
+            # §6.6 shadow arm: LLM filter vs raw rules. For each variant:
+            # pass rate, and summed shadow_outcome_r of VETO'd candidates
+            # (negative sum = the vetoes saved money).
+            lines.append("")
+            lines.append("=== SHADOW ARM: filter vs raw rules ===")
+            from sqlalchemy import case
+            cmp_rows = (await db.execute(
+                select(
+                    models.StrategyCandidate.variant_id,
+                    func.count().label("n"),
+                    func.sum(case((models.StrategyCandidate.llm_verdict == "PASS", 1), else_=0)).label("passed"),
+                    func.sum(case((models.StrategyCandidate.llm_verdict == "VETO", 1), else_=0)).label("vetoed"),
+                    func.sum(case(
+                        ((models.StrategyCandidate.llm_verdict == "VETO")
+                         & models.StrategyCandidate.shadow_outcome_r.isnot(None),
+                         models.StrategyCandidate.shadow_outcome_r), else_=0)).label("veto_r"),
+                    func.sum(case(
+                        ((models.StrategyCandidate.llm_verdict == "PASS")
+                         & models.StrategyCandidate.shadow_outcome_r.isnot(None),
+                         models.StrategyCandidate.shadow_outcome_r), else_=0)).label("pass_r"),
+                ).group_by(models.StrategyCandidate.variant_id)
+            )).all()
+            for v in sorted(cmp_rows, key=lambda x: x.variant_id):
+                n, passed, vetoed = v.n or 0, v.passed or 0, v.vetoed or 0
+                pass_pct = (100 * passed / n) if n else 0
+                lines.append(
+                    f"{v.variant_id:16s} cands={n:4d} pass={passed:3d} ({pass_pct:4.0f}%) "
+                    f"veto={vetoed:3d} | vetoed-R sum={(v.veto_r or 0):+7.2f} "
+                    f"passed-R sum={(v.pass_r or 0):+7.2f}")
             report = "\n".join(lines)
             logger.warning("\n%s", report)
             try:
@@ -2089,3 +2185,10 @@ def variant_weekly_report():
                 pass
             return report
     return asyncio.run(_run())
+
+
+@celery_app.task
+def resolve_shadow_candidates():
+    """Hourly: resolve shadow outcomes for vetoed/skipped candidates (R units)."""
+    from app.services.variant_monitor import resolve_shadow_outcomes
+    return asyncio.run(resolve_shadow_outcomes())

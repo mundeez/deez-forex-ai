@@ -4,6 +4,47 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.0] — 2026-11-11
+
+### Phase 7.3.1 — Regime classifier, instrumentation, variant API, shadow arm
+
+#### LLM regime classifier (`app/services/regime_classifier.py`)
+- Once per symbol+session, compact 1h-candle stats → `qwen3-next-80b`
+  (free-pool failover) → `trending_up|trending_down|ranging|volatile`.
+- Cached in Redis per symbol+session (~18 calls/day).
+- **Gates variants**: TF-* needs matching trending_*, MR-* needs ranging,
+  volatile blocks all but ND-*. LEGACY exempt — it is the unfiltered
+  control arm by design. Recorded on `strategy_candidates.llm_regime`.
+
+#### Shadow instrumentation (plan §2 — logged, never enforced)
+- `shadow_features()` in strategies engine synthesizes the indicator dict
+  the June XGB entry model expects → real `xgb_score` on every decision.
+- `pattern_prior_snapshot` (pair_dir + session priors) on every decision.
+- Answers "did score>threshold predict winners?" once labeled data exists.
+
+#### Shadow arm outcomes (`resolve_shadow_outcomes`, hourly)
+- Resolves vetoed/skipped candidates against subsequent 15m MT5 candles —
+  SL-first, in R units; 24h mark-to-market cutoff.
+- New cols: `strategy_candidates.shadow_outcome_r`, `shadow_resolved_at`.
+- **First data**: 88 vetoed resolved → +0.40R avg — the filter is currently
+  vetoing winners (small n; the *measurement* now exists, which was the point).
+
+#### Variant API
+- `GET /api/v1/variants` — registration + latest stats (FX + XAUUSD buckets)
+- `GET /api/v1/variants/{id}/candidates` — shadow log with verdicts/outcomes
+- `GET /api/v1/variants/shadow` — pass/veto counts + R sums per variant
+
+#### Weekly report upgrade
+- Adds §6.6 shadow-arm section: per-variant candidate counts, pass rate,
+  vetoed-R and passed-R sums.
+
+#### Fixes
+- `llm_verdict` widened VARCHAR(12)→(20) — `SKIPPED:regime` overflow crashed
+  the whole run's commit (found live).
+- `models` import + `VariantStat` name in weekly report.
+
+---
+
 ## [v1.11.0] — 2026-11-10
 
 ### Phase 7.3 — Tournament Open: candidate-driven execution live

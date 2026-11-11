@@ -160,3 +160,69 @@ async def aggregate_execution_costs() -> int:
             count += 1
         await db.commit()
         return count
+
+
+async def resolve_shadow_outcomes(max_rows: int = 100) -> int:
+    """Resolve vetoed/skipped candidates against subsequent 15m candles.
+
+    Shadow arm: what *would* have happened. SL-first resolution in R units
+    (risk = |entry-sl|); unresolved after 96 bars (24h) marks to market.
+    Powers the §6.6 filter-vs-raw comparison in the weekly report.
+    Live candles come from MT5 (historical_candles is a static snapshot).
+    """
+    from sqlalchemy import text as _text
+    from app.services.data.mt5_rpyc_client import MT5RPyCClient
+    client = MT5RPyCClient()
+    async with get_celery_session()() as db:
+        rows = (await db.execute(
+            select(models.StrategyCandidate).where(
+                models.StrategyCandidate.shadow_outcome_r.is_(None),
+                models.StrategyCandidate.shadow_resolved_at.is_(None),
+                models.StrategyCandidate.created_at < func.now() - _text("interval '6 hours'"),
+                models.StrategyCandidate.llm_verdict.isnot(None),
+            ).order_by(models.StrategyCandidate.created_at).limit(max_rows)
+        )).scalars().all()
+        # group by symbol: one MT5 fetch covers many candidates
+        by_sym: Dict[str, list] = {}
+        for c in rows:
+            by_sym.setdefault(c.symbol, []).append(c)
+        done = 0
+        for symbol, cands in by_sym.items():
+            try:
+                candles = await client.get_historical_candles(symbol, "15m", 200)
+            except Exception as exc:
+                logger.warning("shadow resolver candles %s failed: %s", symbol, exc)
+                continue
+            if not candles:
+                continue
+            for c in cands:
+                t0 = c.created_at.timestamp() if hasattr(c.created_at, "timestamp") else float(c.created_at)
+                after = [b for b in candles
+                         if float(b["timestamp"]) > t0][:96]
+                if len(after) < 4:
+                    continue  # not enough post-candidate data yet
+                risk = abs(c.entry_price - c.stop_loss) or 1e-9
+                outcome = None
+                for b in after:
+                    hi, lo = float(b["high"]), float(b["low"])
+                    if c.direction == "BUY":
+                        if lo <= c.stop_loss:
+                            outcome = -1.0; break
+                        if hi >= c.take_profit:
+                            outcome = (c.take_profit - c.entry_price) / risk; break
+                    else:
+                        if hi >= c.stop_loss:
+                            outcome = -1.0; break
+                        if lo <= c.take_profit:
+                            outcome = (c.entry_price - c.take_profit) / risk; break
+                if outcome is None:
+                    last_close = float(after[-1]["close"])
+                    outcome = ((last_close - c.entry_price) if c.direction == "BUY"
+                               else (c.entry_price - last_close)) / risk
+                c.shadow_outcome_r = round(float(outcome), 3)
+                c.shadow_resolved_at = func.now()
+                done += 1
+        await db.commit()
+        if done:
+            logger.info("shadow resolver: resolved %d candidates", done)
+        return done

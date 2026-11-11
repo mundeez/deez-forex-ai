@@ -480,9 +480,12 @@ class StrategyCandidate(Base):
     timeframe = Column(String(8))
     spread_at_signal = Column(Float)
     regime = Column(String(24))
-    llm_verdict = Column(String(12))
+    llm_verdict = Column(String(20))
     ai_decision_id = Column(Integer)
     rule_rationale = Column(Text)
+    llm_regime = Column(String(24))
+    shadow_outcome_r = Column(Float)
+    shadow_resolved_at = Column(DateTime(timezone=True))
 
 
 class VariantStat(Base):

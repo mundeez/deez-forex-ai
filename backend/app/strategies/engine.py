@@ -332,3 +332,73 @@ def generate_all(symbol: str, candles_by_tf: Dict[str, List[Dict]],
         except Exception as exc:
             logger.warning("variant %s on %s failed: %s", vid, symbol, exc)
     return out
+
+
+def macd_hist(values: List[float]) -> tuple:
+    """(macd_line, histogram) using 12/26/9."""
+    if len(values) < 35:
+        return None, None
+    e12, e26 = ema(values, 12), ema(values, 26)
+    line = (e12 - e26) if (e12 is not None and e26 is not None) else None
+    # signal line over the macd series (approx: last 9 macd points)
+    macd_series = []
+    for i in range(34, len(values)):
+        a, b = ema(values[:i + 1], 12), ema(values[:i + 1], 26)
+        if a is not None and b is not None:
+            macd_series.append(a - b)
+    sig = ema(macd_series, 9) if macd_series else None
+    hist = (line - sig) if (line is not None and sig is not None) else None
+    return line, hist
+
+
+def stoch(candles: List[Dict], n: int = 14):
+    """(%K, %D) stochastic."""
+    if len(candles) < n + 2:
+        return None, None
+    ks = []
+    for i in range(len(candles) - 3, len(candles)):
+        w = candles[i - n + 1:i + 1]
+        hh, ll = max(_highs(w)), min(_lows(w))
+        ks.append(100 * (candles[i]["close"] - ll) / (hh - ll) if hh > ll else 50.0)
+    return ks[-1], sum(ks) / len(ks)
+
+
+def cci(candles: List[Dict], n: int = 20) -> Optional[float]:
+    if len(candles) < n:
+        return None
+    tps = [(c["high"] + c["low"] + c["close"]) / 3 for c in candles[-n:]]
+    m = sum(tps) / n
+    md = sum(abs(t - m) for t in tps) / n or 1e-12
+    return (tps[-1] - m) / (0.015 * md)
+
+
+def vwap(candles: List[Dict]) -> Optional[float]:
+    """Session-approx VWAP over the last 24 bars (typical price weighted)."""
+    w = candles[-24:]
+    pv = sum(((c["high"] + c["low"] + c["close"]) / 3) * c.get("volume", 1) for c in w)
+    v = sum(c.get("volume", 1) for c in w) or 1
+    return pv / v
+
+
+def shadow_features(symbol: str, c_tf: List[Dict], direction: str) -> Dict:
+    """Minimal analysis dict for FeatureStore.compute_entry_features —
+    the XGB entry model's shadow score (plan §2: logged, never enforced)."""
+    closes = _closes(c_tf)
+    if len(closes) < 35:
+        return {}
+    bu, _bm, bl = bollinger(closes, 20, 2.0)
+    ml, mh = macd_hist(closes)
+    sk, sd_ = stoch(c_tf)
+    ind = {
+        "rsi_14": rsi(closes), "macd": ml, "macd_hist": mh,
+        "adx_14": adx(c_tf), "atr_14": atr(c_tf),
+        "bb_upper": bu, "bb_lower": bl, "vwap": vwap(c_tf),
+        "ema_9": ema(closes, 9), "ema_21": ema(closes, 21),
+        "stoch_k": sk, "stoch_d": sd_, "cci_20": cci(c_tf),
+        "close": closes[-1],
+    }
+    e9, e21 = ind["ema_9"], ind["ema_21"]
+    signal = ("bullish" if (e9 and e21 and e9 > e21) else
+              "bearish" if (e9 and e21 and e9 < e21) else "neutral")
+    return {"technical": {"timeframes": {"5m": {"indicators": ind}},
+                          "overall_signal": signal}}

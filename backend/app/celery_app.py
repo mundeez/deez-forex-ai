@@ -226,6 +226,11 @@ celery_app.conf.update(
             "schedule": crontab(hour=8, minute=0, day_of_week="mon"),
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
+        "resolve-shadow-candidates": {
+            "task": "app.tasks.analysis_tasks.resolve_shadow_candidates",
+            "schedule": 3600.0,
+            "options": {"time_limit": 180, "soft_time_limit": 150},
+        },
     }
 )
 
