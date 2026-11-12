@@ -4,6 +4,19 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.4] — 2026-11-12
+
+### Fix: retired variants could still execute trades
+
+- `run_variant_engine` never consulted `strategy_variants.status` — the
+  retired LEGACY-M5-EMA control arm kept generating candidates *and*
+  executing them (3 post-retirement trades incl. USDJPY -$5.58 today).
+  Retired variants now short-circuit at `SKIPPED:retired`: shadow
+  candidates still record (free control-arm data for the shadow
+  resolver) but can never reach the execution path.
+- Verified live: LEGACY candidates log `SKIPPED:retired`; 7 active
+  variants unaffected.
+
 ## [v1.12.3] — 2026-11-12
 
 ### Fix: news-halt gate was failing open on 429s + broken calendar ingest

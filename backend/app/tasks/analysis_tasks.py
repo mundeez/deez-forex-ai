@@ -1930,6 +1930,11 @@ def run_variant_engine():
                                 "15m": 900, "5m": 60}
                     from datetime import timezone as _tz
                     trading_enabled = await get_setting_bool(db, "trading_enabled")
+                    # Retired variants keep generating shadow candidates (free
+                    # control-arm data) but must never reach execution.
+                    retired = {v.variant_id for v in (await db.execute(
+                        select(models.StrategyVariant).where(
+                            models.StrategyVariant.status == "retired"))).scalars().all()}
                     executor = ExecutionService()
                     risk = RiskManager()
                     # $/pip per 1.0 lot (approx; majors quote-USD)
@@ -1952,6 +1957,11 @@ def run_variant_engine():
                             timeframe=c.timeframe, spread_at_signal=spread,
                             regime=c.regime, rule_rationale=c.rationale[:500],
                             llm_regime=llm_reg)
+
+                        if c.variant_id in retired:
+                            row.llm_verdict = "SKIPPED:retired"
+                            db.add(row)
+                            continue
 
                         # dedup BEFORE db.add(row): the candidate row must not
                         # be in the session, or autoflush inserts it and the
