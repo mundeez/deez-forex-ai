@@ -610,6 +610,11 @@ def reevaluate_open_positions():
 
             for trade in open_trades:
                 try:
+                    # Tournament/variant trades own their exits — the legacy
+                    # profit-lock (50% giveback) and stale (15min flat) rules
+                    # are scalping heuristics that would kill trend holds.
+                    if trade.strategy_mode == "tournament" or trade.variant_id:
+                        continue
                     price_data = await client.get_current_price(trade.symbol)
                     current_bid = price_data.get("bid", 0.0)
                     current_ask = price_data.get("ask", 0.0)

@@ -4,6 +4,22 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.2] — 2026-11-12
+
+### Fix: legacy scalping heuristics were killing tournament trades
+
+- `check_and_close_time_based_positions` mapped unknown `strategy_mode`
+  to a **10-minute** max hold — variant trades (`strategy_mode="tournament"`,
+  absent from the map) were force-closed at 10min. TF-D1-DON20's first trade
+  (multi-day design hold) died at 10min for +$0.60. Now skips any
+  tournament/`variant_id` trade — variants own their exits.
+- `reevaluate_open_positions` profit-lock (50% giveback) + stale (15min flat)
+  rules likewise skipped for tournament trades.
+- LEGACY-M5-EMA auto-retired by the monitor: realized -$47.59 < -$40 kill
+  (-8R). First variant killed by tournament rules — machinery verified.
+
+---
+
 ## [v1.12.1] — 2026-11-11
 
 ### Tournament dashboard page + risk-config note

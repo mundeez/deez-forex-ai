@@ -512,6 +512,11 @@ class ExecutionService:
 
         closed = []
         for trade in open_trades:
+            # Tournament/variant trades own their exits (SL/TP/trailing +
+            # variant-specific rules) — the legacy scalping-duration map
+            # would kill a D1 Donchian hold at 10 minutes.
+            if trade.strategy_mode == "tournament" or trade.variant_id:
+                continue
             strategy_mode = trade.strategy_mode or "scalping"
             max_duration_map = {"scalping": 10, "day_trading": 120, "swing": 1440}
             max_duration = max_duration_map.get(strategy_mode, 10)
