@@ -121,6 +121,46 @@ class NewsService:
             return True
         return False
 
+    async def _fetch_calendar_db(self) -> List[Dict[str, Any]]:
+        """Read upcoming events from the ingested economic_events table.
+
+        The hourly ingest keeps this fresh and correctly classified; the
+        live HTTP endpoint rate-limits us (429s) and previously the gate
+        failed open on it. Dedupe at query time — the table accumulates
+        hourly scrape copies.
+        """
+        try:
+            from sqlalchemy import select
+            from app.database import AsyncSessionLocal
+            from app import models
+
+            horizon = utc_now() + timedelta(days=7)
+            async with AsyncSessionLocal() as db:
+                stmt = (
+                    select(
+                        models.EconomicEvent.timestamp,
+                        models.EconomicEvent.currency,
+                        models.EconomicEvent.event_name,
+                        models.EconomicEvent.impact,
+                    )
+                    .distinct()
+                    .where(models.EconomicEvent.timestamp <= horizon)
+                    .where(models.EconomicEvent.timestamp >= utc_now() - timedelta(days=2))
+                )
+                rows = (await db.execute(stmt)).all()
+                return [
+                    {
+                        "title": r.event_name,
+                        "country": r.currency,
+                        "impact": r.impact or "low",
+                        "date": r.timestamp.isoformat() if r.timestamp else "",
+                    }
+                    for r in rows
+                ]
+        except Exception:
+            logger.warning("Failed to read economic_events for news halt", exc_info=True)
+            return []
+
     async def is_trading_halted(
         self,
         symbol: str,
@@ -128,7 +168,9 @@ class NewsService:
         buffer_minutes_after: int = 30,
     ) -> Tuple[bool, str]:
         """Check if trading should be halted due to upcoming high-impact news."""
-        events = await self._fetch_calendar()
+        events = await self._fetch_calendar_db()
+        if not events:
+            events = await self._fetch_calendar()
         now = utc_now()
 
         for event in events:

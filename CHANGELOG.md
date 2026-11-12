@@ -4,6 +4,27 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.3] — 2026-11-12
+
+### Fix: news-halt gate was failing open on 429s + broken calendar ingest
+
+- `is_trading_halted` fetched the live FF JSON per call — rate-limited
+  (429s) it returned `[]` → gate silently let everything through during
+  high-impact news. Now reads the `economic_events` table first
+  (hourly-ingested, deduped query), HTTP only as fallback.
+- `_ingest_from_live_json` used `strptime("%Y-%m-%dT%H:%M:%S")` on
+  tz-offset ISO strings → every live event crashed on parse → zero
+  `forexfactory_live` rows ever written. Now `datetime.fromisoformat`.
+- `_safe_str` wrote raw "0.3%"-style strings into Float columns →
+  `asyncpg` errors → `except: pass` silently dropped **every event
+  carrying a forecast — i.e. almost all high-impact events**. New
+  `_safe_float` strips %/K/M/B. Table previously had 67k rows, 100%
+  `impact='low'` (all from the scrape path's fallback).
+- Result: 5 real high-impact events now present (USD CPI Nov 10,
+  GBP GDP Nov 12, USD PPI Nov 13) — the halt gate works off real data.
+
+---
+
 ## [v1.12.2] — 2026-11-12
 
 ### Fix: legacy scalping heuristics were killing tournament trades

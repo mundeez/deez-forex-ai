@@ -102,7 +102,8 @@ async def _ingest_from_live_json(db: AsyncSession, start: date, end: date) -> in
     for e in events:
         try:
             dt_str = e.get("date", "")
-            dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S")
+            # JSON returns ISO-8601 with tz offset ("...T17:30:00-05:00")
+            dt = datetime.fromisoformat(dt_str)
             d = dt.date()
             if d < start or d > end:
                 continue
@@ -114,9 +115,9 @@ async def _ingest_from_live_json(db: AsyncSession, start: date, end: date) -> in
                 "currency": currency,
                 "event_name": e.get("title", ""),
                 "impact": e.get("impact", "low").lower(),
-                "actual": _safe_str(e.get("actual")),
-                "forecast": _safe_str(e.get("forecast")),
-                "previous": _safe_str(e.get("previous")),
+                "actual": _safe_float(e.get("actual")),
+                "forecast": _safe_float(e.get("forecast")),
+                "previous": _safe_float(e.get("previous")),
                 "source": "forexfactory_live",
             })
             count += 1
@@ -163,9 +164,9 @@ async def _scrape_day(db: AsyncSession, target_date: date) -> int:
                 "currency": e["currency"],
                 "event_name": e["event_name"],
                 "impact": e["impact"],
-                "actual": e.get("actual"),
-                "forecast": e.get("forecast"),
-                "previous": e.get("previous"),
+                "actual": _safe_float(e.get("actual")),
+                "forecast": _safe_float(e.get("forecast")),
+                "previous": _safe_float(e.get("previous")),
                 "source": "forexfactory_scrape",
             })
             count += 1
@@ -292,3 +293,24 @@ def _safe_str(val) -> Optional[str]:
     if not s or s == ".":
         return None
     return s
+
+
+def _safe_float(val) -> Optional[float]:
+    """Parse "0.3%", "-1.2B", "1,234K" style values for Float columns.
+
+    Returns None for empty/non-numeric — previously raw strings were
+    inserted into Float columns, silently dropping high-impact events
+    (which almost always carry forecasts).
+    """
+    s = _safe_str(val)
+    if s is None:
+        return None
+    mult = 1.0
+    last = s[-1].upper()
+    if last in ("K", "M", "B"):
+        mult = {"K": 1e3, "M": 1e6, "B": 1e9}[last]
+        s = s[:-1]
+    try:
+        return float(s.replace("%", "").replace(",", "")) * mult
+    except ValueError:
+        return None
