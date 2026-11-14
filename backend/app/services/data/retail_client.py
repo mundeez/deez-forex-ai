@@ -212,6 +212,7 @@ async def scrape_myfxbook(db: AsyncSession) -> int:
 
     if rows:
         await _bulk_insert(db, rows)
+        await db.commit()
     logger.info("[retail] Fetched %d live retail sentiment rows from Myfxbook API", len(rows))
     return len(rows)
 

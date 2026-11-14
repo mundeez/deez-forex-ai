@@ -4,6 +4,18 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.8] — 2026-11-14
+
+### Hotfix: Myfxbook API rows fetched but not persisted
+
+- `scrape_myfxbook` (v1.12.7) called `_bulk_insert` without
+  `await db.commit()` — the session rolled back on close, so the task
+  reported "Fetched 10 rows" while the table stayed empty.
+- Verified live after fix: first real Myfxbook snapshot persisted — all
+  10 symbols with live retail positioning (e.g. EURUSD 87% long,
+  USDCAD 92% short, XAUUSD 69% long). Task now runs live API every
+  30 min with COT-proxy as fallback.
+
 ## [v1.12.7] — 2026-11-14
 
 ### Myfxbook live retail sentiment via official JSON API
