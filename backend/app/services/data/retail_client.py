@@ -41,9 +41,9 @@ Usage (live scrape):
     asyncio.run(run())
     """
 import logging
-import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any
+import os
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,74 +128,92 @@ async def backfill_from_cot(db: AsyncSession) -> int:
     return inserted
 
 
-async def scrape_myfxbook(db: AsyncSession) -> int:
-    """Scrape current Myfxbook community outlook for all symbols.
+MYFXBOOK_API = "https://www.myfxbook.com/api"
 
-    Returns the number of rows inserted.  Intended to be called periodically
-    (e.g. every hour) to build a live retail sentiment history.
+
+async def scrape_myfxbook(db: AsyncSession) -> int:
+    """Fetch live community outlook via the official Myfxbook JSON API.
+
+    Requires MYFXBOOK_EMAIL + MYFXBOOK_PASSWORD env vars — the API uses
+    account credentials (login.json returns a session token), not an API
+    key.  The /api/* endpoints serve JSON directly and are not behind the
+    Cloudflare browser challenge that made HTML scraping impossible.
+
+    Inserts one snapshot row per tracked symbol.  Returns rows inserted;
+    0 means no credentials configured or the call failed (caller falls
+    back to the COT proxy).
     """
+    email = os.environ.get("MYFXBOOK_EMAIL", "")
+    password = os.environ.get("MYFXBOOK_PASSWORD", "")
+    if not email or not password:
+        return 0
+
     now = datetime.now(timezone.utc)
-    inserted = 0
+    rows: List[Dict[str, Any]] = []
 
     async with httpx.AsyncClient(
-        timeout=15.0, follow_redirects=True,
+        timeout=20.0, follow_redirects=True,
         headers={"User-Agent": "Mozilla/5.0 (compatible; ForexAI/1.0)"}
     ) as client:
-        for symbol in SYMBOLS:
-            try:
-                data = await _scrape_symbol(client, symbol)
-                if data is None:
+        try:
+            resp = await client.get(
+                f"{MYFXBOOK_API}/login.json",
+                params={"email": email, "password": password},
+            )
+            payload = resp.json()
+            if payload.get("error") or not payload.get("session"):
+                logger.warning("[retail] Myfxbook login failed: %s", payload.get("message", ""))
+                return 0
+            session = payload["session"]
+        except Exception as exc:
+            logger.warning("[retail] Myfxbook login request failed: %s", exc)
+            return 0
+
+        try:
+            resp = await client.get(
+                f"{MYFXBOOK_API}/get-community-outlook.json",
+                params={"session": session},
+            )
+            data = resp.json()
+            if data.get("error"):
+                logger.warning("[retail] Myfxbook outlook error: %s", data.get("message", ""))
+                return 0
+
+            for sym in data.get("symbols", []):
+                name = (sym.get("name") or "").upper()
+                if name not in SYMBOLS:
                     continue
-
-                row = models.RetailSentiment(
-                    timestamp=now,
-                    symbol=symbol,
-                    long_pct=data["long_pct"],
-                    short_pct=data["short_pct"],
-                    net_score=data["net_score"],
-                    source="myfxbook",
-                )
-                db.add(row)
-                inserted += 1
+                try:
+                    long_pct = float(sym.get("longPercentage") or 0)
+                    short_pct = float(sym.get("shortPercentage") or 0)
+                except (TypeError, ValueError):
+                    continue
+                # API returns fractions (0–1); normalize to 0–100
+                if 0 < long_pct <= 1.0 and 0 < short_pct <= 1.0:
+                    long_pct, short_pct = long_pct * 100, short_pct * 100
+                if long_pct + short_pct <= 0:
+                    continue
+                rows.append({
+                    "timestamp": now,
+                    "symbol": name,
+                    "long_pct": round(long_pct, 1),
+                    "short_pct": round(short_pct, 1),
+                    "net_score": round((long_pct - short_pct) / 100.0, 4),
+                    "source": "myfxbook",
+                })
+        except Exception as exc:
+            logger.warning("[retail] Myfxbook outlook request failed: %s", exc)
+            return 0
+        finally:
+            try:
+                await client.get(f"{MYFXBOOK_API}/logout.json", params={"session": session})
             except Exception:
-                logger.warning("[retail] Myfxbook scrape failed for %s", symbol, exc_info=True)
+                pass
 
-    if inserted > 0:
-        await db.commit()
-    logger.info("[retail] Scraped %d live retail sentiment rows from Myfxbook", inserted)
-    return inserted
-
-
-async def _scrape_symbol(client: httpx.AsyncClient, symbol: str) -> Dict[str, Any] | None:
-    """Scrape a single symbol's community outlook from Myfxbook."""
-    url = f"https://www.myfxbook.com/community/outlook/{symbol}"
-    resp = await client.get(url)
-    if resp.status_code != 200:
-        return None
-
-    text = resp.text
-    # Look for patterns like "55% Long" / "45% Short" or JSON data blocks
-    long_match = re.search(r'(\d+(?:\.\d+)?)\s*%?\s*[Ll]ong', text)
-    short_match = re.search(r'(\d+(?:\.\d+)?)\s*%?\s*[Ss]hort', text)
-
-    if not long_match or not short_match:
-        return None
-
-    long_pct = float(long_match.group(1))
-    short_pct = float(short_match.group(1))
-
-    # Sanity check: percentages should sum to ~100
-    if abs(long_pct + short_pct - 100.0) > 5.0:
-        logger.warning("[retail] Myfxbook %s: long+short=%.1f (expected ~100), skipping",
-                       symbol, long_pct + short_pct)
-        return None
-
-    net_score = round((long_pct - short_pct) / 100.0, 4)
-    return {
-        "long_pct": round(long_pct, 1),
-        "short_pct": round(short_pct, 1),
-        "net_score": net_score,
-    }
+    if rows:
+        await _bulk_insert(db, rows)
+    logger.info("[retail] Fetched %d live retail sentiment rows from Myfxbook API", len(rows))
+    return len(rows)
 
 
 async def _bulk_insert(db: AsyncSession, rows: List[Dict[str, Any]]):

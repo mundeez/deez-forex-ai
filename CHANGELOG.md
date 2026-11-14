@@ -4,6 +4,26 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.7] — 2026-11-14
+
+### Myfxbook live retail sentiment via official JSON API
+
+- `scrape_myfxbook` rewritten: the old HTML scraper could never work
+  (Cloudflare browser challenge → 403). The official API
+  (`api/login.json` → session → `api/get-community-outlook.json` →
+  `api/logout.json`) serves JSON directly and is reachable from the
+  container (verified: proper JSON auth error, not a CF challenge).
+- Auth uses **account credentials**, not an API key — Myfxbook does not
+  issue keys. Set `MYFXBOOK_EMAIL` + `MYFXBOOK_PASSWORD` and
+  `MYFXBOOK_SCRAPE_ENABLED=true` in `.env`, then
+  `docker compose up -d celery_worker` (no rebuild needed — env passes
+  through at runtime).
+- `ingest_retail_sentiment` gating now requires both the flag AND
+  `MYFXBOOK_EMAIL`; falls back to the COT proxy whenever the API
+  returns 0 rows, so the weekly coverage is never lost.
+- Percentages normalized defensively (API returns 0–1 fractions).
+- Dead `_scrape_symbol` HTML helper removed.
+
 ## [v1.12.6] — 2026-11-14
 
 ### Deferred cleanups: economic_events dedupe + model-health probe fix

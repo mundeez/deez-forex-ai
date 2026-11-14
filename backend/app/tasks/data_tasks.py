@@ -362,22 +362,23 @@ def backfill_dukascopy_5y(self, symbol: str = None):
 def ingest_retail_sentiment(self):
     """Retail sentiment ingestion.
 
-    Runs every 30 minutes. Myfxbook live scraping is disabled by default
-    because it is blocked by Cloudflare (403). The COT-based proxy is used
-    instead. Set MYFXBOOK_SCRAPE_ENABLED=true to attempt live scraping.
+    Runs every 30 minutes. Uses the official Myfxbook JSON API when
+    MYFXBOOK_SCRAPE_ENABLED=true and MYFXBOOK_EMAIL/MYFXBOOK_PASSWORD are
+    configured; falls back to the weekly COT-based proxy otherwise or
+    whenever the API returns no rows.
     """
     import asyncio
     from app.services.data.retail_client import scrape_myfxbook, backfill_from_cot
     from app.database import get_celery_session
     async def _run():
         async with get_celery_session()() as db:
-            if os.environ.get("MYFXBOOK_SCRAPE_ENABLED", "false").lower() == "true":
+            if (os.environ.get("MYFXBOOK_SCRAPE_ENABLED", "false").lower() == "true"
+                    and os.environ.get("MYFXBOOK_EMAIL")):
                 n = await scrape_myfxbook(db)
                 if n == 0:
-                    logger.info("[ingest_retail_sentiment] Myfxbook returned 0 rows; backfilling from COT proxy")
+                    logger.info("[ingest_retail_sentiment] Myfxbook API returned 0 rows; backfilling from COT proxy")
                     n = await backfill_from_cot(db)
                 return n
-            logger.info("[ingest_retail_sentiment] Myfxbook scrape disabled; using COT proxy")
             return await backfill_from_cot(db)
     return asyncio.run(_run())
 
