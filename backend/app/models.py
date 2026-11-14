@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Enum, BigInteger, ForeignKey, Date
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, JSON, Enum, BigInteger, ForeignKey, Date, Index
 from sqlalchemy.sql import func
 from app.database import Base
 from app.enums import TradeStatus, TradeDirection, TradeMode, DataProvider
@@ -352,6 +352,9 @@ class Bar(Base):
 
 class EconomicEvent(Base):
     __tablename__ = 'economic_events'
+    __table_args__ = (
+        Index('ux_econ_event_nat', 'timestamp', 'currency', 'event_name', unique=True),
+    )
     id = Column(BigInteger, primary_key=True, index=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     currency = Column(String(3), nullable=False)

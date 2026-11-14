@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import datetime, time, timedelta
 from typing import Tuple, List, Dict, Any
@@ -1798,19 +1799,34 @@ def model_health_probe():
                 ok = True
                 err = ""
                 try:
-                    data, _ = await client._post_with_failover(
-                        client._request_headers(),
-                        {
-                            # 256-token budget: some models emit a short reasoning
-                            # preamble before the JSON — 32 was too small and
-                            # produced false-negative "empty completion" results.
-                            "max_tokens": 256,
-                            "messages": [{"role": "user", "content": 'Reply with {"ok": true}'}],
-                            "response_format": {"type": "json_object"},
-                        },
-                        [model],
-                        reasoning={"effort": "low"},
-                    )
+                    try:
+                        data, _ = await client._post_with_failover(
+                            client._request_headers(),
+                            {
+                                # 256-token budget: some models emit a short reasoning
+                                # preamble before the JSON — 32 was too small and
+                                # produced false-negative "empty completion" results.
+                                "max_tokens": 256,
+                                "messages": [{"role": "user", "content": 'Reply with {"ok": true}'}],
+                                "response_format": {"type": "json_object"},
+                            },
+                            [model],
+                            reasoning={"effort": "low"},
+                        )
+                    except Exception as first_exc:
+                        # Some models (e.g. kimi-k2) reject response_format or
+                        # the reasoning param with HTTP 400 — the model is fine,
+                        # our payload isn't. Retry bare before declaring dead.
+                        if "400" not in str(first_exc):
+                            raise
+                        data, _ = await client._post_with_failover(
+                            client._request_headers(),
+                            {
+                                "max_tokens": 256,
+                                "messages": [{"role": "user", "content": 'Reply with {"ok": true}'}],
+                            },
+                            [model],
+                        )
                     _ = data["choices"][0]["message"]["content"]
                 except Exception as exc:
                     ok, err = False, str(exc)[:200]

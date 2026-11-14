@@ -4,6 +4,45 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.6] — 2026-11-14
+
+### Deferred cleanups: economic_events dedupe + model-health probe fix
+
+**economic_events duplicate bloat** — the hourly calendar ingest inserted
+rows with `ON CONFLICT DO NOTHING` but no unique constraint existed, so
+PostgreSQL had nothing to conflict against and every hour re-inserted
+the same events. Table had grown to 77,790 rows vs 1,820 unique events
+(~43x bloat).
+
+- One-time dedupe: deleted 75,970 duplicate rows, keeping the lowest-id
+  survivor per (timestamp, currency, event_name).
+- Added unique index `ux_econ_event_nat` on (timestamp, currency,
+  event_name) — `ON CONFLICT DO NOTHING` now genuinely suppresses
+  duplicates on insert (verified: `INSERT ... ON CONFLICT DO NOTHING`
+  returns `INSERT 0 0` on a duplicate).
+- Model updated with `__table_args__` index for schema parity.
+
+**model_health_probe false dead-mark on paid models** — the probe sent
+`response_format: json_object` + `reasoning: {effort: low}` to every
+model; kimi-k2 rejects that request shape with HTTP 400 and was marked
+dead even though real calls succeeded. Now retries once with a bare
+payload on 400 before declaring the model dead. Verified live:
+`moonshotai/kimi-k2-0905 = ok`, all paid models `ok`, free Gemma pool
+correctly reports 429 (real rate limit, not a probe bug).
+
+**NameError: json in model-performance cache** — the AUC/Brier cache
+write used `json.dumps` without importing `json`; logged a non-blocking
+warning every cycle. Added the import.
+
+**retail_sentiment** — investigated as a suspected dead path; confirmed
+working by design. `MYFXBOOK_SCRAPE_ENABLED=false` gates the Myfxbook
+scraper (Cloudflare-blocked), and `backfill_from_cot` returning 0 rows
+between weekly CFTC reports is expected — it only inserts new report
+rows. No code change needed.
+
+Also commits the previously unapplied `docker-compose.yml` domain
+update (fx.deeztechnology.solutions → fx.zeendeefood.solutions).
+
 ## [v1.12.5] — 2026-11-14
 
 ### Weekly automatic loss-window reset

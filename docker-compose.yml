@@ -24,7 +24,7 @@ services:
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
       MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
       MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.zeendeefood.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "28000:8000"
@@ -63,7 +63,7 @@ services:
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
       MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
       MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.zeendeefood.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - shared-net
@@ -98,7 +98,7 @@ services:
       MT5_ZMQ_PUB_PORT: ${MT5_ZMQ_PUB_PORT:-5556}
       MT5_RPYC_HOST: ${MT5_RPYC_HOST:-mt5}
       MT5_RPYC_PORT: ${MT5_RPYC_PORT:-18812}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.deeztechnology.solutions}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,https://fx.zeendeefood.solutions}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - shared-net
@@ -109,11 +109,11 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://fx.deeztechnology.solutions}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://fx.zeendeefood.solutions}
     container_name: deez-forex-frontend
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://fx.deeztechnology.solutions}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://fx.zeendeefood.solutions}
     ports:
       - "23000:3000"
     depends_on:
