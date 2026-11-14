@@ -226,6 +226,13 @@ celery_app.conf.update(
             "schedule": crontab(hour=8, minute=0, day_of_week="mon"),
             "options": {"time_limit": 120, "soft_time_limit": 90},
         },
+        # Weekly loss-window reset — rolls portfolio_reset_at to Monday
+        # 00:00 UTC so daily/weekly gross-loss caps start each week clean.
+        "reset-loss-windows-weekly": {
+            "task": "app.tasks.analysis_tasks.reset_loss_windows_weekly",
+            "schedule": crontab(hour=0, minute=5, day_of_week="mon"),
+            "options": {"time_limit": 60, "soft_time_limit": 45},
+        },
         "resolve-shadow-candidates": {
             "task": "app.tasks.analysis_tasks.resolve_shadow_candidates",
             "schedule": 3600.0,

@@ -4,6 +4,19 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.5] — 2026-11-14
+
+### Weekly automatic loss-window reset
+
+- New beat task `reset_loss_windows_weekly` (Mondays 00:05 UTC) rolls
+  `portfolio_reset_at` to the week boundary so daily/weekly gross-loss
+  caps start each week clean — the automatic counterpart of the manual
+  operator reset.
+- Idempotent and manual-reset-safe: only writes when the stored anchor
+  precedes the current week boundary, so a mid-week manual reset is
+  never clobbered (verified live: skipped correctly when invoked inside
+  the current week).
+
 ## [v1.12.4] — 2026-11-12
 
 ### Fix: retired variants could still execute trades

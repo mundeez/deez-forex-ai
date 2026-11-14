@@ -2202,3 +2202,37 @@ def resolve_shadow_candidates():
     """Hourly: resolve shadow outcomes for vetoed/skipped candidates (R units)."""
     from app.services.variant_monitor import resolve_shadow_outcomes
     return asyncio.run(resolve_shadow_outcomes())
+
+
+@celery_app.task
+def reset_loss_windows_weekly():
+    """Monday 00:05 UTC: roll the loss-window anchor to the week boundary.
+
+    Sets ``portfolio_reset_at`` to the most recent Monday 00:00 UTC so the
+    risk manager's daily/weekly gross-loss counters start each week clean —
+    the automatic counterpart of the manual operator reset.
+
+    Idempotent and manual-reset-safe: only writes when the stored anchor is
+    *before* the current week boundary. A manual mid-week reset (anchor
+    inside the current week) is left untouched — moving it backwards would
+    re-include losses the operator deliberately reset past.
+    """
+    from app.services.settings_service import set_setting
+    from app.utils.time import ensure_aware
+
+    async def _run():
+        async with get_celery_session()() as db:
+            now = utc_now()
+            week_start = (now - timedelta(days=now.weekday())).replace(
+                hour=0, minute=0, second=0, microsecond=0)
+            cur = await get_setting(db, "portfolio_reset_at")
+            cur_dt = ensure_aware(datetime.fromisoformat(cur)) if cur else None
+            if cur_dt is not None and cur_dt >= week_start:
+                return {"skipped": "anchor inside current week",
+                        "reset_at": cur}
+            await set_setting(db, "portfolio_reset_at", week_start.isoformat())
+            await db.commit()
+            logger.info("weekly loss-window reset: portfolio_reset_at=%s",
+                        week_start.isoformat())
+            return {"reset_at": week_start.isoformat(), "previous": cur}
+    return asyncio.run(_run())
