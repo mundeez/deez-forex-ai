@@ -4,6 +4,25 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.10] — 2026-11-14
+
+### Test coverage: Myfxbook + GDELT clients, sqlite PK compatibility
+
+- 12 new tests: `test_retail_client.py` (6 — credential gating, login
+  errors, session lifecycle, fraction→pct normalization, symbol
+  filtering, persistence) and `test_gdelt_client.py` (6 — relevance
+  filter, URL→headline extraction, scoring, real zipfile GKG parsing,
+  end-to-end ingest incl. unique-index dedupe, download-failure
+  tolerance).
+- **Bug the tests caught:** `BigInteger` PKs don't autoincrement on
+  sqlite (`BIGINT PRIMARY KEY` ≠ ROWID alias) — every raw-SQL insert
+  path was untestable. Added `PK_ID = BigInteger().with_variant(
+  Integer, "sqlite")` applied to all surrogate PKs — Postgres DDL
+  unchanged (still BIGINT), sqlite tests now exercise the real paths.
+- Suite: 224 passed / same 9 pre-existing environmental failures
+  (TimescaleDB-only tests, real-DB credential tests, sqlite pool
+  flakes) — zero regressions.
+
 ## [v1.12.9] — 2026-11-14
 
 ### Cleanup pass 2: live-path dead code, GDELT revival, Celery event-loop fix

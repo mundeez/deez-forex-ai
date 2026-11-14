@@ -3,6 +3,10 @@ from sqlalchemy.sql import func
 from app.database import Base
 from app.enums import TradeStatus, TradeDirection, TradeMode, DataProvider
 
+# Surrogate-PK type: BIGINT on Postgres, INTEGER on sqlite so tests get
+# ROWID autoincrement (BIGINT PRIMARY KEY does NOT autoincrement on sqlite).
+PK_ID = BigInteger().with_variant(Integer, "sqlite")
+
 
 class MarketData(Base):
     __tablename__ = "market_data"
@@ -355,7 +359,7 @@ class EconomicEvent(Base):
     __table_args__ = (
         Index('ux_econ_event_nat', 'timestamp', 'currency', 'event_name', unique=True),
     )
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(PK_ID, primary_key=True, index=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     currency = Column(String(3), nullable=False)
     event_name = Column(String(200), nullable=False)
@@ -369,7 +373,7 @@ class EconomicEvent(Base):
 
 class COTReport(Base):
     __tablename__ = 'cot_reports'
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(PK_ID, primary_key=True, index=True)
     report_date = Column(DateTime(timezone=True), nullable=False, index=True)
     symbol = Column(String(10), nullable=False, index=True)
     nc_long = Column(BigInteger)
@@ -384,7 +388,7 @@ class COTReport(Base):
 
 class RetailSentiment(Base):
     __tablename__ = 'retail_sentiment'
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(PK_ID, primary_key=True, index=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     symbol = Column(String(10), nullable=False, index=True)
     long_pct = Column(Float)
@@ -395,7 +399,7 @@ class RetailSentiment(Base):
 
 class MacroSeries(Base):
     __tablename__ = 'macro_series'
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(PK_ID, primary_key=True, index=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     series_id = Column(String(50), nullable=False, index=True)
     value = Column(Float)
@@ -407,7 +411,7 @@ class NewsHeadline(Base):
     __table_args__ = (
         Index('ux_news_headline_nat', 'published_at', 'headline', unique=True),
     )
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(PK_ID, primary_key=True, index=True)
     published_at = Column(DateTime(timezone=True), nullable=False, index=True)
     symbol = Column(String(10), index=True)
     headline = Column(Text, nullable=False)
@@ -421,7 +425,7 @@ class NewsHeadline(Base):
 
 class TradePattern(Base):
     __tablename__ = 'trade_patterns'
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(PK_ID, primary_key=True, index=True)
     trade_id = Column(Integer, ForeignKey('trades.id'))
     symbol = Column(String(10))
     entry_session = Column(String(20))
@@ -445,7 +449,7 @@ class TradePattern(Base):
 
 class MarketRegime(Base):
     __tablename__ = 'market_regimes'
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(PK_ID, primary_key=True, index=True)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     symbol = Column(String(10), nullable=False, index=True)
     timeframe = Column(String(10), nullable=False, index=True)
@@ -474,7 +478,7 @@ class StrategyVariant(Base):
 class StrategyCandidate(Base):
     """Shadow arm: every rule-generated candidate, before any LLM filter."""
     __tablename__ = 'strategy_candidates'
-    id = Column(BigInteger, primary_key=True)
+    id = Column(PK_ID, primary_key=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     variant_id = Column(String(40), nullable=False)
     symbol = Column(String(10), nullable=False)
@@ -496,7 +500,7 @@ class StrategyCandidate(Base):
 
 class VariantStat(Base):
     __tablename__ = 'variant_stats'
-    id = Column(BigInteger, primary_key=True)
+    id = Column(PK_ID, primary_key=True)
     computed_at = Column(DateTime(timezone=True), server_default=func.now())
     variant_id = Column(String(40), nullable=False)
     trades = Column(Integer, default=0)
@@ -513,7 +517,7 @@ class VariantStat(Base):
 
 class ExecutionCost(Base):
     __tablename__ = 'execution_costs'
-    id = Column(BigInteger, primary_key=True)
+    id = Column(PK_ID, primary_key=True)
     computed_at = Column(DateTime(timezone=True), server_default=func.now())
     symbol = Column(String(10), nullable=False)
     session = Column(String(20), nullable=False)
