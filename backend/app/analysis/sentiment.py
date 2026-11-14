@@ -84,33 +84,14 @@ class SentimentAnalyzer:
     async def _fetch_retail_sentiment(
         self, symbol: str, db: AsyncSession = None
     ) -> Dict[str, Any]:
-        """Scrape Myfxbook, then fall back to the latest COT-based retail proxy in the DB."""
-        try:
-            url = f"https://www.myfxbook.com/community/outlook/{symbol}"
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(url)
-                # If HTML, parse for positioning percentages
-                if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", ""):
-                    text = resp.text
-                    # Look for pattern like "55% Long" or positioning data in JSON
-                    import re
-                    long_match = re.search(r'(\d+)%?\s*Long', text, re.IGNORECASE)
-                    short_match = re.search(r'(\d+)%?\s*Short', text, re.IGNORECASE)
-                    if long_match and short_match:
-                        long_pct = float(long_match.group(1))
-                        short_pct = float(short_match.group(1))
-                        net = (long_pct - short_pct) / 100.0
-                        return {
-                            "long_pct": round(long_pct, 1),
-                            "short_pct": round(short_pct, 1),
-                            "score": round(-net, 2),  # contrarian: crowd long = bearish
-                            "contrarian_signal": "bearish" if long_pct > 55 else "bullish" if short_pct > 55 else "neutral",
-                            "source": "myfxbook",
-                        }
-        except Exception:
-            logger.warning("Myfxbook scrape failed for %s", symbol, exc_info=True)
+        """Read the latest retail sentiment row from the DB.
 
-        # Fallback to COT-based retail proxy from the DB (ingest_retail_sentiment keeps this current)
+        ingest_retail_sentiment keeps this current — live Myfxbook API
+        snapshots every 30 min when credentials are configured, COT-proxy
+        otherwise.  The old inline HTML scrape was removed: the community
+        outlook page is behind a Cloudflare browser challenge and always
+        failed, costing a doomed ~10s request per symbol per cycle.
+        """
         if db is not None:
             try:
                 result = await db.execute(

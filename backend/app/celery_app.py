@@ -188,6 +188,11 @@ celery_app.conf.update(
             "schedule": 3600.0,  # every hour
             "options": {"time_limit": 300, "soft_time_limit": 240},
         },
+        "ingest-gdelt-news": {
+            "task": "app.tasks.data_tasks.ingest_gdelt_news_recent",
+            "schedule": 21600.0,  # every 6 hours
+            "options": {"time_limit": 600, "soft_time_limit": 540},
+        },
         "refresh-sentiment-cache": {
             "task": "app.tasks.analysis_tasks.refresh_sentiment_cache",
             "schedule": 1800.0,  # every 30 minutes

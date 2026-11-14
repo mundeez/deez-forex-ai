@@ -4,6 +4,44 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.9] — 2026-11-14
+
+### Cleanup pass 2: live-path dead code, GDELT revival, Celery event-loop fix
+
+**Sentiment analyst latency** — `_fetch_retail_sentiment` still tried the
+Cloudflare-blocked HTML scrape per symbol per analysis cycle (~10s
+doomed timeout each) before falling to the DB. Removed; the DB (now fed
+by the Myfxbook API every 30 min) is the single source.
+
+**GDELT news revived** — `news_headlines` was stale since Jun 19: the
+backfill function existed but no scheduled task ran it.
+
+- New `ingest_gdelt_news_recent` task, every 6h, covering yesterday+today
+  (idempotent — dupes skip free).
+- Root cause of zero rows: GKG URLs used `http://` → every request got a
+  301 to https and the zip parser silently swallowed the redirect body.
+  Switched to https + `follow_redirects=True`. Verified: first run
+  inserted 1,763 headlines through 18:00 UTC.
+- Deduped existing table (46,803 → 38,818 rows) + unique index
+  `ux_news_headline_nat(published_at, headline)` so hourly re-ingest
+  stays clean — same unguarded-`ON CONFLICT` pattern as economic_events.
+
+**Celery event-loop bug (root cause of months of silent ingest
+failures)** — `ingest_dukascopy_daily`, `detect_and_backfill_gaps`,
+`ingest_mt5_fill`, and the pipeline orchestrator/dead-letter singletons
+all used the shared pooled async engine via `async_to_sync`. Pooled
+asyncpg connections are bound to their creating loop, so tasks died with
+"attached to a different loop" / "Event loop is closed" — the `ticks`
+table was *completely empty* as a result. Everything now uses
+`get_celery_session()` (NullPool, fresh conn per task loop). Verified:
+`ingest_dukascopy_daily` runs end-to-end (0 ticks expected — weekend +
+Dukascopy publication lag).
+
+**active_pairs — investigated, working as designed.** The refresh tasks
+are legacy-path cache pre-warmers; the variant engine doesn't use the
+aggregator. Seeding it would burn NewsAPI quota on unread data. Left
+skipping, documented.
+
 ## [v1.12.8] — 2026-11-14
 
 ### Hotfix: Myfxbook API rows fetched but not persisted

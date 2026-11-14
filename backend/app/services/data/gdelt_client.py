@@ -43,8 +43,8 @@ logger = logging.getLogger("app.services.data.gdelt")
 
 # GDELT 2.0 GKG URL pattern — 15-minute resolution
 # Format: YYYYMMDDHHMMSS
-GDELT_GKG_URL = "http://data.gdeltproject.org/gdeltv2/{ts}.gkg.csv.zip"
-GDELT_GKG_BASE = "http://data.gdeltproject.org/gdeltv2/masterfilelist-translation.txt"
+GDELT_GKG_URL = "https://data.gdeltproject.org/gdeltv2/{ts}.gkg.csv.zip"
+GDELT_GKG_BASE = "https://data.gdeltproject.org/gdeltv2/masterfilelist-translation.txt"
 
 # Forex-relevant keywords for filtering GDELT themes
 FOREX_KEYWORDS = [
@@ -151,7 +151,7 @@ async def ingest_gdelt_news(
 
 async def _download_and_parse_gkg(url: str) -> List[Dict[str, Any]]:
     """Download and parse a single GDELT GKG CSV file."""
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         resp = await client.get(url)
         resp.raise_for_status()
 

@@ -12,6 +12,7 @@ from celery.exceptions import MaxRetriesExceededError
 from asgiref.sync import async_to_sync
 
 from app.services.data.ingestion_service import IngestionService, ACTIVE_SYMBOLS
+from app.database import get_celery_session
 from app.services.data.pipeline_orchestrator import (
     PipelineOrchestrator, PipelineStatus, DeadLetterHandler,
 )
@@ -21,8 +22,12 @@ logger = logging.getLogger("app.tasks.data")
 # Default historical depth (env override)
 HIST_START_DATE = os.environ.get("HIST_START_DATE", "")
 
-orch = PipelineOrchestrator()
-dl_handler = DeadLetterHandler()
+# Celery workers create/destroy event loops per task; pooled asyncpg
+# connections are bound to their creating loop. Everything here must use
+# the NullPool celery session factory or tasks fail with
+# "attached to a different loop" / "Event loop is closed".
+orch = PipelineOrchestrator(session_factory=get_celery_session())
+dl_handler = DeadLetterHandler(session_factory=get_celery_session())
 
 
 def _sync_transition(*args, **kwargs):
@@ -54,7 +59,7 @@ def ingest_dukascopy_daily(self, symbol: str = None):
     Celery beat task: ingest previous day's ticks for all active symbols.
     Runs at 00:05 UTC daily.
     """
-    service = IngestionService()
+    service = IngestionService(session_factory=get_celery_session())
     symbols = [symbol] if symbol else ACTIVE_SYMBOLS
 
     yesterday = datetime.now(timezone.utc) - timedelta(days=1)
@@ -101,7 +106,7 @@ def ingest_historical_range(self, symbol: str, start_iso: str, end_iso: str):
     Manual / on-demand ingestion for a specific symbol and date range.
     Called via FastAPI endpoint.
     """
-    service = IngestionService()
+    service = IngestionService(session_factory=get_celery_session())
     start = datetime.fromisoformat(start_iso)
     end = datetime.fromisoformat(end_iso)
     try:
@@ -140,7 +145,7 @@ def detect_and_backfill_gaps(self, symbol: str = None):
     Weekly gap detection + backfill.
     Runs Sunday 02:00 UTC.
     """
-    service = IngestionService()
+    service = IngestionService(session_factory=get_celery_session())
     symbols = [symbol] if symbol else ACTIVE_SYMBOLS
     total = 0
     for sym in symbols:
@@ -187,7 +192,7 @@ def ingest_mt5_fill(self, symbol: str = None):
         logger.info("[ingest_mt5_fill] skipped: DATA_PROVIDER=%s (mt5_zmq required)", data_provider)
         return {"symbols": 0, "ticks": 0, "skipped": True}
 
-    service = IngestionService()
+    service = IngestionService(session_factory=get_celery_session())
     symbols = [symbol] if symbol else ACTIVE_SYMBOLS
     total = 0
     for sym in symbols:
@@ -349,6 +354,35 @@ def backfill_dukascopy_5y(self, symbol: str = None):
         except Exception as exc:
             logger.error("Failed to queue 5y backfill for %s: %s", sym, exc)
     return {"symbols": queued, "start": start.isoformat(), "end": end.isoformat()}
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=600,
+    time_limit=600,
+    soft_time_limit=540,
+    queue="data_ingestion",
+)
+def ingest_gdelt_news_recent(self):
+    """Recurring GDELT headline ingestion — keeps news_headlines current.
+
+    The table was seeded once by a historical backfill (Oct 2025 – Jun 2026)
+    and went stale because nothing scheduled it.  Runs every 6h, sampling
+    one GKG file per hour for today; ON CONFLICT DO NOTHING makes re-runs
+    over already-ingested hours free.
+    """
+    import asyncio
+    from app.services.data.gdelt_client import ingest_gdelt_news
+    from app.database import get_celery_session
+    from datetime import datetime, timezone
+    async def _run():
+        async with get_celery_session()() as db:
+            today = datetime.now(timezone.utc).date()
+            # yesterday+today: covers any gap after downtime; dupes skip free
+            yesterday = today - timedelta(days=1)
+            return await ingest_gdelt_news(db, yesterday, today, sample_interval_minutes=60)
+    return asyncio.run(_run())
 
 
 @shared_task(

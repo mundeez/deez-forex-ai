@@ -404,6 +404,9 @@ class MacroSeries(Base):
 
 class NewsHeadline(Base):
     __tablename__ = 'news_headlines'
+    __table_args__ = (
+        Index('ux_news_headline_nat', 'published_at', 'headline', unique=True),
+    )
     id = Column(BigInteger, primary_key=True, index=True)
     published_at = Column(DateTime(timezone=True), nullable=False, index=True)
     symbol = Column(String(10), index=True)
