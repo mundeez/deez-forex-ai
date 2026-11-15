@@ -286,21 +286,21 @@ class IngestionService:
         # Round timestamps to millisecond precision to avoid sub-ms noise
         df["timestamp"] = df["timestamp"].dt.floor("ms")
 
-        # Use asyncpg COPY if available (Postgres), else ORM bulk insert
-        from app.database import engine
-        if "postgresql" in str(engine.url):
-            return await self._copy_insert(df)
-        else:
-            return await self._orm_insert(df)
+        # Use asyncpg COPY if the session's engine is Postgres, else ORM
+        # bulk insert. Must check OUR session_factory's engine, not the
+        # shared app.database.engine — tests inject sqlite sessions while
+        # the shared engine still points at Postgres.
+        async with self.session_factory() as probe:
+            bind = probe.bind
+            if bind.dialect.name != "postgresql":
+                return await self._orm_insert(df)
+            pg_url = bind.url.render_as_string(hide_password=False).replace(
+                "postgresql+asyncpg", "postgresql")
+        return await self._copy_insert(df, pg_url)
 
-    async def _copy_insert(self, df: pd.DataFrame) -> int:
+    async def _copy_insert(self, df: pd.DataFrame, pg_url: str) -> int:
         """Use asyncpg COPY FROM for maximum throughput."""
         import asyncpg
-        from app.database import engine
-        url = str(engine.url)
-        # Parse asyncpg DSN from SQLAlchemy URL
-        # e.g. postgresql+asyncpg://user:pass@host/db -> postgresql://user:pass@host/db
-        pg_url = url.replace("postgresql+asyncpg", "postgresql")
         conn = await asyncpg.connect(pg_url)
         try:
             records = [
