@@ -138,9 +138,9 @@ class TestModelRouterRotation:
         router._cooled_set = mock_cooled  # type: ignore[method-assign]
         candidates = await router.get_candidates()
         assert "paid-model" in candidates
-        # Paid fallback should come after fresh free models
+        # Paid models precede the free backup tier (free = last resort)
         idx_paid = candidates.index("paid-model")
-        assert idx_paid >= 1
+        assert idx_paid == 0
 
     @pytest.mark.asyncio
     async def test_all_cooled_uses_paid_then_stale(self):

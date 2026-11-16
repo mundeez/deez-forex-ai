@@ -55,6 +55,21 @@ def parse_pool(raw: Optional[str]) -> List[str]:
     return pool or list(DEFAULT_FREE_POOL)
 
 
+def build_chain(
+    primary: Optional[str],
+    backup: Optional[List[str]] = None,
+    default: Optional[str] = None,
+) -> List[str]:
+    """Paid-first candidate chain for _post_with_failover: the assigned
+    (or default) model first, then the backup tail — typically the free
+    pool — deduplicated. Free models only serve when the primary fails."""
+    chain = [primary or default] if (primary or default) else []
+    for m in backup or []:
+        if m and m not in chain:
+            chain.append(m)
+    return chain
+
+
 class ModelRouter:
     """Selects which model to call and tracks per-model cooldowns."""
 
@@ -141,20 +156,23 @@ class ModelRouter:
     async def get_candidates(self, primary: Optional[str] = None) -> List[str]:
         """Return an ordered list of models to attempt for a single request.
 
-        Rotation disabled: ``[primary]`` then the rest of the free pool then the
-        paid fallback (so a forced model still has failover).
+        Paid models always come first — the free pool is a backup tier for
+        when paid calls fail (rate-limit / quota), not a primary source.
 
-        Rotation enabled: sort fresh models by cached win rate (highest first),
-        then append the paid fallback, and only retry cooled-down free models
-        as an absolute last resort.
+        Rotation disabled: ``[primary]`` then the paid fallback then the rest
+        of the free pool (so a forced model still has failover).
+
+        Rotation enabled: ``[primary]`` (when given), then the paid fallback,
+        then fresh pool models sorted by cached win rate (highest first),
+        and only retry cooled-down free models as an absolute last resort.
         """
         pool = list(self.free_pool)
 
         if not self.rotation_enabled:
             ordered = [primary] if primary else []
-            ordered += [m for m in pool if m != primary]
             if self.paid_fallback and self.paid_fallback not in ordered:
                 ordered.append(self.paid_fallback)
+            ordered += [m for m in pool if m not in ordered]
             return ordered
 
         n = len(pool)
@@ -168,9 +186,12 @@ class ModelRouter:
         win_rates = await self._get_win_rates(fresh)
         fresh_sorted = sorted(fresh, key=lambda m: win_rates.get(m, 0.0), reverse=True)
 
-        ordered = list(fresh_sorted)
+        ordered = []
+        if primary:
+            ordered.append(primary)
         if self.paid_fallback and self.paid_fallback not in ordered:
             ordered.append(self.paid_fallback)
+        ordered += [m for m in fresh_sorted if m not in ordered]
         ordered += stale  # last resort: try a cooling-down free model anyway
         return ordered
 

@@ -38,15 +38,16 @@ class TeamDecisionEngine:
         verifier_enabled: bool = True,
         verifier_can_veto: bool = True,
         analyst_parallelism: bool = True,
+        backup_models: Optional[list] = None,
     ):
         self.analysts = {
-            "technical": DomainAnalyst("technical", technical_model or "deepseek/deepseek-v4-flash"),
-            "fundamental": DomainAnalyst("fundamental", fundamental_model or "google/gemini-2.5-flash"),
-            "sentiment": DomainAnalyst("sentiment", sentiment_model or "meta-llama/llama-3.3-70b-instruct"),
-            "macro": DomainAnalyst("macro", macro_model or "openai/gpt-4o-mini"),
+            "technical": DomainAnalyst("technical", technical_model or "deepseek/deepseek-v4-flash", backup_models),
+            "fundamental": DomainAnalyst("fundamental", fundamental_model or "google/gemini-2.5-flash", backup_models),
+            "sentiment": DomainAnalyst("sentiment", sentiment_model or "meta-llama/llama-3.3-70b-instruct", backup_models),
+            "macro": DomainAnalyst("macro", macro_model or "openai/gpt-4o-mini", backup_models),
         }
-        self.lead = LeadStrategist(lead_model or "deepseek/deepseek-v4-flash")
-        self.verifier = Verifier(verifier_model or "deepseek/deepseek-r1")
+        self.lead = LeadStrategist(lead_model or "deepseek/deepseek-v4-flash", backup_models)
+        self.verifier = Verifier(verifier_model or "deepseek/deepseek-r1", backup_models)
         self.verifier_enabled = verifier_enabled
         self.verifier_can_veto = verifier_can_veto
         self.analyst_parallelism = analyst_parallelism

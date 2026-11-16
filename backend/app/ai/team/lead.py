@@ -9,7 +9,7 @@ import logging
 import os
 
 from app.ai.openrouter_client import OpenRouterClient, normalize_decision, _safe_float_conf
-from app.ai.model_router import ModelRouter
+from app.ai.model_router import ModelRouter, build_chain
 from app.services.vector_store import AsyncVectorStore
 
 logger = logging.getLogger("app.ai.team.lead")
@@ -40,8 +40,9 @@ class LeadStrategist:
         "zones and direction. Python will compute exact values. Output ONLY a JSON object."
     )
 
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, backup_models: Optional[list] = None):
         self.model = model
+        self.backup_models = backup_models
         self.client = OpenRouterClient()
 
     def _build_prompt(
@@ -166,7 +167,7 @@ class LeadStrategist:
             data, used_model = await self.client._post_with_failover(
                 self.client._request_headers(),
                 payload,
-                [self.model] if self.model else [self.client.model],
+                build_chain(self.model, self.backup_models, self.client.model),
                 router=router,
                 reasoning={"effort": "low"},
             )

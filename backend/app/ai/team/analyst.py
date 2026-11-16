@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import logging
 
 from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
-from app.ai.model_router import ModelRouter
+from app.ai.model_router import ModelRouter, build_chain
 
 logger = logging.getLogger("app.ai.team.analyst")
 
@@ -33,9 +33,10 @@ class DomainAnalyst:
         "matching the schema requested."
     )
 
-    def __init__(self, domain: str, model: str = None):
+    def __init__(self, domain: str, model: str = None, backup_models: Optional[list] = None):
         self.domain = domain
         self.model = model
+        self.backup_models = backup_models
         self.client = OpenRouterClient()
 
     def _build_prompt(self, analysis_snapshot: Dict[str, Any]) -> str:
@@ -133,7 +134,7 @@ class DomainAnalyst:
             data, used_model = await self.client._post_with_failover(
                 self.client._request_headers(),
                 {**payload, "model": self.model} if self.model else payload,
-                [self.model] if self.model else [self.client.model],
+                build_chain(self.model, self.backup_models, self.client.model),
                 router=router,
                 reasoning={"effort": "low"},
             )

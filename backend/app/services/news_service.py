@@ -2,8 +2,10 @@
 import json
 import logging
 import httpx
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.utils.time import utc_now
 
@@ -39,6 +41,19 @@ class NewsService:
         self._cache: Optional[List[Dict[str, Any]]] = None
         self._cache_time: Optional[datetime] = None
         self.cache_ttl_minutes = 15
+
+    @staticmethod
+    @asynccontextmanager
+    async def _session_scope(db: Optional[AsyncSession]):
+        """Yield the caller's session when given (Celery tasks must pass
+        theirs — the shared pooled engine is bound to the web-app loop and
+        dies with 'attached to a different loop' under per-task loops)."""
+        if db is not None:
+            yield db
+        else:
+            from app.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as session:
+                yield session
 
     async def _fetch_calendar(self) -> List[Dict[str, Any]]:
         """Fetch this week's economic calendar from free source."""
@@ -121,7 +136,7 @@ class NewsService:
             return True
         return False
 
-    async def _fetch_calendar_db(self) -> List[Dict[str, Any]]:
+    async def _fetch_calendar_db(self, db: Optional[AsyncSession] = None) -> List[Dict[str, Any]]:
         """Read upcoming events from the ingested economic_events table.
 
         The hourly ingest keeps this fresh and correctly classified; the
@@ -131,11 +146,10 @@ class NewsService:
         """
         try:
             from sqlalchemy import select
-            from app.database import AsyncSessionLocal
             from app import models
 
             horizon = utc_now() + timedelta(days=7)
-            async with AsyncSessionLocal() as db:
+            async with self._session_scope(db) as session:
                 stmt = (
                     select(
                         models.EconomicEvent.timestamp,
@@ -147,7 +161,7 @@ class NewsService:
                     .where(models.EconomicEvent.timestamp <= horizon)
                     .where(models.EconomicEvent.timestamp >= utc_now() - timedelta(days=2))
                 )
-                rows = (await db.execute(stmt)).all()
+                rows = (await session.execute(stmt)).all()
                 return [
                     {
                         "title": r.event_name,
@@ -166,9 +180,10 @@ class NewsService:
         symbol: str,
         buffer_minutes_before: int = 15,
         buffer_minutes_after: int = 30,
+        db: Optional[AsyncSession] = None,
     ) -> Tuple[bool, str]:
         """Check if trading should be halted due to upcoming high-impact news."""
-        events = await self._fetch_calendar_db()
+        events = await self._fetch_calendar_db(db)
         if not events:
             events = await self._fetch_calendar()
         now = utc_now()
@@ -192,7 +207,9 @@ class NewsService:
 
         return False, ""
 
-    async def get_latest_headlines(self, symbol: str, limit: int = 10) -> List[str]:
+    async def get_latest_headlines(
+        self, symbol: str, limit: int = 10, db: Optional[AsyncSession] = None
+    ) -> List[str]:
         """Latest ingested headlines (GDELT/NewsAPI) relevant to a symbol.
 
         Reads the news_headlines table populated by the ingestion pipeline.
@@ -200,11 +217,10 @@ class NewsService:
         """
         try:
             from sqlalchemy import select
-            from app.database import AsyncSessionLocal
             from app import models
 
             base, quote = symbol[:3], symbol[3:]
-            async with AsyncSessionLocal() as db:
+            async with self._session_scope(db) as session:
                 stmt = (
                     select(models.NewsHeadline.headline)
                     .where(
@@ -215,7 +231,7 @@ class NewsService:
                     .order_by(models.NewsHeadline.published_at.desc())
                     .limit(limit)
                 )
-                rows = (await db.execute(stmt)).scalars().all()
+                rows = (await session.execute(stmt)).scalars().all()
                 return list(rows)
         except Exception:
             logger.warning("get_latest_headlines failed for %s", symbol, exc_info=True)

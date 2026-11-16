@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
-from app.ai.model_router import ModelRouter
+from app.ai.model_router import ModelRouter, build_chain
 from app.utils.time import utc_now
 
 logger = logging.getLogger("app.ai.team.trade_manager")
@@ -27,8 +27,9 @@ class TradeManagerAgent:
         "close_pct (0.0-1.0, only if PARTIAL_CLOSE)."
     )
 
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, backup_models: Optional[list] = None):
         self.model = model or "deepseek/deepseek-r1"
+        self.backup_models = backup_models
         self.client = OpenRouterClient()
 
     async def advise(
@@ -83,7 +84,7 @@ class TradeManagerAgent:
             data, used_model = await self.client._post_with_failover(
                 self.client._request_headers(),
                 payload,
-                [self.model],
+                build_chain(self.model, self.backup_models),
                 router=router,
             )
             content = data["choices"][0]["message"]["content"]

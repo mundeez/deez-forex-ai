@@ -32,7 +32,7 @@ from app import models, schemas
 from app.enums import TradeDirection, TradeStatus
 from app.services.execution.executor import ExecutionService
 from app.services.settings_service import get_setting_bool, get_setting_float
-from app.services.instruments import pips, pip_size
+from app.services.instruments import pips, pip_size, pnl_usd
 from app.utils.time import utc_now, ensure_aware
 
 logger = logging.getLogger("app.services.exit_evaluator")
@@ -574,6 +574,12 @@ class ExitEvaluator:
             return trade
 
         if rec.action == ExitAction.CLOSE_NOW:
+            result = await db.execute(
+                select(models.Trade).where(models.Trade.id == rec.trade_id)
+            )
+            trade = result.scalar_one_or_none()
+            if not trade or trade.status != models.TradeStatus.OPEN:
+                return None
             price = await self.executor._get_live_price(rec.symbol)
             if not price:
                 return None

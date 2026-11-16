@@ -389,7 +389,11 @@ def compute_daily_bias():
                 "verifier": await get_setting(db, "model_verifier"),
             }
             models_map = resolve_models(suite, overrides)
-            engine = DailyBiasEngine(model=models_map.get("macro"))
+            from app.ai.model_router import parse_pool
+            engine = DailyBiasEngine(
+                model=models_map.get("macro"),
+                backup_models=parse_pool(await get_setting(db, "ai_model_pool")),
+            )
             news = NewsService()
             fund = FundamentalAnalyzer()
             out = {}
@@ -398,7 +402,7 @@ def compute_daily_bias():
                 symbol = pair.symbol
                 try:
                     macro = await fund.analyze(symbol)
-                    news_summary = await news.get_latest_headlines(symbol, limit=10)
+                    news_summary = await news.get_latest_headlines(symbol, limit=10, db=db)
                     bias = await engine.compute(
                         symbol=symbol,
                         macro_snapshot=macro,
@@ -698,12 +702,15 @@ def evaluate_exits():
             exit_ai_min_conf = await get_setting_float(db, "exit_ai_min_confidence") or 0.65
             if exit_ai_enabled:
                 from app.ai.team.trade_manager import TradeManagerAgent
+                from app.ai.model_router import parse_pool
                 from app.services.data.metaapi_client import MetaApiClient
                 from app.services.data.mt5_zmq_client import MT5ZMQClient
                 from app.services.data.mt5_rpyc_client import MT5RPyCClient
                 from app.config import get_settings
                 from app.enums import DataProvider
-                tm = TradeManagerAgent()
+                tm = TradeManagerAgent(
+                    backup_models=parse_pool(await get_setting(db, "ai_model_pool"))
+                )
                 settings = get_settings()
                 if settings.DATA_PROVIDER == DataProvider.MT5_ZMQ:
                     price_client = MT5ZMQClient()

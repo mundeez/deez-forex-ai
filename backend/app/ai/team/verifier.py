@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 import logging
 
 from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
-from app.ai.model_router import ModelRouter
+from app.ai.model_router import ModelRouter, build_chain
 
 logger = logging.getLogger("app.ai.team.verifier")
 
@@ -43,8 +43,9 @@ class Verifier:
         "confidence (0.0-1.0), concerns (string), suggested_changes (string or empty)."
     )
 
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, backup_models: Optional[list] = None):
         self.model = model
+        self.backup_models = backup_models
         self.client = OpenRouterClient()
 
     def _build_prompt(
@@ -105,7 +106,7 @@ class Verifier:
             data, used_model = await self.client._post_with_failover(
                 self.client._request_headers(),
                 payload,
-                [self.model] if self.model else [self.client.model],
+                build_chain(self.model, self.backup_models, self.client.model),
                 router=router,
             )
             content = data["choices"][0]["message"]["content"]

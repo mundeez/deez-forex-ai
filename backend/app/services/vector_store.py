@@ -2,7 +2,7 @@
 import json
 import logging
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from app.config import get_settings
@@ -69,6 +69,14 @@ def _encode_snapshot(snapshot: Dict[str, Any]) -> List[float]:
     return vec[:VECTOR_SIZE]
 
 
+def _coerce_point_id(point_id: Union[str, int]) -> Union[str, int]:
+    """Qdrant accepts unsigned ints or UUIDs — numeric strings are rejected.
+    Callers pass ai_decision_id (an int) sometimes stringified; coerce back."""
+    if isinstance(point_id, str) and point_id.isdigit():
+        return int(point_id)
+    return point_id
+
+
 class VectorStore:
     """Synchronous Qdrant client for non-async contexts."""
 
@@ -131,11 +139,11 @@ class VectorStore:
             })
         return out
 
-    def update_outcome(self, point_id: str, pnl: float, status: str):
+    def update_outcome(self, point_id: Union[str, int], pnl: float, status: str):
         try:
             self.client.set_payload(
                 collection_name=COLLECTION_NAME,
-                points=[point_id],
+                points=[_coerce_point_id(point_id)],
                 payload={"outcome_pnl": pnl, "outcome_status": status},
             )
         except Exception as e:
@@ -211,11 +219,11 @@ class AsyncVectorStore:
             })
         return out
 
-    async def update_outcome(self, point_id: str, pnl: float, status: str):
+    async def update_outcome(self, point_id: Union[str, int], pnl: float, status: str):
         try:
             await self.client.set_payload(
                 collection_name=COLLECTION_NAME,
-                points=[point_id],
+                points=[_coerce_point_id(point_id)],
                 payload={"outcome_pnl": pnl, "outcome_status": status},
             )
         except Exception as e:

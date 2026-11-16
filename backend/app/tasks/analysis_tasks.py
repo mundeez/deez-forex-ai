@@ -569,6 +569,7 @@ def run_full_analysis():
                         symbol,
                         buffer_minutes_before=news_buffer_before,
                         buffer_minutes_after=news_buffer_after,
+                        db=db,
                     )
                 else:
                     news_halted = False
@@ -698,6 +699,7 @@ def run_full_analysis():
                     verifier_enabled=await get_setting_bool(db, "verifier_enabled"),
                     verifier_can_veto=await get_setting_bool(db, "verifier_can_veto"),
                     analyst_parallelism=await get_setting_bool(db, "analyst_parallelism"),
+                    backup_models=parse_pool(await get_setting(db, "ai_model_pool")),
                 )
                 try:
                     team_meta_enabled = await get_setting_bool(db, "team_meta_enabled")
@@ -1928,7 +1930,7 @@ def run_variant_engine():
                     cal = await news._fetch_calendar()
                     events = [e for e in cal if news._event_affects_symbol(e, symbol)]
                     candidates = generate_all(symbol, candles, events, now)
-                    halted, halt_reason = await news.is_trading_halted(symbol)
+                    halted, halt_reason = await news.is_trading_halted(symbol, db=db)
 
                     # 7.3.1: LLM regime classifier — once per symbol+session
                     # (cached in Redis); gates which families may fire.

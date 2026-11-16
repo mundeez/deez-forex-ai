@@ -16,7 +16,7 @@ from app.utils.time import utc_now
 import redis.asyncio as aioredis
 
 from app.ai.openrouter_client import OpenRouterClient, _safe_float_conf
-from app.ai.model_router import ModelRouter
+from app.ai.model_router import ModelRouter, build_chain
 from app.config import get_settings
 
 logger = logging.getLogger("app.ai.team.daily_bias")
@@ -33,10 +33,11 @@ class DailyBiasEngine:
         "risk_events (string list of today's high-impact events)."
     )
 
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, backup_models: Optional[list] = None):
         # Default aligns with the macro suite role (cheap reasoning-light model);
         # callers already pass models_map["macro"].
         self.model = model or "qwen/qwen3-next-80b-a3b-instruct"
+        self.backup_models = backup_models
         self.client = OpenRouterClient()
 
     async def compute(
@@ -66,7 +67,7 @@ class DailyBiasEngine:
             data, used_model = await self.client._post_with_failover(
                 self.client._request_headers(),
                 payload,
-                [self.model],
+                build_chain(self.model, self.backup_models),
                 router=router,
                 reasoning={"effort": "low"},
             )
