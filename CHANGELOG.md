@@ -4,6 +4,57 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.12] — 2026-11-16
+
+### Runtime defect fixes + paid-first model routing
+
+**Runtime defect fixes (found via live-log review)**
+
+- `exit_evaluator.execute_exit`: `pnl_usd` was never imported, so every
+  `TAKE_PARTIAL` exit died on `NameError`; the `CLOSE_NOW` branch read
+  `trade.direction` before fetching the trade (`UnboundLocalError`).
+  Partial and immediate exits were silently broken; both now fixed.
+- `NewsService` used the shared pooled async engine inside Celery tasks
+  whose per-task event loops orphaned pooled asyncpg connections (~13
+  "attached to a different loop" errors/day). The service now accepts an
+  optional session, and all Celery call sites pass theirs.
+- `vector_store.update_outcome` received stringified int point IDs, which
+  Qdrant rejects — the RAG outcome-learning loop wrote nothing. Numeric
+  strings are now coerced to int.
+
+**Paid-first model routing**
+
+- `ModelRouter.get_candidates` put the free pool first under rotation,
+  ignoring the assigned model. It now returns
+  `[primary] + [paid fallback] + [free pool]`; free is strictly the backup
+  tier.
+- The v2 team agents (`DomainAnalyst`, `LeadStrategist`, `Verifier`,
+  `TradeManagerAgent`, `DailyBiasEngine`) called `_post_with_failover`
+  with a single candidate, so a rate limit on a suite model hard-failed
+  the call. A new `backup_models` param, wired from `ai_model_pool`
+  through `build_chain()`, gives every agent a free-pool failover tail
+  (paid first, free as backup only).
+- The `ai_model` setting was changed to `google/gemini-2.5-flash` (was a
+  `:free` model). This is a runtime DB value, not part of the code diff.
+
+**Security**
+
+- `.gitignore`: exclude `.env.bak-premove`, `*.bak-premove` and
+  `fx-provement.txt` — untracked local files that contain live API
+  credentials; guards against an accidental `git add .`. Confirmed absent
+  from the index and from the history of every ref.
+
+**Compatibility** — no breaking changes: new parameters are optional and
+there are no schema or migration changes. One behavior change: paid models
+now serve first and the free pool is failover only, so expect higher
+paid-model usage.
+
+**Validation** — deployed images rebuilt, all 6 containers healthy. Suite
+in the deployed container: **231 passed, 10 skipped, 2 xfailed**. Worker
+logs are clean of the fixed error paths after restart.
+
+---
+
 ## [v1.12.11] — 2026-11-15
 
 ### Test-suite green: 3 real production bugs + TimescaleDB repair
