@@ -1922,13 +1922,20 @@ def run_variant_engine():
             pool_models = [m.strip() for m in (await get_setting(
                 db, "ai_model_pool") or "").split(",") if m.strip()]
             session_now = _session_of(now)
+            # DB calendar is primary (hourly ingest, deduped); the live FF
+            # endpoint rate-limits and is fallback only. ND-M15-DRIFT needs
+            # real event times — without this it can never fire.
+            cal = await news._fetch_calendar_db(db)
+            if not cal:
+                cal = await news._fetch_calendar()
             for symbol in symbols:
                 try:
                     tfs = {"5m": 300, "15m": 400, "1h": 300, "4h": 200, "1d": 100}
                     candles = {tf: await client.get_historical_candles(symbol, tf, n)
                                for tf, n in tfs.items()}
-                    cal = await news._fetch_calendar()
-                    events = [e for e in cal if news._event_affects_symbol(e, symbol)]
+                    events = [e for e in cal
+                              if news._event_affects_symbol(e, symbol)
+                              and news._is_high_impact(e)]
                     candidates = generate_all(symbol, candles, events, now)
                     halted, halt_reason = await news.is_trading_halted(symbol, db=db)
 

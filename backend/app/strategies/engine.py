@@ -150,9 +150,34 @@ def regime_of(candles_d1: List[Dict]) -> str:
     return "ranging"
 
 
+def _ts_sec(v) -> float:
+    """Normalize a timestamp to epoch seconds.
+
+    The MT5 feed returns milliseconds (13-digit); seconds feeds are
+    10-digit. Detect by magnitude so both work."""
+    v = float(v)
+    return v / 1000.0 if abs(v) > 1e12 else v
+
+
+def _event_ts(ev: Dict[str, Any]) -> Optional[float]:
+    """Epoch-seconds for a calendar event. The ingested DB calendar carries
+    an ISO "date"; the live FF feed carries ISO "date" plus a display "time"
+    ("8:30am") that does not parse — prefer "date", fall back to "time"."""
+    for key in ("date", "time"):
+        raw = ev.get(key)
+        if not raw:
+            continue
+        try:
+            return datetime.fromisoformat(
+                str(raw).strip().replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+    return None
+
+
 def _session_of(ts: float) -> str:
     try:
-        h = datetime.fromtimestamp(ts, tz=timezone.utc).hour
+        h = datetime.fromtimestamp(_ts_sec(ts), tz=timezone.utc).hour
     except (OverflowError, OSError, ValueError):
         return "offhours"  # corrupt/millisecond timestamp — don't kill the variant
     if 0 <= h < 7: return "asian"
@@ -209,8 +234,8 @@ def _session_breakout(variant_id: str, tf: str, r0: int, r1: int, w1: int,
         return []
     day0 = datetime.fromtimestamp(now, tz=timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0).timestamp()
-    rng = [b for b in c if day0 + r0 * 3600 <= b["timestamp"] < day0 + r1 * 3600]
-    win = [b for b in c if day0 + r1 * 3600 <= b["timestamp"] <= now]
+    rng = [b for b in c if day0 + r0 * 3600 <= _ts_sec(b["timestamp"]) < day0 + r1 * 3600]
+    win = [b for b in c if day0 + r1 * 3600 <= _ts_sec(b["timestamp"]) <= now]
     if len(rng) < 2 or not win:
         return []
     rh, rl = max(_highs(rng)), min(_lows(rng))
@@ -240,16 +265,14 @@ def _news_drift(variant_id: str, symbol: str, c: List[Dict],
         return []
     out = []
     for ev in events or []:
-        et = ev.get("time")
-        try:
-            ets = datetime.fromisoformat(str(et).replace("Z", "+00:00")).timestamp()
-        except Exception:
+        ets = _event_ts(ev)
+        if ets is None:
             continue
         delay = now - ets
         if not (15 * 60 <= delay <= 90 * 60):
             continue
-        first = [b for b in c if ets <= b["timestamp"] < ets + 900]
-        prev = [b for b in c if b["timestamp"] < ets]
+        first = [b for b in c if ets <= _ts_sec(b["timestamp"]) < ets + 900]
+        prev = [b for b in c if _ts_sec(b["timestamp"]) < ets]
         if not first or not prev:
             continue
         move = first[0]["close"] - prev[-1]["close"]

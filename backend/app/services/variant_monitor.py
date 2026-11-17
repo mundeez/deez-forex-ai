@@ -12,6 +12,7 @@ from sqlalchemy import select, func
 
 from app import models
 from app.database import get_celery_session
+from app.strategies.engine import _ts_sec
 
 logger = logging.getLogger("app.services.variant_monitor")
 
@@ -198,7 +199,7 @@ async def resolve_shadow_outcomes(max_rows: int = 100) -> int:
             for c in cands:
                 t0 = c.created_at.timestamp() if hasattr(c.created_at, "timestamp") else float(c.created_at)
                 after = [b for b in candles
-                         if float(b["timestamp"]) > t0][:96]
+                         if _ts_sec(float(b["timestamp"])) > t0][:96]
                 if len(after) < 4:
                     continue  # not enough post-candidate data yet
                 risk = abs(c.entry_price - c.stop_loss) or 1e-9
