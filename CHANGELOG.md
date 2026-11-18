@@ -4,6 +4,33 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.14] — 2026-11-18
+
+### Tournament risk fix: micro-stop gate + level-based paper fills
+
+Root cause of ND-M15-DRIFT trade 4367's -$18.43 loss (-3.7R vs the
+intended -$5 fixed risk): the candidate's stop sat 3.7 pips from entry
+(pinned to the pre-event close), so fixed-$5 sizing produced 0.14 lots;
+the once-per-minute SL poll then filled 12.8 pips through the stop
+during the FOMC-speaker spike.
+
+- `stop_pips_ok()` in `backend/app/strategies/engine.py`: variant
+  candidates whose stop distance is under max(5 pips, 0.5x signal ATR)
+  are rejected before the LLM filter and recorded as `SKIPPED:sl_tight` —
+  shadow candidate data is preserved.
+- `close_trade()` in `backend/app/services/execution/executor.py`:
+  paper-mode SL/TP/trailing-stop exits now fill at the resting level
+  plus adverse slippage (broker-order model) instead of
+  detection-time market price, removing poll-interval luck from every
+  outcome; `trade.exit_price` is now synced to the actual slipped fill.
+- 4 new regression tests for the gate; close_reason test updated for
+  slipped fills. Suite: 248 passed / 10 skipped / 2 xfailed.
+
+Deployed: backend/celery_worker/celery_beat images rebuilt and
+recreated; all containers healthy; /health 200.
+
+---
+
 ## [v1.12.13] — 2026-11-17
 
 ### Tournament variant resurrection: timestamp + calendar fixes
