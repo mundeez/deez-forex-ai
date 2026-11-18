@@ -329,16 +329,28 @@ class ExecutionService:
         size = trade.position_size or 0.01
         entry = trade.entry_price or exit_price
 
-        # Realistic paper exit: if exit_price came from SL/TP, try to use live price + slippage
+        # Realistic paper exit. SL/TP/trailing triggers model broker-resting
+        # orders: fill at the level plus adverse slippage, not at whatever
+        # price the 1-minute poll happened to see — otherwise poll timing
+        # injects luck into every outcome (a fast spike fills far past the
+        # stop). Time/rule exits still use live market price + slippage.
         if trade.mode == models.TradeMode.PAPER.value:
-            live_price = await self._get_live_price(trade.symbol)
-            if live_price:
-                # For BUY: exit at bid; for SELL: exit at ask
-                raw_exit = live_price.get("bid") if is_buy else live_price.get("ask")
-                if raw_exit:
-                    exit_price = self._apply_paper_slippage(
-                        raw_exit, "sell" if is_buy else "buy", trade.symbol
-                    )
+            close_dir = "sell" if is_buy else "buy"
+            level = None
+            if close_reason in ("stop_loss", "trailing_stop"):
+                level = trade.stop_loss
+            elif close_reason == "take_profit":
+                level = trade.take_profit
+            if level:
+                exit_price = self._apply_paper_slippage(level, close_dir, trade.symbol)
+            else:
+                live_price = await self._get_live_price(trade.symbol)
+                if live_price:
+                    # For BUY: exit at bid; for SELL: exit at ask
+                    raw_exit = live_price.get("bid") if is_buy else live_price.get("ask")
+                    if raw_exit:
+                        exit_price = self._apply_paper_slippage(raw_exit, close_dir, trade.symbol)
+            trade.exit_price = exit_price
 
         trade.pnl = pnl_usd(trade.symbol, is_buy, trade.entry_price, exit_price, size)
         diff = (exit_price - entry) if is_buy else (entry - exit_price)

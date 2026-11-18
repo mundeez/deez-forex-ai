@@ -50,7 +50,9 @@ class TestCloseReason:
         assert closed.status == TradeStatus.CLOSED
         assert closed.close_reason == "tp"
         assert "Close reason: tp" in (closed.rationale or "")
-        assert closed.exit_price == 1.0900
+        # Paper exits fill at live price + adverse slippage, so exit_price
+        # is the slipped bid (~1.0840 - 0-2 pips), not the passed 1.0900.
+        assert 1.0835 <= closed.exit_price <= 1.0840
         assert closed.pnl is not None
         assert closed.actual_holding_min is not None
         assert closed.session_at_close is not None

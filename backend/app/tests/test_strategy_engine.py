@@ -15,10 +15,12 @@ from app.strategies.engine import (
     _session_breakout,
     _session_of,
     _ts_sec,
+    Candidate,
     atr,
     adx,
     generate_all,
     rsi,
+    stop_pips_ok,
     bollinger,
     _closes,
 )
@@ -220,3 +222,36 @@ class TestGenerateAll:
         # The 15m breakout candles must surface an SB candidate now that
         # timestamps are normalized (previously impossible with ms feed).
         assert any(c.variant_id == "SB-M15-LDN" for c in out)
+
+
+class TestStopPipsOk:
+    """Micro-stop gate: fixed-$5 sizing divides by stop distance, so a stop
+    inside ~5 pips (or <0.5x ATR) produces an oversized position that news
+    noise runs over — e.g. ND-M15-DRIFT trade 4367 lost -$18 on a 3.7-pip
+    stop."""
+
+    def _cand(self, entry=1.1000, sl=1.09963, atr=0.0004):
+        return Candidate("ND-M15-DRIFT", "EURUSD", "SELL", entry, sl,
+                         entry - 0.00055, atr, "15m")
+
+    def test_rejects_micro_stop(self):
+        # 3.7-pip stop on EURUSD with ~4-pip ATR — the 4367 case
+        assert not stop_pips_ok(self._cand(), "EURUSD")
+
+    def test_accepts_normal_stop(self):
+        # 12-pip stop, 4-pip ATR
+        assert stop_pips_ok(self._cand(sl=1.0988), "EURUSD")
+
+    def test_atr_floor_scales_with_volatility(self):
+        # 6-pip stop passes the 5-pip floor in quiet tape but fails when
+        # ATR is 16 pips (0.5 x 16 = 8 > 6)
+        assert stop_pips_ok(self._cand(sl=1.0994, atr=0.0004), "EURUSD")
+        assert not stop_pips_ok(self._cand(sl=1.0994, atr=0.0016), "EURUSD")
+
+    def test_jpy_pip_size(self):
+        c = Candidate("TF-H1-DON55", "USDJPY", "BUY", 150.00,
+                      149.60, 150.80, 0.08, "1h")  # 40-pip stop, 8-pip ATR
+        assert stop_pips_ok(c, "USDJPY")
+        c2 = Candidate("TF-H1-DON55", "USDJPY", "BUY", 150.00,
+                       149.96, 150.80, 0.08, "1h")  # 4-pip stop
+        assert not stop_pips_ok(c2, "USDJPY")

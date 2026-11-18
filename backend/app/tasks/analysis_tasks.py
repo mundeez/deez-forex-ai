@@ -1912,7 +1912,7 @@ def run_variant_engine():
             from app.services.feature_store import FeatureStore
             from app.services.pattern_extractor import PatternExtractor
             from app.services.regime_classifier import classify as _classify_regime
-            from app.strategies import _session_of, shadow_features
+            from app.strategies import _session_of, shadow_features, stop_pips_ok
             entry_model = EntryQualityModel()
             priors = None
             try:
@@ -2034,6 +2034,13 @@ def run_variant_engine():
                             models.Trade.status == models.TradeStatus.OPEN))
                         if open_t.first():
                             row.llm_verdict = "SKIPPED:openpos"
+                            continue
+                        # Micro-stop gate: fixed-$5 sizing divides by stop
+                        # distance, so a stop inside ~5 pips (or <0.5x ATR)
+                        # yields an oversized position that noise runs over.
+                        # Skip trading but keep the shadow candidate.
+                        if not stop_pips_ok(c, symbol):
+                            row.llm_verdict = "SKIPPED:sl_tight"
                             continue
 
                         # LLM filter: PASS or VETO, never changes direction/levels

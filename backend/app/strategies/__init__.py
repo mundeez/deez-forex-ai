@@ -14,12 +14,13 @@ from app.strategies.engine import (
     regime_of,
     instrument,
     pip_size,
+    stop_pips_ok,
     shadow_features,
     _session_of,
 )
 
 __all__ = [
     "Candidate", "VARIANTS", "VARIANT_PAIRS", "FX_PAIRS",
-    "generate_all", "regime_of", "instrument", "pip_size",
+    "generate_all", "regime_of", "instrument", "pip_size", "stop_pips_ok",
     "shadow_features", "_session_of",
 ]

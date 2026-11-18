@@ -58,6 +58,21 @@ def pip_size(symbol: str) -> float:
     return instrument(symbol)["pip"]
 
 
+def stop_pips_ok(c: "Candidate", symbol: str,
+                 min_pips: float = 5.0, atr_frac: float = 0.5) -> bool:
+    """Reject candidates whose stop distance is too small to trade safely.
+
+    Fixed-$5 sizing divides by stop distance, so a micro-stop (e.g. the
+    ND drift stop pinned to the pre-event close) produces an oversized
+    position that spread and news noise run over — realized loss becomes a
+    multiple of intended risk. Require the stop to be at least `min_pips`
+    and at least `atr_frac` x the signal-time ATR."""
+    pip = pip_size(symbol)
+    stop_pips = abs(c.entry - c.sl) / pip
+    atr_pips = (c.atr or 0.0) / pip
+    return stop_pips >= max(min_pips, atr_frac * atr_pips)
+
+
 # ---------- indicator helpers (pure numpy-free math on candle dicts) ----------
 
 def _closes(c): return [x["close"] for x in c]
