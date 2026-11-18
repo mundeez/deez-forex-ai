@@ -4,6 +4,50 @@ All notable changes to Deez Forex AI will be documented in this file.
 
 ---
 
+## [v1.12.13] — 2026-11-17
+
+### Tournament variant resurrection: timestamp + calendar fixes
+
+Three of seven strategy-tournament variants (`SB-M15-LDN`, `SB-H1-NYO`,
+`ND-M15-DRIFT`) could never produce candidates; a fourth latent bug was
+corrupting shadow-outcome resolution for all variants.
+
+**Root causes fixed**
+
+- MT5 candles carry **millisecond** epoch timestamps while the strategy
+  engine compared them against seconds-based `now`, so every
+  time-window check failed and the session/news variants returned `[]`
+  forever. New `_ts_sec()` helper normalizes by magnitude (13-digit →
+  seconds; 10-digit passes through) and is applied in
+  `_session_breakout`, `_news_drift`, and `_session_of`.
+- `ND-M15-DRIFT` read `ev["time"]` — the FF display string ("8:30am")
+  that never parses as ISO — so even with events it always skipped.
+  New `_event_ts()` accepts the DB shape (`date` ISO-8601) and the FF
+  shape, preferring `date`.
+- `run_variant_engine` sourced the calendar from the live ForexFactory
+  endpoint (rate-limited, 429s) instead of the ingested DB calendar.
+  It now uses `_fetch_calendar_db()` (hourly-ingested, deduped) with
+  the live fetch as fallback, hoisted out of the per-symbol loop, and
+  filters to high-impact events per the variant spec.
+- `variant_monitor` resolved shadow outcomes against the **oldest** 96
+  candles: millisecond candle timestamps always exceeded the
+  seconds-epoch `created_at`, so every post-candidate bar matched.
+  Normalized with `_ts_sec()` — outcomes now resolve on actual
+  post-signal price action.
+
+**Verified**
+
+- `MR-H1-BBFADE` confirmed structurally sound (not timestamp-affected):
+  live probe shows its ADX/RSI/BB(20,2.5) gates simply unmet on current
+  tapes.
+- 13 new regression tests in `test_strategy_engine.py` covering ms/sec
+  normalization, SB window boundaries, ND event shapes and delay
+  window, MR band+ADX gates, and `generate_all` end-to-end on
+  MT5-style candles.
+- Suite: **244 passed** / 10 skipped / 2 xfailed in the deployed image.
+
+---
+
 ## [v1.12.12] — 2026-11-16
 
 ### Runtime defect fixes + paid-first model routing
