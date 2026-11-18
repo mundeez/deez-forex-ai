@@ -316,7 +316,10 @@ class ExecutionService:
         trade.exit_price = exit_price
         trade.status = models.TradeStatus.CLOSED
         trade.close_time = utc_now()
-        trade.close_reason = close_reason
+        # close_reason is VARCHAR(30); rule-generated reasons (e.g. staleness)
+        # exceed it and previously made the close UPDATE fail, leaving the
+        # trade OPEN forever. Full text is preserved in rationale below.
+        trade.close_reason = (close_reason or "")[:30]
         if trade.rationale:
             trade.rationale += f" | Close reason: {close_reason}"
         else:
